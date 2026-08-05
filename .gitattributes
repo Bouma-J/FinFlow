@@ -1,0 +1,3 @@
+# Force LF pour les scripts shell (évite les erreurs de shebang dans Docker)
+*.sh text eol=lf
+backend/docker/entrypoint.sh text eol=lf

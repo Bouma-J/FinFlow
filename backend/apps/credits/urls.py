@@ -1,0 +1,20 @@
+from rest_framework.routers import DefaultRouter
+
+from .views import (
+    AnalysisThresholdViewSet,
+    CreditApplicationViewSet,
+    CreditDocumentViewSet,
+    FieldVisitViewSet,
+    FinancialAnalysisViewSet,
+    LoanViewSet,
+)
+
+router = DefaultRouter()
+router.register("credit-applications", CreditApplicationViewSet, basename="credit-application")
+router.register("credit-documents", CreditDocumentViewSet, basename="credit-document")
+router.register("financial-analyses", FinancialAnalysisViewSet, basename="financial-analysis")
+router.register("analysis-thresholds", AnalysisThresholdViewSet, basename="analysis-threshold")
+router.register("field-visits", FieldVisitViewSet, basename="field-visit")
+router.register("loans", LoanViewSet, basename="loan")
+
+urlpatterns = router.urls

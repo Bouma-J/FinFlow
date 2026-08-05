@@ -1,0 +1,572 @@
+# 13 — Guide de déploiement Ubuntu (production)
+
+Guide pas à pas pour déployer **FIN_FLOW** sur un serveur **Ubuntu Server 22.04 LTS** ou **24.04 LTS**, avec Docker Compose, reverse-proxy TLS et l’ensemble des outils nécessaires.
+
+Pour la vue d’ensemble multi-environnements (Compose démo, Kubernetes, bare metal), voir aussi [04 — Guide de déploiement](04-guide-deploiement.md).
+
+---
+
+## 1. Architecture déployée
+
+| Composant | Rôle | Conteneur / service |
+|-----------|------|---------------------|
+| Frontend (Nginx) | SPA React + proxy `/api` | `frontend` |
+| Backend (Gunicorn) | API Django / DRF | `backend` |
+| Celery worker | Tâches async (e-mails, contrats, CBS…) | `worker` |
+| Celery beat | Planification périodique | `beat` |
+| PostgreSQL 16 | Base de données | `db` |
+| Redis 7 | Broker Celery + cache | `redis` |
+| MinIO | Stockage GED / contrats (S3) | `minio` |
+| Nginx hôte (recommandé) | TLS, domaine public | hors Compose |
+| Certbot | Certificats Let’s Encrypt | hors Compose |
+
+Flux navigateur typique :
+
+```text
+Internet → Nginx (443) → frontend:80 → API / SPA
+                       ↘ MinIO:9000 (URLs présignées fichiers)
+```
+
+---
+
+## 2. Prérequis matériel
+
+| Ressource | Minimum | Recommandé (prod légère) |
+|-----------|---------|---------------------------|
+| CPU | 2 vCPU | 4 vCPU |
+| RAM | 8 Go | 16 Go |
+| Disque | 40 Go SSD | 80 Go+ SSD |
+| OS | Ubuntu 22.04 / 24.04 LTS 64-bit | idem |
+| Réseau | IP publique + DNS A/AAAA | domaine dédié |
+
+Ports à prévoir (firewall) :
+
+| Port | Usage |
+|------|--------|
+| 22 | SSH |
+| 80 | HTTP (redirection / ACME) |
+| 443 | HTTPS (application) |
+| 9000 | MinIO API (fichiers présignés) — restreindre si possible |
+| 9001 | Console MinIO — **ne pas exposer** en prod (SSH tunnel uniquement) |
+
+---
+
+## 3. Outils système à installer
+
+Connectez-vous en SSH (utilisateur avec `sudo`).
+
+### 3.1 Mise à jour et paquets de base
+
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y \
+  ca-certificates \
+  curl \
+  wget \
+  gnupg \
+  lsb-release \
+  apt-transport-https \
+  software-properties-common \
+  git \
+  unzip \
+  jq \
+  htop \
+  net-tools \
+  openssl \
+  ufw \
+  fail2ban \
+  nginx \
+  certbot \
+  python3-certbot-nginx
+```
+
+| Outil | Utilité |
+|-------|---------|
+| `git` | Récupération du code |
+| `curl` / `wget` / `jq` | Tests health, scripts |
+| `openssl` | Secrets, TLS |
+| `ufw` | Pare-feu |
+| `fail2ban` | Protection SSH |
+| `nginx` + `certbot` | Reverse-proxy HTTPS |
+| `htop` | Supervision rapide |
+
+### 3.2 Docker Engine + Compose v2 (plugin officiel)
+
+```bash
+# Dépôt Docker officiel
+sudo install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+  | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+sudo chmod a+r /etc/apt/keyrings/docker.gpg
+
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+  https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo \"$VERSION_CODENAME\") stable" \
+  | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+sudo apt update
+sudo apt install -y docker-ce docker-ce-cli containerd.io \
+  docker-buildx-plugin docker-compose-plugin
+
+# Démarrage auto
+sudo systemctl enable --now docker
+
+# (Optionnel) lancer Docker sans sudo
+sudo usermod -aG docker "$USER"
+# Puis se déconnecter / reconnecter
+```
+
+Vérification :
+
+```bash
+docker --version
+docker compose version
+docker run --rm hello-world
+```
+
+### 3.3 Pare-feu UFW
+
+```bash
+sudo ufw default deny incoming
+sudo ufw default allow outgoing
+sudo ufw allow OpenSSH
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+# MinIO API (URLs présignées navigateur → serveur:9000)
+sudo ufw allow 9000/tcp
+# Ne pas ouvrir 9001 (console MinIO) ni 5432 / 6379
+sudo ufw --force enable
+sudo ufw status verbose
+```
+
+### 3.4 Fail2ban (SSH)
+
+```bash
+sudo systemctl enable --now fail2ban
+sudo fail2ban-client status sshd
+```
+
+### 3.5 DNS
+
+Avant le certificat TLS, créez les enregistrements :
+
+| Type | Nom | Valeur |
+|------|-----|--------|
+| A | `finflow.votredomaine.tld` | IP du serveur |
+| A | `minio.votredomaine.tld` | IP du serveur (recommandé pour les fichiers) |
+
+---
+
+## 4. Récupération du projet
+
+```bash
+sudo mkdir -p /opt/finflow
+sudo chown "$USER":"$USER" /opt/finflow
+cd /opt/finflow
+
+# Clone (adapter l’URL du dépôt)
+git clone <URL_DU_DEPOT> .
+# ou copie scp/rsync du projet « fin flow »
+```
+
+Structure attendue à la racine : `docker-compose.yml`, `backend/`, `frontend/`, `documentation/`.
+
+---
+
+## 5. Fichier `.env` de production
+
+Créer `/opt/finflow/.env` (ne jamais le committer) :
+
+```bash
+cd /opt/finflow
+cp .env.example .env
+chmod 600 .env
+nano .env
+```
+
+Exemple minimal production :
+
+```env
+# --- Django ---
+DJANGO_SECRET_KEY=REMPLACER_PAR_UNE_CLE_LONGUE_ALEATOIRE
+DJANGO_DEBUG=False
+DJANGO_ALLOWED_HOSTS=finflow.votredomaine.tld,localhost,127.0.0.1,backend
+DJANGO_SECURE_SSL_REDIRECT=True
+DJANGO_CORS_ALLOWED_ORIGINS=https://finflow.votredomaine.tld
+
+# --- Seed (toujours 0 en prod) ---
+SEED_DEMO=0
+
+# --- MinIO (changer les mots de passe par défaut) ---
+MINIO_ROOT_USER=finflow_minio_admin
+MINIO_ROOT_PASSWORD=MotDePasseMinIOTresLong!
+
+# Domaine public MinIO vu par le navigateur (URLs présignées)
+# Si vous exposez MinIO derrière minio.votredomaine.tld :
+#   AWS_S3_CUSTOM_DOMAIN=minio.votredomaine.tld
+#   AWS_S3_URL_PROTOCOL=https:
+# Sinon (accès direct port 9000) :
+#   AWS_S3_CUSTOM_DOMAIN=finflow.votredomaine.tld:9000
+#   AWS_S3_URL_PROTOCOL=http:
+# (préférer HTTPS + sous-domaine dédié)
+
+# --- E-mail global (repli) ; chaque filiale peut avoir son SMTP en UI ---
+EMAIL_BACKEND=django.core.mail.backends.smtp.EmailBackend
+EMAIL_HOST=smtp.votredomaine.tld
+EMAIL_PORT=587
+EMAIL_USE_TLS=True
+EMAIL_USE_SSL=False
+EMAIL_HOST_USER=noreply@votredomaine.tld
+EMAIL_HOST_PASSWORD=********
+DEFAULT_FROM_EMAIL=FIN_FLOW <noreply@votredomaine.tld>
+FRONTEND_BASE_URL=https://finflow.votredomaine.tld
+
+# En production Ubuntu : vérifier les certificats SMTP
+SMTP_SSL_VERIFY=1
+```
+
+Générer une clé secrète :
+
+```bash
+openssl rand -base64 48
+```
+
+> **Important :** le `docker-compose.yml` de démo fixe encore certaines variables (Postgres `finflow`/`finflow`, MinIO `localhost:9000`, etc.). Pour une prod réelle, adaptez `docker-compose.yml` (ou un `docker-compose.prod.yml`) afin de lire `DJANGO_ALLOWED_HOSTS`, `AWS_S3_CUSTOM_DOMAIN`, `FRONTEND_BASE_URL`, mots de passe DB/MinIO depuis `.env`. Voir section 10.
+
+---
+
+## 6. Compose production
+
+Le dépôt fournit déjà [`docker-compose.prod.yml`](../docker-compose.prod.yml) : il surcharge les secrets, force `SEED_DEMO=0`, `SMTP_SSL_VERIFY=1`, et expose frontend/MinIO uniquement sur `127.0.0.1` (Nginx hôte fait le TLS public).
+
+Ajouter dans `.env` :
+
+```env
+POSTGRES_PASSWORD=MotDePassePostgresTresLong!
+AWS_S3_CUSTOM_DOMAIN=minio.votredomaine.tld
+AWS_S3_URL_PROTOCOL=https:
+```
+
+Alias pratique :
+
+```bash
+echo "alias finflow='docker compose -f docker-compose.yml -f docker-compose.prod.yml'" >> ~/.bashrc
+source ~/.bashrc
+```
+
+---
+
+## 7. Premier démarrage de la stack
+
+```bash
+cd /opt/finflow
+
+# Avec le fichier prod (sinon : docker compose up -d --build)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+
+# Suivre le boot
+docker compose -f docker-compose.yml -f docker-compose.prod.yml ps
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f backend
+```
+
+Au démarrage du `backend` :
+
+1. Attente PostgreSQL  
+2. Création du bucket MinIO `finflow-documents`  
+3. Migrations Django + `collectstatic`  
+4. Seed **désactivé** (`SEED_DEMO=0`)
+
+Vérifications locales :
+
+```bash
+curl -sS http://127.0.0.1:8080/api/v1/health/
+# → {"status":"ok","ready":true,...}
+```
+
+Créer le premier administrateur Groupe :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend \
+  python manage.py createsuperuser
+```
+
+Ou peupler une démo **uniquement en UAT** :
+
+```bash
+SEED_DEMO=1 docker compose -f docker-compose.yml -f docker-compose.prod.yml \
+  exec backend python manage.py seed_demo
+```
+
+Synchroniser les packs de rôles filiale :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend \
+  python manage.py sync_role_packs
+```
+
+---
+
+## 8. Nginx reverse-proxy + Let’s Encrypt
+
+Le frontend Compose écoute sur `127.0.0.1:8080`. Nginx public termine le TLS.
+
+### 8.1 Configuration application
+
+`/etc/nginx/sites-available/finflow` :
+
+```nginx
+server {
+    listen 80;
+    listen [::]:80;
+    server_name finflow.votredomaine.tld;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name finflow.votredomaine.tld;
+
+    # Remplacés / complétés par Certbot
+    ssl_certificate     /etc/letsencrypt/live/finflow.votredomaine.tld/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/finflow.votredomaine.tld/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    client_max_body_size 100m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+### 8.2 Configuration MinIO (sous-domaine recommandé)
+
+`/etc/nginx/sites-available/finflow-minio` :
+
+```nginx
+server {
+    listen 80;
+    server_name minio.votredomaine.tld;
+    location /.well-known/acme-challenge/ { root /var/www/html; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    server_name minio.votredomaine.tld;
+
+    ssl_certificate     /etc/letsencrypt/live/minio.votredomaine.tld/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/minio.votredomaine.tld/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    client_max_body_size 100m;
+
+    # API S3 path-style : /finflow-documents/...
+    ignore_invalid_headers off;
+    proxy_buffering off;
+
+    location / {
+        proxy_pass http://127.0.0.1:9000;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_connect_timeout 300;
+        proxy_http_version 1.1;
+        chunked_transfer_encoding off;
+    }
+}
+```
+
+Activer et obtenir les certificats :
+
+```bash
+sudo ln -sf /etc/nginx/sites-available/finflow /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/finflow-minio /etc/nginx/sites-enabled/
+sudo rm -f /etc/nginx/sites-enabled/default
+
+# Première fois : commenter temporairement les blocs ssl_certificate
+# puis :
+sudo certbot --nginx -d finflow.votredomaine.tld -d minio.votredomaine.tld
+
+sudo nginx -t && sudo systemctl reload nginx
+sudo systemctl enable nginx
+```
+
+Renouvellement automatique (timer systemd fourni par Certbot) :
+
+```bash
+sudo certbot renew --dry-run
+```
+
+---
+
+## 9. Checklist post-installation
+
+1. [ ] `https://finflow.votredomaine.tld` charge la SPA  
+2. [ ] `https://finflow.votredomaine.tld/api/v1/health/` → `ready: true`  
+3. [ ] `https://finflow.votredomaine.tld/api/docs/` accessible (restreindre en prod si besoin)  
+4. [ ] Connexion admin + création d’une filiale  
+5. [ ] **Administration → Alertes e-mail** : SMTP filiale + test d’envoi  
+6. [ ] Génération d’un contrat / upload document → téléchargement OK (MinIO présigné)  
+7. [ ] `SMTP_SSL_VERIFY=1`  
+8. [ ] `SEED_DEMO=0`  
+9. [ ] Mots de passe DB / MinIO / Django distincts et forts  
+10. [ ] Console MinIO `:9001` non exposée  
+11. [ ] Sauvegardes planifiées (section 11)  
+
+---
+
+## 10. Commandes d’exploitation courantes
+
+```bash
+cd /opt/finflow
+COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+
+# État
+$COMPOSE ps
+$COMPOSE logs -f --tail=200 backend worker beat
+
+# Mise à jour release
+git pull
+$COMPOSE up -d --build
+$COMPOSE exec backend python manage.py migrate
+$COMPOSE exec backend python manage.py sync_role_packs
+
+# Shell Django
+$COMPOSE exec backend python manage.py shell
+
+# Redémarrage ciblé
+$COMPOSE restart backend worker beat
+```
+
+Images **bakées** (pas de volume code) : tout changement Python/React exige `--build`.
+
+---
+
+## 11. Sauvegardes
+
+### 11.1 PostgreSQL (quotidien)
+
+```bash
+#!/usr/bin/env bash
+# /opt/finflow/scripts/backup-db.sh
+set -euo pipefail
+STAMP=$(date +%Y%m%d_%H%M%S)
+OUT=/var/backups/finflow
+mkdir -p "$OUT"
+cd /opt/finflow
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
+  pg_dump -U finflow finflow | gzip > "$OUT/finflow_${STAMP}.sql.gz"
+find "$OUT" -name 'finflow_*.sql.gz' -mtime +14 -delete
+```
+
+```bash
+sudo mkdir -p /var/backups/finflow
+sudo chmod +x /opt/finflow/scripts/backup-db.sh
+# Cron (tous les jours à 02:30)
+sudo crontab -e
+# 30 2 * * * /opt/finflow/scripts/backup-db.sh >> /var/log/finflow-backup.log 2>&1
+```
+
+### 11.2 MinIO / GED
+
+- Activer le **versioning** du bucket `finflow-documents`  
+- Copie périodique avec `mc mirror` (client MinIO) vers un second stockage  
+- Lifecycle : voir `deploy/s3/lifecycle.json`
+
+Installation client MinIO (optionnel) :
+
+```bash
+curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
+sudo install -m 0755 /tmp/mc /usr/local/bin/mc
+mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+mc mirror --overwrite local/finflow-documents /var/backups/finflow/minio/
+```
+
+### 11.3 Restauration DB (exemple)
+
+```bash
+gunzip -c /var/backups/finflow/finflow_YYYYMMDD_HHMMSS.sql.gz \
+  | docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
+    psql -U finflow finflow
+```
+
+---
+
+## 12. Supervision minimale
+
+| Contrôle | Commande / URL |
+|----------|----------------|
+| Santé API | `curl -fsS https://finflow…/api/v1/health/` |
+| Conteneurs | `docker compose … ps` |
+| Logs | `docker compose … logs -f backend worker` |
+| Disque | `df -h` |
+| Mémoire | `free -h` / `htop` |
+| Certificats | `sudo certbot certificates` |
+
+En prod avancée : brancher Prometheus / Grafana / Sentry (`SENTRY_DSN`) — voir [10 — Exploitation](10-exploitation-supervision.md).
+
+---
+
+## 13. Dépannage Ubuntu
+
+| Symptôme | Piste |
+|----------|--------|
+| 502 Bad Gateway | Frontend/backend down ; `docker compose ps` + logs |
+| Health `storage` KO | MinIO, credentials, `AWS_S3_*` |
+| Fichiers AccessDenied | `AWS_S3_CUSTOM_DOMAIN` / protocole HTTPS / CORS bucket |
+| E-mails en échec | SMTP filiale (UI), `SMTP_SSL_VERIFY=1`, logs worker |
+| Alertes workflow absentes | Worker Celery up ; prefs « Alertes e-mail » |
+| Certbot échoue | DNS, ports 80/443 ouverts, `server_name` correct |
+| Disque plein | Volumes Docker `docker system df` ; purger anciennes images |
+
+```bash
+docker system df
+docker image prune -f
+journalctl -u nginx -u docker -n 100 --no-pager
+```
+
+---
+
+## 14. Récapitulatif des outils
+
+| Catégorie | Outils |
+|-----------|--------|
+| OS | Ubuntu 22.04 / 24.04 LTS |
+| Conteneurs | Docker Engine, Compose plugin, Buildx |
+| Proxy / TLS | Nginx, Certbot, OpenSSL |
+| Sécurité | UFW, Fail2ban |
+| Stack applicative | PostgreSQL 16, Redis 7, MinIO, Gunicorn, Celery |
+| Exploitation | git, curl, jq, htop, mc (MinIO client), cron |
+| Documentation | `documentation/04-…`, `05-configuration.md`, ce guide |
+
+---
+
+## 15. Références
+
+- Configuration détaillée : [05 — Configuration](05-configuration.md)  
+- Architecture : [02 — Architecture technique](02-architecture-technique.md)  
+- Exploitation : [10 — Exploitation](10-exploitation-supervision.md)  
+- Kubernetes (alternative) : [`../deploy/k8s/README.md`](../deploy/k8s/README.md)  
+- Variables d’exemple : [`.env.example`](../.env.example), [`backend/.env.example`](../backend/.env.example)
+
+---
+
+*FIN_FLOW — Thuin Tech — Déploiement Ubuntu.*

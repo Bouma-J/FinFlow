@@ -1,0 +1,148 @@
+from django.http import FileResponse, Http404
+from rest_framework import viewsets
+from rest_framework.decorators import action
+from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
+from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
+
+from apps.common.permissions import (
+    HasModelPermission,
+    IsGroupLevel,
+    MustChangePasswordGate,
+)
+from apps.common.tenancy import get_current_tenant_id, is_group_context
+from apps.common.viewsets import TenantContextMixin
+
+from .models import Agency, Tenant
+from .serializers import AgencySerializer, TenantSerializer
+from .services import bootstrap_tenant
+
+
+class TenantViewSet(TenantContextMixin, viewsets.ModelViewSet):
+    """Gestion des filiales — création réservée au niveau Groupe."""
+
+    queryset = Tenant.objects.prefetch_related("officers").all()
+    serializer_class = TenantSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
+    filterset_fields = ["country", "zone", "is_active", "currency"]
+    search_fields = ["code", "name", "country"]
+    ordering_fields = ["code", "name", "created_at"]
+
+    def get_permissions(self):
+        if self.action == "logo":
+            # Les <img> du navigateur n'envoient pas le JWT.
+            return [AllowAny()]
+        if self.action in ("retrieve", "current"):
+            return [IsAuthenticated()]
+        if self.action in ("update", "partial_update"):
+            return [IsAuthenticated()]
+        return [IsAuthenticated(), IsGroupLevel()]
+
+    def perform_update(self, serializer):
+        user = self.request.user
+        if not (getattr(user, "is_group_level", False) or user.is_superuser):
+            if str(serializer.instance.id) != str(user.tenant_id):
+                raise PermissionDenied(
+                    "Vous ne pouvez modifier que votre propre filiale."
+                )
+        serializer.save()
+
+    def perform_create(self, serializer):
+        tenant = serializer.save()
+        bootstrap_tenant(tenant)
+
+    def get_queryset(self):
+        user = self.request.user
+        if self.action in ("retrieve", "current", "logo"):
+            if getattr(user, "is_authenticated", False) and (
+                getattr(user, "is_group_level", False) or user.is_superuser
+            ):
+                return Tenant.objects.all()
+            if getattr(user, "is_authenticated", False) and user.tenant_id:
+                return Tenant.objects.filter(pk=user.tenant_id)
+            tenant_id = get_current_tenant_id()
+            if tenant_id:
+                return Tenant.objects.filter(pk=tenant_id)
+            if self.action == "logo":
+                return Tenant.objects.all()
+            return Tenant.objects.none()
+        return Tenant.objects.all()
+
+    @action(detail=True, methods=["get"], url_path="logo")
+    def logo(self, request, pk=None):
+        """Sert le logo de la filiale (affichage sidebar / branding)."""
+        tenant = Tenant.objects.filter(pk=pk).first()
+        if tenant is None or not tenant.logo:
+            raise Http404("Logo introuvable.")
+        try:
+            handle = tenant.logo.open("rb")
+        except Exception as exc:  # noqa: BLE001
+            raise Http404("Fichier logo inaccessible.") from exc
+
+        from apps.common.storage_urls import image_content_type
+
+        response = FileResponse(
+            handle, content_type=image_content_type(tenant.logo.name)
+        )
+        response["Cache-Control"] = "public, max-age=3600"
+        return response
+    @action(detail=True, methods=["post"], url_path="bootstrap")
+    def bootstrap_defaults(self, request, pk=None):
+        """Crée les rôles par défaut pour une filiale existante."""
+        tenant = self.get_object()
+        bootstrap_tenant(tenant)
+        return Response({
+            "detail": "Rôles par défaut créés pour la filiale.",
+        })
+
+    @action(detail=False, methods=["get"])
+    def current(self, request):
+        """Filiale active (utilisateur filiale ou filiale sélectionnée)."""
+        user = request.user
+        tenant_id = user.tenant_id or get_current_tenant_id()
+        if not tenant_id:
+            raise ValidationError(
+                "Aucune filiale active. Sélectionnez une filiale."
+            )
+        tenant = Tenant.objects.filter(pk=tenant_id).first()
+        if tenant is None:
+            raise ValidationError("Filiale introuvable.")
+        return Response(
+            TenantSerializer(tenant, context={"request": request}).data
+        )
+
+
+class AgencyViewSet(TenantContextMixin, viewsets.ModelViewSet):
+    """Gestion des agences, filtrées selon le périmètre de l'utilisateur."""
+
+    queryset = Agency.objects.select_related("tenant").all()
+    serializer_class = AgencySerializer
+    permission_classes = [
+        IsAuthenticated,
+        MustChangePasswordGate,
+        HasModelPermission,
+    ]
+    enforce_model_permissions = True
+    filterset_fields = ["tenant", "region", "is_active"]
+    search_fields = ["code", "name", "region"]
+
+    def get_queryset(self):
+        qs = Agency.objects.select_related("tenant").all()
+        if not is_group_context():
+            tenant_id = get_current_tenant_id()
+            qs = qs.filter(tenant_id=tenant_id) if tenant_id else qs.none()
+        else:
+            tenant_id = get_current_tenant_id()
+            if tenant_id:
+                qs = qs.filter(tenant_id=tenant_id)
+        return qs
+
+    def perform_create(self, serializer):
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            raise ValidationError({
+                "detail": "Aucune filiale sélectionnée. Choisissez une filiale "
+                          "avant de créer une agence."
+            })
+        serializer.save(tenant_id=tenant_id)

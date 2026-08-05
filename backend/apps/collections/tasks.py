@@ -1,0 +1,24 @@
+"""Tâches Celery — recouvrement."""
+import logging
+
+from celery import shared_task
+
+logger = logging.getLogger("finflow")
+
+
+@shared_task(ignore_result=True)
+def refresh_all_overdue_loans():
+    """Recalcule les retards PAR pour tous les prêts actifs."""
+    from apps.collections.services import refresh_loan_overdue
+    from apps.credits.models import Loan
+
+    loans = Loan.all_tenants.filter(status=Loan.Status.ACTIVE).iterator()
+    count = 0
+    for loan in loans:
+        try:
+            refresh_loan_overdue(loan)
+            count += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("Échec refresh overdue loan=%s", loan.id)
+    logger.info("Recouvrement : %s prêts actualisés", count)
+    return count

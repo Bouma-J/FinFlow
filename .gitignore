@@ -1,0 +1,49 @@
+# Environnements virtuels
+env_virtuel/
+venv/
+.venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Django
+*.sqlite3
+db.sqlite3
+/backend/media/
+/backend/staticfiles/
+/backend/schema.yml
+
+# Environnement
+.env
+*.env
+!*.env.example
+
+# Certificats CA locaux (proxy à inspection TLS) — spécifiques au poste
+certs/
+**/certs/ca-bundle.crt
+
+# Frontend (Node / Vite)
+node_modules/
+/frontend/dist/
+/frontend/.vite/
+npm-debug.log*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Fichiers temporaires Office
+CONTRATS/~$*
+**/~$*
+
+
+docker-rebuild.log
+*.log
+

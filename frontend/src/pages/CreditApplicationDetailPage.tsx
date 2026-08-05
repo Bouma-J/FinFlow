@@ -1,0 +1,2928 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  Ban,
+  Banknote,
+  Briefcase,
+  CalendarClock,
+  Check,
+  ChevronDown,
+  ClipboardCheck,
+  ClipboardList,
+  Factory,
+  Download,
+  FilePenLine,
+  FileSignature,
+  FileText,
+  Gauge,
+  Gavel,
+  GitBranch,
+  HandCoins,
+  History,
+  Landmark,
+  Leaf,
+  LineChart,
+  MapPin,
+  NotebookPen,
+  Paperclip,
+  Plus,
+  Send,
+  ShieldAlert,
+  ShieldCheck,
+  Store,
+  Trash2,
+  Upload,
+  UserRound,
+  Wallet,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+
+import { api } from "@/api/client";
+import {
+  CREDIT_LABELS,
+  FINANCE_LABELS,
+  GUARANTEE_LABELS,
+  type ApplicableTemplate,
+  type ApprovalTask,
+  type ApprovalCondition,
+  type Client,
+  type CreditApplication,
+  type FieldVisit,
+  type FinancialAnalysis,
+  type GeneratedContract,
+  type Guarantee,
+  type Paginated,
+  type SuretyEngagement,
+  WORKFLOW_LABELS,
+} from "@/api/types";
+import { useAuth } from "@/auth/AuthContext";
+import { hasPerm } from "@/auth/permissions";
+import { ApprovalConditionsCard } from "@/components/ApprovalConditionsCard";
+import { DecisionPanel } from "@/components/DecisionPanel";
+import { RenewGuaranteesPanel } from "@/components/RenewGuaranteesPanel";
+import { Badge, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
+
+interface WorkflowInstance {
+  id: string;
+  object_id: string;
+  status: string;
+  current_order: number;
+  created_at?: string;
+  tasks: {
+    id: string;
+    step_name: string;
+    status: string;
+    opinion: string;
+    opinion_display: string;
+    acted_by_display: string | null;
+    decision_comment: string;
+    proposed_amount: string | null;
+  }[];
+}
+
+function lbl(map: Record<string, string>, key: string) {
+  return map[key] || key || "—";
+}
+
+interface TimelineEvent {
+  timestamp: string;
+  kind: "CREATION" | "WORKFLOW" | "DECISION";
+  event: string;
+  actor: string | null;
+  comment: string;
+  step: string | null;
+  opinion?: string | null;
+}
+
+const TIMELINE_LABELS: Record<string, string> = {
+  CREATED: "Création du dossier",
+  SUBMITTED: "Soumis au circuit d'approbation",
+  RESUBMITTED: "Re-soumis après correction",
+  CANCELLED: "Soumission annulée",
+  RETURNED_STEP: "Renvoyé à l'étape précédente",
+  RETURNED_SUBMITTER: "Renvoyé au soumissionnaire",
+  APPROVED: "Étape approuvée",
+  REJECTED: "Dossier rejeté",
+  RETURNED: "Dossier renvoyé",
+};
+
+const TIMELINE_TONE: Record<string, string> = {
+  CREATED: "muted",
+  SUBMITTED: "info",
+  RESUBMITTED: "info",
+  CANCELLED: "warning",
+  RETURNED_STEP: "warning",
+  RETURNED_SUBMITTER: "warning",
+  APPROVED: "success",
+  REJECTED: "danger",
+  RETURNED: "warning",
+};
+
+// Extrait un message lisible d'une erreur API (formats DRF variés).
+function extractApiError(e: unknown, fallback: string): string {
+  const data = (e as { response?: { data?: unknown } })?.response?.data;
+  const errors =
+    data && typeof data === "object" && "errors" in data
+      ? (data as { errors: unknown }).errors
+      : data;
+  if (typeof errors === "string") return errors;
+  if (Array.isArray(errors)) return errors.filter(Boolean).join(" ");
+  if (errors && typeof errors === "object") {
+    const parts: string[] = [];
+    for (const value of Object.values(errors as Record<string, unknown>)) {
+      if (Array.isArray(value)) parts.push(value.filter(Boolean).join(" "));
+      else if (value) parts.push(String(value));
+    }
+    if (parts.length) return parts.join(" ");
+  }
+  return fallback;
+}
+
+function describeGuarantee(g: Guarantee): string {
+  if (g.guarantee_type === "MORTGAGE") {
+    return [g.document_number, g.address].filter(Boolean).join(" — ");
+  }
+  if (g.guarantee_type === "PLEDGE" && g.pledge_category === "VEHICLE") {
+    return [g.brand, g.model_name, g.registration].filter(Boolean).join(" ");
+  }
+  if (g.guarantee_type === "FINANCIAL") {
+    const t = g.financial_type
+      ? GUARANTEE_LABELS.financial_type[g.financial_type]
+      : "";
+    return [t, g.account_number].filter(Boolean).join(" — ");
+  }
+  return "";
+}
+
+type DocItem = { label: string; url: string };
+
+const GUARANTEE_DOC_LABELS: Record<string, string> = {
+  document_scan: "Scan du document",
+  expertise_report_scan: "Rapport d'expertise",
+  lease_contract_scan: "Contrat de bail",
+  legal_situation_certificate_scan: "Certificat de situation juridique",
+  registration_card_scan: "Carte grise",
+  mechanical_expertise_scan: "Expertise mécanique",
+  technical_inspection_scan: "Visite technique",
+  insurance_scan: "Assurance",
+  purchase_invoice_scan: "Facture d'achat",
+  expertise_certificate_scan: "Certificat d'expertise",
+  origin_certificate_scan: "Certificat d'origine / facture",
+  pledge_deed_scan: "Acte de nantissement / blocage",
+};
+
+function guaranteeDocs(g: Guarantee): DocItem[] {
+  const docs: DocItem[] = [];
+  for (const [key, label] of Object.entries(GUARANTEE_DOC_LABELS)) {
+    const url = (g as unknown as Record<string, unknown>)[key];
+    if (typeof url === "string" && url) docs.push({ label, url });
+  }
+  return docs;
+}
+
+function clientDocs(c: Client): DocItem[] {
+  const map: [keyof Client, string][] = [
+    ["id_document_scan", "Pièce d'identité du client"],
+    ["photo", "Photo du client"],
+    ["ifu_scan", "IFU"],
+    ["rccm_scan", "RCCM"],
+    ["manager_id_document_scan", "Pièce d'identité du gérant"],
+  ];
+  const docs: DocItem[] = [];
+  for (const [key, label] of map) {
+    const url = c[key];
+    if (typeof url === "string" && url) docs.push({ label, url });
+  }
+  return docs;
+}
+
+function DocLink({ label, url }: DocItem) {
+  return (
+    <a className="doc-chip" href={url} target="_blank" rel="noreferrer">
+      <FileText size={15} />
+      {label}
+    </a>
+  );
+}
+
+function Row({ term, value }: { term: string; value?: ReactNode }) {
+  if (value === null || value === undefined || value === "") return null;
+  return (
+    <div>
+      <dt>{term}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+function SubSection({
+  icon: Icon,
+  title,
+  children,
+}: {
+  icon: LucideIcon;
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="subsection">
+      <div className="subsection-title">
+        <Icon size={15} />
+        {title}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+// Contexte d'accordéon : permet à chaque ViewSection de savoir si elle est
+// dépliée, sans faire descendre les props dans les composants intermédiaires.
+const SectionCollapseContext = createContext<{
+  isOpen: (id: string) => boolean;
+  toggle: (id: string) => void;
+} | null>(null);
+
+function ViewSection({
+  id,
+  icon: Icon,
+  title,
+  description,
+  action,
+  children,
+}: {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  description?: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  const ctx = useContext(SectionCollapseContext);
+  const collapsible = !!ctx;
+  const open = ctx ? ctx.isOpen(id) : true;
+  return (
+    <section
+      id={id}
+      className={`card form-section${collapsible ? " collapsible" : ""}${
+        collapsible && !open ? " collapsed" : ""
+      }`}
+    >
+      <div
+        className="card-title form-section-head"
+        {...(collapsible
+          ? {
+              role: "button",
+              tabIndex: 0,
+              "aria-expanded": open,
+              onClick: () => ctx!.toggle(id),
+              onKeyDown: (e: KeyboardEvent) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  ctx!.toggle(id);
+                }
+              },
+            }
+          : {})}
+      >
+        <span className="form-section-icon">
+          <Icon size={18} />
+        </span>
+        <div className="form-section-heading">
+          <span className="form-section-title">{title}</span>
+          {description && (
+            <span className="form-section-desc">{description}</span>
+          )}
+        </div>
+        {action && (
+          <div
+            className="form-section-action"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {action}
+          </div>
+        )}
+        {collapsible && (
+          <ChevronDown size={18} className="form-section-chevron" />
+        )}
+      </div>
+      {open && <div className="card-body">{children}</div>}
+    </section>
+  );
+}
+
+// Scroll-spy : suit la section visible et permet la navigation latérale.
+function useScrollSpy(deps: unknown[], initial: string) {
+  const [active, setActive] = useState(initial);
+  useEffect(() => {
+    const els = Array.from(
+      document.querySelectorAll<HTMLElement>(".form-section"),
+    );
+    if (els.length === 0) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio);
+        if (visible[0]) setActive(visible[0].target.id);
+      },
+      { rootMargin: "-15% 0px -70% 0px", threshold: [0, 0.25, 0.5, 1] },
+    );
+    els.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return [active, setActive] as const;
+}
+
+function scrollToSection(id: string) {
+  document
+    .getElementById(id)
+    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function pct(value: string | null): string {
+  if (value === null || value === undefined || value === "") return "—";
+  return `${Number(value).toFixed(1)} %`;
+}
+
+function mNum(
+  metrics: FinancialAnalysis["metrics"] | undefined,
+  key: string,
+): number | null {
+  const v = metrics?.[key];
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
+}
+
+function fPct(v: number | null): string {
+  return v === null ? "—" : `${v.toFixed(1)} %`;
+}
+function fX(v: number | null): string {
+  return v === null ? "—" : `${v.toFixed(2)}×`;
+}
+function fDays(v: number | null): string {
+  return v === null ? "—" : `${Math.round(v)} j`;
+}
+function fRatio(v: number | null): string {
+  return v === null ? "—" : v.toFixed(2);
+}
+
+function boolTone(
+  v: boolean | null | undefined,
+): "ok" | "warn" | undefined {
+  if (v === null || v === undefined) return undefined;
+  return v ? "ok" : "warn";
+}
+
+function ScorePanel({
+  breakdown,
+}: {
+  breakdown: NonNullable<FinancialAnalysis["score_breakdown"]>;
+}) {
+  const total = breakdown.total ?? 0;
+  const tone = total >= 70 ? "ok" : total >= 50 ? "mid" : "low";
+  return (
+    <div className={`score-panel score-${tone}`}>
+      <div className="score-badge">
+        <span className="score-value">{Math.round(total)}</span>
+        <span className="score-max">/100</span>
+      </div>
+      <div className="score-bars">
+        {breakdown.components.map((c) => (
+          <div key={c.key} className="score-bar-row">
+            <span className="score-bar-label">
+              {c.label}
+              <em>({c.weight}%)</em>
+            </span>
+            <span className="score-bar-track">
+              <span
+                className="score-bar-fill"
+                style={{ width: `${c.score ?? 0}%` }}
+              />
+            </span>
+            <span className="score-bar-num">
+              {c.score === null ? "—" : Math.round(c.score)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const PERIODS_PER_YEAR: Record<string, number> = {
+  DAILY: 360,
+  WEEKLY: 52,
+  MONTHLY: 12,
+  QUARTERLY: 4,
+  SEMIANNUAL: 2,
+  ANNUAL: 1,
+};
+
+interface ScheduleRow {
+  number: number;
+  dueDate: string;
+  principal: number;
+  interest: number;
+  savings: number;
+  total: number;
+  balance: number;
+}
+
+interface SchedulePreview {
+  installment: number;
+  count: number;
+  totalInterest: number;
+  totalSavings: number;
+  totalRepayment: number;
+  periodLabel: string;
+  hasSavings: boolean;
+  rows: ScheduleRow[];
+}
+
+// Les montants du tableau d'amortissement (intérêt, capital, échéance) sont
+// arrondis à la dizaine de F CFA la plus proche, conformément à la base de
+// calcul du core banking (cf. tableau LB SERVICES).
+const round10 = (n: number) => Math.round(n / 10) * 10;
+
+function nextBusinessDay(d: Date): Date {
+  const r = new Date(d);
+  // 0 = dimanche, 6 = samedi → report au lundi
+  while (r.getDay() === 0 || r.getDay() === 6) r.setDate(r.getDate() + 1);
+  return r;
+}
+
+function addPeriods(base: Date, periodicity: string, n: number): Date {
+  const r = new Date(base);
+  if (periodicity === "DAILY") r.setDate(r.getDate() + n);
+  else if (periodicity === "WEEKLY") r.setDate(r.getDate() + n * 7);
+  else {
+    const m: Record<string, number> = {
+      MONTHLY: 1,
+      QUARTERLY: 3,
+      SEMIANNUAL: 6,
+      ANNUAL: 12,
+    };
+    r.setMonth(r.getMonth() + n * (m[periodicity] ?? 1));
+  }
+  return r;
+}
+
+const DAY_MS = 86_400_000;
+
+function computeSchedulePreview(app: CreditApplication): SchedulePreview | null {
+  const approvedLike = [
+    "APPROVED",
+    "CONTRACT_GENERATED",
+    "DISBURSEMENT_PENDING",
+    "DISBURSED",
+    "CLOSED",
+  ];
+  const principal = Number(
+    (approvedLike.includes(app.status) && app.amount_approved
+      ? app.amount_approved
+      : null) ||
+      app.amount_proposed ||
+      app.amount_requested ||
+      0,
+  );
+  const annualRate = Number(app.interest_rate || 0) / 100;
+  const perYear = PERIODS_PER_YEAR[app.periodicity];
+  const months = Number(app.duration_months || 0);
+  const mechanism = (app.repayment_mechanism || "CONSTANT").toUpperCase();
+  if (!principal || !perYear || !months) return null;
+  const count = Math.max(1, Math.ceil((months / 12) * perYear));
+  const periodRate = annualRate / perYear;
+  const dailyRate = annualRate / 365;
+  const savingsFlat = round10(
+    principal * (Number(app.mandatory_savings_rate || 0) / 100),
+  );
+
+  const firstBase = app.first_due_date
+    ? new Date(app.first_due_date)
+    : addPeriods(new Date(), app.periodicity, 1);
+
+  const rows: ScheduleRow[] = [];
+  let totalInterest = 0;
+
+  // BULLET : une seule échéance au terme
+  if (mechanism === "BULLET") {
+    const lastNominal = addPeriods(firstBase, app.periodicity, count - 1);
+    const prevNominal = addPeriods(firstBase, app.periodicity, -1);
+    const days = Math.round(
+      (lastNominal.getTime() - prevNominal.getTime()) / DAY_MS,
+    );
+    const interest = round10(principal * dailyRate * days);
+    const institution = principal + interest;
+    totalInterest = interest;
+    rows.push({
+      number: 1,
+      dueDate: lastNominal.toISOString().slice(0, 10),
+      principal,
+      interest,
+      savings: savingsFlat,
+      total: institution + savingsFlat,
+      balance: 0,
+    });
+  } else {
+    let payment = 0;
+    if (mechanism === "CONSTANT") {
+      if (periodRate > 0) {
+        payment =
+          (principal * periodRate) / (1 - Math.pow(1 + periodRate, -count));
+      } else {
+        payment = principal / count;
+      }
+      payment = round10(payment);
+    }
+    const flatPrincipal = round10(principal / count);
+
+    let balance = principal;
+    let prevNominal = addPeriods(firstBase, app.periodicity, -1);
+    for (let n = 1; n <= count; n++) {
+      const nominal = addPeriods(firstBase, app.periodicity, n - 1);
+      const days = Math.round(
+        (nominal.getTime() - prevNominal.getTime()) / DAY_MS,
+      );
+      const interest = round10(balance * dailyRate * days);
+      const isLast = n === count;
+      let principalPart: number;
+      if (mechanism === "IN_FINE") {
+        principalPart = isLast ? balance : 0;
+      } else if (mechanism === "DEGRESSIVE") {
+        principalPart = isLast ? balance : Math.min(flatPrincipal, balance);
+      } else {
+        principalPart = isLast ? balance : Math.max(0, payment - interest);
+      }
+      balance = balance - principalPart;
+      const due =
+        n === 1 || n === count ? nominal : nextBusinessDay(nominal);
+      const institution = principalPart + interest;
+      totalInterest += interest;
+      rows.push({
+        number: n,
+        dueDate: due.toISOString().slice(0, 10),
+        principal: principalPart,
+        interest,
+        savings: savingsFlat,
+        total: institution + savingsFlat,
+        balance: balance < 0 ? 0 : balance,
+      });
+      prevNominal = nominal;
+    }
+  }
+
+  const firstInstitution =
+    (rows[0]?.principal ?? 0) + (rows[0]?.interest ?? 0);
+
+  return {
+    installment: firstInstitution,
+    count: rows.length,
+    totalInterest,
+    totalSavings: savingsFlat * rows.length,
+    totalRepayment: rows.reduce((s, row) => s + row.total, 0),
+    periodLabel: CREDIT_LABELS.periodicity[app.periodicity] || app.periodicity,
+    hasSavings: savingsFlat > 0,
+    rows,
+  };
+}
+
+function Metric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: ReactNode;
+  tone?: "ok" | "warn";
+}) {
+  return (
+    <div className={`metric${tone ? ` metric-${tone}` : ""}`}>
+      <span className="metric-label">{label}</span>
+      <span className="metric-value">{value}</span>
+    </div>
+  );
+}
+
+function AnalysisDetail({
+  analysis,
+  currency,
+  appId,
+}: {
+  analysis: FinancialAnalysis;
+  currency: string;
+  appId: string;
+}) {
+  const cur = currency;
+  const isCorp = analysis.client_type === "CORPORATE";
+  const flags = analysis.flags;
+  const m = analysis.metrics;
+  const rl = (v: string) =>
+    v ? (FINANCE_LABELS.risk_level[v] ?? v) : undefined;
+  const ql = (v: string) =>
+    v ? (FINANCE_LABELS.quality_level[v] ?? v) : undefined;
+  const hasSector =
+    !!analysis.sector ||
+    !!analysis.sector_risk_level ||
+    !!analysis.sector_comment ||
+    !!analysis.market_dynamic ||
+    !!analysis.value_chain_position;
+  const hasES =
+    !!analysis.es_category ||
+    !!analysis.es_risk_level ||
+    !!analysis.es_comment ||
+    !!analysis.es_mitigation_plan ||
+    analysis.env_permit_required ||
+    analysis.eia_required ||
+    !!analysis.jobs_created;
+  const debtTone: "ok" | "warn" | undefined = isCorp
+    ? flags?.leverage_ok === undefined
+      ? undefined
+      : flags.leverage_ok
+        ? "ok"
+        : "warn"
+    : flags?.debt_ratio_ok === undefined
+      ? undefined
+      : flags.debt_ratio_ok
+        ? "ok"
+        : "warn";
+  const dscrTone: "ok" | "warn" | undefined =
+    flags?.dscr_ok === undefined ? undefined : flags.dscr_ok ? "ok" : "warn";
+
+  return (
+    <div className="analysis-item">
+      <div className="analysis-item-head">
+        <div className="analysis-author">
+          <UserRound size={15} />
+          <div>
+            <strong>{analysis.created_by_display || "Auteur inconnu"}</strong>
+            {analysis.author_role && (
+              <span className="analysis-role">{analysis.author_role}</span>
+            )}
+            {analysis.is_reference && (
+              <Badge value="REFERENCE" label="Référence" />
+            )}
+          </div>
+        </div>
+        <div className="analysis-head-right">
+          {analysis.recommendation && (
+            <Badge
+              value={analysis.recommendation}
+              label={
+                FINANCE_LABELS.recommendation[analysis.recommendation] ||
+                analysis.recommendation
+              }
+            />
+          )}
+          {analysis.can_edit && (
+            <Link
+              className="btn btn-ghost btn-sm"
+              to={`/dossiers/${appId}/analyse-financiere/${analysis.id}`}
+            >
+              <FilePenLine size={14} />
+              Modifier
+            </Link>
+          )}
+        </div>
+      </div>
+
+      <p className="muted small" style={{ marginTop: 0 }}>
+        {isCorp ? "Entreprise" : "Particulier"} · période{" "}
+        {FINANCE_LABELS.reference_period[analysis.reference_period] ||
+          analysis.reference_period}
+        {analysis.analysis_date
+          ? ` · analyse du ${formatDate(analysis.analysis_date)}`
+          : ""}
+        {` · enregistrée le ${formatDate(analysis.created_at)}`}
+      </p>
+
+      <div className="metric-grid">
+        {isCorp ? (
+          <>
+            <Metric label="Chiffre d'affaires" value={formatMoney(analysis.turnover, cur)} />
+            <Metric
+              label="Marge brute"
+              value={`${formatMoney(analysis.gross_margin, cur)} (${pct(analysis.gross_margin_pct)})`}
+            />
+            <Metric label="EBE" value={formatMoney(analysis.ebe, cur)} />
+            <Metric
+              label="Résultat net"
+              value={`${formatMoney(analysis.net_result, cur)} (${pct(analysis.net_margin_pct)})`}
+            />
+            <Metric label="Cash-flow" value={formatMoney(analysis.cash_flow, cur)} />
+            <Metric label="Capitaux propres" value={formatMoney(analysis.equity, cur)} />
+            <Metric label="BFR" value={formatMoney(analysis.bfr, cur)} />
+            <Metric
+              label="DSCR (couverture dette)"
+              value={analysis.dscr ?? "—"}
+              tone={dscrTone}
+            />
+            <Metric
+              label="Ratio d'endettement"
+              value={pct(analysis.debt_ratio)}
+              tone={debtTone}
+            />
+          </>
+        ) : (
+          <>
+            <Metric label="Total revenus" value={formatMoney(analysis.total_income, cur)} />
+            <Metric label="Total charges" value={formatMoney(analysis.total_household_charges, cur)} />
+            <Metric label="Reste à vivre" value={formatMoney(analysis.disposable_income, cur)} />
+            <Metric
+              label="Taux d'endettement"
+              value={pct(analysis.debt_ratio)}
+              tone={debtTone}
+            />
+          </>
+        )}
+        <Metric
+          label="Échéance institution (hors épargne)"
+          value={analysis.new_installment ? formatMoney(analysis.new_installment, cur) : "—"}
+        />
+        <Metric
+          label="Capacité de remboursement"
+          value={analysis.repayment_capacity ? formatMoney(analysis.repayment_capacity, cur) : "—"}
+        />
+      </div>
+
+      {analysis.score_breakdown &&
+        analysis.score_breakdown.total !== null &&
+        analysis.score_breakdown.total !== undefined && (
+          <ScorePanel breakdown={analysis.score_breakdown} />
+        )}
+
+      <SubSection icon={Gauge} title="Ratios approfondis (contre-analyse)">
+        <div className="metric-grid">
+          {isCorp ? (
+            <>
+              <Metric label="DSCR global" value={fX(mNum(m, "global_dscr"))} tone={boolTone(flags?.dscr_ok)} />
+              <Metric label="Couverture charges fin." value={fX(mNum(m, "interest_coverage"))} tone={boolTone(flags?.interest_coverage_ok)} />
+              <Metric label="Autonomie financière" value={fPct(mNum(m, "financial_autonomy"))} tone={boolTone(flags?.autonomy_ok)} />
+              <Metric label="Gearing (dettes fin./CP)" value={fRatio(mNum(m, "gearing"))} tone={boolTone(flags?.gearing_ok)} />
+              <Metric label="Liquidité générale" value={fRatio(mNum(m, "current_ratio"))} tone={boolTone(flags?.current_ratio_ok)} />
+              <Metric label="Liquidité réduite" value={fRatio(mNum(m, "quick_ratio"))} />
+              <Metric label="Fonds de roulement (FR)" value={formatMoney(mNum(m, "working_capital") ?? 0, cur)} />
+              <Metric label="Trésorerie nette (TN)" value={formatMoney(mNum(m, "treasury_net") ?? 0, cur)} />
+              <Metric label="BFR (jours de CA)" value={fDays(mNum(m, "bfr_days"))} />
+              <Metric label="Délai clients (DSO)" value={fDays(mNum(m, "dso_days"))} />
+              <Metric label="Délai fournisseurs (DPO)" value={fDays(mNum(m, "dpo_days"))} />
+              <Metric label="Rotation stocks (DIO)" value={fDays(mNum(m, "dio_days"))} />
+              <Metric label="Rentabilité financière (ROE)" value={fPct(mNum(m, "roe"))} />
+              <Metric label="Rentabilité économique (ROA)" value={fPct(mNum(m, "roa"))} />
+              <Metric label="Point mort (seuil rentab.)" value={formatMoney(mNum(m, "break_even_turnover") ?? 0, cur)} />
+              <Metric label="Croissance du CA" value={fPct(mNum(m, "turnover_growth"))} />
+              <Metric label="Croissance du résultat" value={fPct(mNum(m, "result_growth"))} />
+            </>
+          ) : (
+            <>
+              <Metric label="Taux d'endettement global" value={fPct(mNum(m, "debt_ratio"))} tone={boolTone(flags?.debt_ratio_ok)} />
+              <Metric label="Revenu pondéré" value={formatMoney(mNum(m, "weighted_income") ?? 0, cur)} />
+              <Metric label="Taux d'effort (revenu pondéré)" value={fPct(mNum(m, "debt_ratio_weighted"))} />
+              <Metric label="Reste à vivre après crédit" value={formatMoney(mNum(m, "residual_after_loan") ?? 0, cur)} />
+              <Metric label="Reste à vivre / personne" value={formatMoney(mNum(m, "disposable_per_capita") ?? 0, cur)} tone={boolTone(flags?.living_wage_ok)} />
+              {Number(analysis.net_salary) > 0 && (
+                <>
+                  <Metric label="Quotité cessible disponible" value={formatMoney(mNum(m, "transferable_quota_available") ?? 0, cur)} tone={boolTone(flags?.quota_ok)} />
+                </>
+              )}
+            </>
+          )}
+          <Metric label="Couverture par garanties" value={fPct(mNum(m, "guarantee_coverage"))} tone={boolTone(flags?.guarantee_ok)} />
+          <Metric label="Marge de sécurité" value={formatMoney(mNum(m, "safety_margin") ?? 0, cur)} />
+        </div>
+      </SubSection>
+
+      <SubSection icon={ShieldAlert} title="Stress test & sensibilité">
+        <div className="metric-grid">
+          {isCorp ? (
+            <Metric
+              label="DSCR sous stress"
+              value={analysis.dscr_stress ?? "—"}
+              tone={boolTone(flags?.dscr_stress_ok)}
+            />
+          ) : (
+            <Metric
+              label="Taux d'endettement sous stress"
+              value={pct(analysis.debt_ratio_stress)}
+              tone={boolTone(flags?.debt_ratio_stress_ok)}
+            />
+          )}
+        </div>
+        <p className="muted small" style={{ marginTop: 8 }}>
+          Sensibilité calculée avec une baisse de{" "}
+          {analysis.thresholds?.stress_pct ?? 20} % des{" "}
+          {isCorp ? "flux d'exploitation" : "revenus"}.
+        </p>
+      </SubSection>
+
+      {(analysis.credit_bureau_checked ||
+        analysis.has_payment_incidents ||
+        analysis.active_loans_count > 0 ||
+        analysis.prior_loans_count > 0) && (
+        <SubSection icon={History} title="Endettement consolidé & historique">
+          <dl className="def-list two">
+            <Row term="Crédits actifs (tous prêteurs)" value={analysis.active_loans_count || undefined} />
+            <Row
+              term="Centrale des risques / BIC"
+              value={
+                analysis.credit_bureau_checked
+                  ? `Consultée${analysis.credit_bureau_date ? ` le ${formatDate(analysis.credit_bureau_date)}` : ""}`
+                  : "Non consultée"
+              }
+            />
+            <Row
+              term="Incidents de paiement"
+              value={analysis.has_payment_incidents ? "Oui" : "Non"}
+            />
+            <Row
+              term="Retard max constaté"
+              value={analysis.max_days_late ? `${analysis.max_days_late} j` : undefined}
+            />
+            <Row term="Crédits antérieurs (interne)" value={analysis.prior_loans_count || undefined} />
+            <Row term="Taux de remboursement historique" value={pct(analysis.prior_repayment_rate)} />
+            <Row
+              term="Retard max historique"
+              value={analysis.prior_max_delay_days ? `${analysis.prior_max_delay_days} j` : undefined}
+            />
+          </dl>
+          {analysis.incidents_comment && (
+            <p className="prose">{analysis.incidents_comment}</p>
+          )}
+        </SubSection>
+      )}
+
+      {hasSector && (
+        <SubSection icon={Factory} title="Analyse sectorielle">
+          <dl className="def-list two">
+            {analysis.sector && (
+              <Row
+                term="Secteur"
+                value={FINANCE_LABELS.sector[analysis.sector] ?? analysis.sector}
+              />
+            )}
+            <Row term="Sous-secteur / filière" value={analysis.sub_sector || undefined} />
+            {analysis.value_chain_position && (
+              <Row
+                term="Chaîne de valeur"
+                value={
+                  FINANCE_LABELS.value_chain_position[
+                    analysis.value_chain_position
+                  ] ?? analysis.value_chain_position
+                }
+              />
+            )}
+            {analysis.market_dynamic && (
+              <Row
+                term="Dynamique du marché"
+                value={
+                  FINANCE_LABELS.market_dynamic[analysis.market_dynamic] ??
+                  analysis.market_dynamic
+                }
+              />
+            )}
+            <Row term="Saisonnalité" value={rl(analysis.seasonality_level)} />
+            <Row term="Concurrence" value={rl(analysis.competition_intensity)} />
+            <Row term="Dépendance fournisseurs" value={rl(analysis.supplier_dependency)} />
+            <Row term="Concentration clientèle" value={rl(analysis.client_concentration)} />
+            <Row term="Sensibilité prix intrants" value={rl(analysis.input_price_sensitivity)} />
+            <Row term="Exposition devises / imports" value={rl(analysis.fx_exposure)} />
+            <Row term="Sensibilité réglementaire" value={rl(analysis.regulatory_sensitivity)} />
+            <Row term="Sensibilité climatique" value={rl(analysis.climate_sensitivity)} />
+            <Row term="Risque sectoriel global" value={rl(analysis.sector_risk_level)} />
+          </dl>
+          {analysis.sector_outlook && (
+            <p className="prose">
+              <strong>Perspectives : </strong>
+              {analysis.sector_outlook}
+            </p>
+          )}
+          {analysis.sector_comment && (
+            <p className="prose">{analysis.sector_comment}</p>
+          )}
+        </SubSection>
+      )}
+
+      {hasES && (
+        <SubSection
+          icon={Leaf}
+          title="Analyse environnementale & sociale (E&S)"
+        >
+          <dl className="def-list two">
+            {analysis.es_category && (
+              <Row
+                term="Catégorie E&S"
+                value={
+                  FINANCE_LABELS.es_category[analysis.es_category] ??
+                  analysis.es_category
+                }
+              />
+            )}
+            <Row
+              term="Liste d'exclusion"
+              value={analysis.exclusion_list_ok ? "Conforme" : "Non conforme"}
+            />
+            <Row
+              term="Conformité réglementaire E&S"
+              value={analysis.es_regulatory_compliance ? "Oui" : "Non"}
+            />
+            <Row
+              term="Autorisation environnementale"
+              value={
+                analysis.env_permit_required
+                  ? analysis.env_permit_obtained
+                    ? `Obtenue${analysis.permit_reference ? ` (${analysis.permit_reference})` : ""}`
+                    : "Requise — non obtenue"
+                  : "Non requise"
+              }
+            />
+            <Row
+              term="Étude d'impact (EIE)"
+              value={
+                analysis.eia_required
+                  ? analysis.eia_done
+                    ? "Réalisée"
+                    : "Requise — non réalisée"
+                  : "Non requise"
+              }
+            />
+            <Row term="Gestion des déchets" value={ql(analysis.waste_management)} />
+            <Row term="Usage eau / énergie" value={ql(analysis.resource_use)} />
+            <Row term="Produits chimiques / pesticides" value={ql(analysis.chemicals_pesticides)} />
+            <Row term="Nuisances / pollution" value={ql(analysis.nuisances_emissions)} />
+            <Row term="Conditions de travail" value={ql(analysis.working_conditions)} />
+            <Row term="Sécurité & santé au travail" value={ql(analysis.occupational_safety)} />
+            <Row term="Risque travail enfants / forcé" value={rl(analysis.child_forced_labor_risk)} />
+            <Row term="Impact communautés" value={ql(analysis.community_impact)} />
+            <Row term="Enjeux fonciers / réinstallation" value={rl(analysis.land_resettlement_risk)} />
+            <Row
+              term="Emplois créés"
+              value={
+                analysis.jobs_created !== null
+                  ? `${analysis.jobs_created}${
+                      analysis.jobs_women !== null || analysis.jobs_youth !== null
+                        ? ` (dont ${analysis.jobs_women ?? 0} F / ${analysis.jobs_youth ?? 0} jeunes)`
+                        : ""
+                    }`
+                  : undefined
+              }
+            />
+            <Row
+              term="Emplois maintenus"
+              value={
+                analysis.jobs_maintained !== null
+                  ? String(analysis.jobs_maintained)
+                  : undefined
+              }
+            />
+            <Row
+              term="Plan d'action E&S exigé"
+              value={analysis.es_action_required ? "Oui" : "Non"}
+            />
+            <Row
+              term="Assurances E&S"
+              value={analysis.es_insurance ? "Oui" : "Non"}
+            />
+            <Row term="Risque E&S global" value={rl(analysis.es_risk_level)} />
+          </dl>
+          {analysis.es_mitigation_plan && (
+            <p className="prose">
+              <strong>Plan d'atténuation (PGES) : </strong>
+              {analysis.es_mitigation_plan}
+            </p>
+          )}
+          {analysis.es_comment && (
+            <p className="prose">{analysis.es_comment}</p>
+          )}
+        </SubSection>
+      )}
+
+      {(analysis.strengths ||
+        analysis.weaknesses ||
+        analysis.recommended_conditions) && (
+        <SubSection icon={NotebookPen} title="Synthèse structurée">
+          {analysis.strengths && (
+            <div className="synthesis-block synthesis-ok">
+              <strong>Points forts</strong>
+              <p className="prose">{analysis.strengths}</p>
+            </div>
+          )}
+          {analysis.weaknesses && (
+            <div className="synthesis-block synthesis-warn">
+              <strong>Points de vigilance</strong>
+              <p className="prose">{analysis.weaknesses}</p>
+            </div>
+          )}
+          {analysis.recommended_conditions && (
+            <div className="synthesis-block">
+              <strong>Conditions / recommandations</strong>
+              <p className="prose">{analysis.recommended_conditions}</p>
+            </div>
+          )}
+        </SubSection>
+      )}
+
+      {(analysis.existing_debt_institution ||
+        Number(analysis.existing_debt_monthly) > 0 ||
+        Number(analysis.ongoing_credit_balance) > 0) && (
+        <SubSection icon={Landmark} title="Endettement existant">
+          <dl className="def-list two">
+            <Row term="Institution" value={analysis.existing_debt_institution} />
+            <Row
+              term="Montant initial"
+              value={
+                Number(analysis.existing_debt_initial_amount) > 0
+                  ? formatMoney(analysis.existing_debt_initial_amount, cur)
+                  : undefined
+              }
+            />
+            <Row
+              term="Mensualité"
+              value={
+                Number(analysis.existing_debt_monthly) > 0
+                  ? formatMoney(analysis.existing_debt_monthly, cur)
+                  : undefined
+              }
+            />
+            <Row
+              term="Encours restant"
+              value={
+                Number(analysis.ongoing_credit_balance) > 0
+                  ? formatMoney(analysis.ongoing_credit_balance, cur)
+                  : undefined
+              }
+            />
+          </dl>
+        </SubSection>
+      )}
+
+      {analysis.comment && (
+        <SubSection icon={NotebookPen} title="Avis de l'analyste">
+          <p className="prose">{analysis.comment}</p>
+        </SubSection>
+      )}
+
+      {analysis.documents.length > 0 && (
+        <SubSection icon={Paperclip} title="Pièces justificatives">
+          <div className="doc-row">
+            {analysis.documents.map((d) => (
+              <DocLink key={d.id} label={d.label || "Document"} url={d.file} />
+            ))}
+          </div>
+        </SubSection>
+      )}
+    </div>
+  );
+}
+
+function FinancialAnalysesSection({
+  analyses,
+  currency,
+  appId,
+  canContribute,
+}: {
+  analyses: FinancialAnalysis[];
+  currency: string;
+  appId: string;
+  canContribute: boolean;
+}) {
+  return (
+    <ViewSection
+      id="sec-financial"
+      icon={LineChart}
+      title="Analyses financières"
+      description={
+        analyses.length > 1
+          ? `${analyses.length} analyses réalisées au fil du circuit.`
+          : undefined
+      }
+      action={
+        canContribute ? (
+          <Link
+            className="btn btn-ghost btn-sm"
+            to={`/dossiers/${appId}/analyse-financiere`}
+          >
+            <Plus size={14} />
+            Ajouter une analyse
+          </Link>
+        ) : undefined
+      }
+    >
+      {analyses.length === 0 ? (
+        <p className="muted small">Aucune analyse financière enregistrée.</p>
+      ) : (
+        <div className="analysis-list">
+          {analyses.map((a) => (
+            <AnalysisDetail
+              key={a.id}
+              analysis={a}
+              currency={currency}
+              appId={appId}
+            />
+          ))}
+        </div>
+      )}
+    </ViewSection>
+  );
+}
+
+function FieldVisitsCard({
+  appId,
+  canAdd,
+}: {
+  appId: string;
+  canAdd: boolean;
+}) {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const [visitDate, setVisitDate] = useState("");
+  const [report, setReport] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const { data: visits } = useQuery({
+    queryKey: ["field-visits", appId],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<FieldVisit>>("/field-visits/", {
+          params: { application: appId },
+        })
+      ).data,
+    enabled: !!appId,
+  });
+
+  const addMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post("/field-visits/", {
+          application: appId,
+          visit_date: visitDate,
+          report,
+          latitude: latitude || null,
+          longitude: longitude || null,
+        })
+      ).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["field-visits", appId] });
+      setOpen(false);
+      setVisitDate("");
+      setReport("");
+      setLatitude("");
+      setLongitude("");
+      setError(null);
+    },
+    onError: () => setError("Enregistrement de la visite impossible."),
+  });
+
+  function save() {
+    if (!visitDate) {
+      setError("La date de visite est obligatoire.");
+      return;
+    }
+    setError(null);
+    addMutation.mutate();
+  }
+
+  return (
+    <ViewSection id="sec-visits" icon={MapPin} title="Visites terrain">
+      {visits && visits.results.length > 0 ? (
+        <div className="visit-list">
+          {visits.results.map((v) => (
+            <div key={v.id} className="visit-item">
+              <div className="visit-item-head">
+                <div className="analysis-author">
+                  <UserRound size={15} />
+                  <div>
+                    <strong>{v.visited_by_display || "Auteur inconnu"}</strong>
+                    {v.visitor_role && (
+                      <span className="analysis-role">{v.visitor_role}</span>
+                    )}
+                  </div>
+                </div>
+                <span className="visit-date">
+                  <MapPin size={14} /> {formatDate(v.visit_date)}
+                </span>
+              </div>
+              {v.report && <p className="prose">{v.report}</p>}
+              {(v.latitude || v.longitude) && (
+                <a
+                  className="muted small"
+                  href={`https://maps.google.com/?q=${v.latitude},${v.longitude}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <MapPin size={12} /> {v.latitude}, {v.longitude}
+                </a>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="muted small">Aucune visite terrain enregistrée.</p>
+      )}
+
+      {canAdd && !open && (
+        <button className="btn btn-ghost btn-sm" onClick={() => setOpen(true)}>
+          <Plus size={15} />
+          Ajouter une visite
+        </button>
+      )}
+
+      {canAdd && open && (
+        <div className="stack" style={{ marginTop: 12 }}>
+          <div className="form-grid two-col">
+            <label className="field">
+              <span>
+                Date de visite <em className="req"> *</em>
+              </span>
+              <input
+                type="date"
+                value={visitDate}
+                onChange={(e) => setVisitDate(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Latitude</span>
+              <input
+                type="number"
+                value={latitude}
+                onChange={(e) => setLatitude(e.target.value)}
+              />
+            </label>
+            <label className="field">
+              <span>Longitude</span>
+              <input
+                type="number"
+                value={longitude}
+                onChange={(e) => setLongitude(e.target.value)}
+              />
+            </label>
+          </div>
+          <label className="field">
+            <span>Compte rendu</span>
+            <textarea
+              rows={3}
+              value={report}
+              onChange={(e) => setReport(e.target.value)}
+            />
+          </label>
+          {error && <div className="form-error">{error}</div>}
+          <div className="page-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => setOpen(false)}
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={save}
+              disabled={addMutation.isPending}
+            >
+              Enregistrer la visite
+            </button>
+          </div>
+        </div>
+      )}
+    </ViewSection>
+  );
+}
+
+function TemplateRow({
+  item,
+  appId,
+  canGenerate,
+  onDone,
+}: {
+  item: ApplicableTemplate;
+  appId: string;
+  canGenerate: boolean;
+  onDone: () => void;
+}) {
+  const tpl = item.template;
+  const [openForm, setOpenForm] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [error, setError] = useState<string | null>(null);
+
+  const generate = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post("/generated-contracts/generate/", {
+          application: appId,
+          template: tpl.id,
+          extra_values: values,
+        })
+      ).data,
+    onSuccess: () => {
+      setError(null);
+      setOpenForm(false);
+      onDone();
+    },
+    onError: (e) =>
+      setError(extractApiError(e, "La génération du contrat a échoué.")),
+  });
+
+  const hasExtra = (tpl.extra_fields?.length ?? 0) > 0;
+
+  function trigger() {
+    if (hasExtra && !openForm) {
+      setOpenForm(true);
+      return;
+    }
+    generate.mutate();
+  }
+
+  return (
+    <div className="contract-template-row">
+      <div className="contract-template-info">
+        <span className="contract-template-icon">
+          <FileText size={16} />
+        </span>
+        <div>
+          <strong>{tpl.name}</strong>
+          <div className="contract-template-badges">
+            {tpl.category_display && (
+              <span className="chip chip-muted">{tpl.category_display}</span>
+            )}
+            {tpl.is_required && (
+              <span className="chip chip-warn">Obligatoire</span>
+            )}
+            {item.generated && (
+              <span className="chip chip-ok">Généré</span>
+            )}
+          </div>
+        </div>
+      </div>
+      {canGenerate && (
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          onClick={trigger}
+          disabled={generate.isPending}
+        >
+          <FileSignature size={14} />
+          {item.generated ? "Régénérer" : "Générer"}
+        </button>
+      )}
+      {openForm && (
+        <div className="contract-extra-form">
+          {tpl.extra_fields.map((f) => (
+            <label key={f.key} className="field">
+              <span>{f.label || f.key}</span>
+              <input
+                type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}
+                value={values[f.key] ?? ""}
+                onChange={(e) =>
+                  setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                }
+              />
+            </label>
+          ))}
+          <div className="page-actions">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => setOpenForm(false)}
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={() => generate.mutate()}
+              disabled={generate.isPending}
+            >
+              Générer le contrat
+            </button>
+          </div>
+        </div>
+      )}
+      {error && <div className="form-error">{error}</div>}
+    </div>
+  );
+}
+
+function GeneratedContractRow({
+  contract,
+  canManage,
+  onDone,
+}: {
+  contract: GeneratedContract;
+  canManage: boolean;
+  onDone: () => void;
+}) {
+  const [error, setError] = useState<string | null>(null);
+
+  const uploadSigned = useMutation({
+    mutationFn: async (file: File) => {
+      const fd = new FormData();
+      fd.append("signed_file", file);
+      return (
+        await api.post(
+          `/generated-contracts/${contract.id}/upload_signed/`,
+          fd,
+          { headers: { "Content-Type": "multipart/form-data" } },
+        )
+      ).data;
+    },
+    onSuccess: () => {
+      setError(null);
+      onDone();
+    },
+    onError: (e) =>
+      setError(extractApiError(e, "L'import du contrat signé a échoué.")),
+  });
+
+  return (
+    <div className="generated-contract-row">
+      <div className="contract-template-info">
+        <span className="contract-template-icon">
+          <FileSignature size={16} />
+        </span>
+        <div>
+          <strong>{contract.template_name}</strong>
+          <div className="contract-template-badges">
+            <Badge value={contract.status} label={contract.status_display} />
+            {contract.created_by_name && (
+              <span className="muted small">par {contract.created_by_name}</span>
+            )}
+            <span className="muted small">{formatDate(contract.created_at)}</span>
+          </div>
+        </div>
+      </div>
+      <div className="row-actions">
+        {contract.file && (
+          <a
+            className="btn btn-ghost btn-sm"
+            href={contract.file}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Download size={14} />
+            Télécharger
+          </a>
+        )}
+        {contract.signed_file && (
+          <a
+            className="btn btn-ghost btn-sm"
+            href={contract.signed_file}
+            target="_blank"
+            rel="noreferrer"
+          >
+            <FileText size={14} />
+            Version signée
+          </a>
+        )}
+        {canManage && (
+          <label className="btn btn-ghost btn-sm" style={{ cursor: "pointer" }}>
+            <Upload size={14} />
+            {contract.signed_file ? "Remplacer signé" : "Importer signé"}
+            <input
+              type="file"
+              hidden
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) uploadSigned.mutate(file);
+              }}
+            />
+          </label>
+        )}
+      </div>
+      {error && <div className="form-error">{error}</div>}
+    </div>
+  );
+}
+
+function ContractsSection({
+  appId,
+  canGenerate,
+}: {
+  appId: string;
+  canGenerate: boolean;
+}) {
+  const qc = useQueryClient();
+
+  const { data: applicable } = useQuery({
+    queryKey: ["contract-templates-applicable", appId],
+    queryFn: async () =>
+      (
+        await api.get<ApplicableTemplate[]>("/contract-templates/applicable/", {
+          params: { application: appId },
+        })
+      ).data,
+    enabled: !!appId,
+  });
+
+  const { data: generated } = useQuery({
+    queryKey: ["generated-contracts", appId],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<GeneratedContract>>("/generated-contracts/", {
+          params: { application: appId },
+        })
+      ).data,
+    enabled: !!appId,
+  });
+
+  function refresh() {
+    qc.invalidateQueries({ queryKey: ["contract-templates-applicable", appId] });
+    qc.invalidateQueries({ queryKey: ["generated-contracts", appId] });
+    qc.invalidateQueries({ queryKey: ["credit-application", appId] });
+  }
+
+  const templates = applicable ?? [];
+  const contracts = (generated?.results ?? []).filter(
+    (c) => c.status !== "CANCELLED",
+  );
+
+  return (
+    <ViewSection
+      id="sec-contracts"
+      icon={FileSignature}
+      title="Contrats"
+      description="Génération des contrats à signer avant décaissement."
+    >
+      <SubSection icon={FileText} title="Modèles disponibles">
+        {templates.length === 0 ? (
+          <p className="muted small">
+            Aucun modèle de contrat applicable. Configurez les modèles de la
+            filiale dans « Administration → Contrats ».
+          </p>
+        ) : (
+          <div className="contract-template-list">
+            {templates.map((t) => (
+              <TemplateRow
+                key={t.template.id}
+                item={t}
+                appId={appId}
+                canGenerate={canGenerate}
+                onDone={refresh}
+              />
+            ))}
+          </div>
+        )}
+      </SubSection>
+
+      <SubSection icon={FileSignature} title="Contrats générés">
+        {contracts.length === 0 ? (
+          <p className="muted small">Aucun contrat généré pour l'instant.</p>
+        ) : (
+          <div className="contract-template-list">
+            {contracts.map((c) => (
+              <GeneratedContractRow
+                key={c.id}
+                contract={c}
+                canManage={canGenerate}
+                onDone={refresh}
+              />
+            ))}
+          </div>
+        )}
+      </SubSection>
+    </ViewSection>
+  );
+}
+
+export function CreditApplicationDetailPage() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const qc = useQueryClient();
+  const { user } = useAuth();
+  const [showSchedule, setShowSchedule] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  const { data: app, isLoading } = useQuery({
+    queryKey: ["credit-application", id],
+    queryFn: async () =>
+      (await api.get<CreditApplication>(`/credit-applications/${id}/`)).data,
+    enabled: !!id,
+  });
+
+  const { data: guarantees } = useQuery({
+    queryKey: ["guarantees", id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<Guarantee>>("/guarantees/", {
+          params: { application: id },
+        })
+      ).data,
+    enabled: !!id,
+  });
+
+  const { data: engagements } = useQuery({
+    queryKey: ["surety-engagements", id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<SuretyEngagement>>("/surety-engagements/", {
+          params: { application: id },
+        })
+      ).data,
+    enabled: !!id,
+  });
+
+  const { data: client } = useQuery({
+    queryKey: ["client", app?.client],
+    queryFn: async () =>
+      (await api.get<Client>(`/clients/${app!.client}/`)).data,
+    enabled: !!app?.client,
+  });
+
+  const { data: financials } = useQuery({
+    queryKey: ["financial-analysis", id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<FinancialAnalysis>>("/financial-analyses/", {
+          params: { application: id },
+        })
+      ).data,
+    enabled: !!id,
+  });
+
+  const { data: instances } = useQuery({
+    queryKey: ["workflow-instances"],
+    queryFn: async () =>
+      (await api.get<{ results: WorkflowInstance[] }>("/workflow-instances/"))
+        .data,
+  });
+
+  const { data: myTasks } = useQuery({
+    queryKey: ["my-pending-tasks"],
+    queryFn: async () =>
+      (await api.get<Paginated<ApprovalTask>>("/approval-tasks/my_pending/"))
+        .data,
+  });
+
+  const { data: conditions } = useQuery({
+    queryKey: ["approval-conditions", id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<ApprovalCondition>>("/approval-conditions/", {
+          params: { application: id },
+        })
+      ).data,
+    enabled: !!id,
+  });
+
+  const { data: timeline } = useQuery({
+    queryKey: ["credit-timeline", id],
+    queryFn: async () =>
+      (
+        await api.get<{ results: TimelineEvent[] }>(
+          `/credit-applications/${id}/timeline/`,
+        )
+      ).data,
+    enabled: !!id,
+  });
+
+  const submitMutation = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/credit-applications/${id}/submit/`)).data,
+    onSuccess: () => {
+      setActionError(null);
+      qc.invalidateQueries({ queryKey: ["credit-application", id] });
+      qc.invalidateQueries({ queryKey: ["workflow-instances"] });
+      qc.invalidateQueries({ queryKey: ["credit-timeline", id] });
+    },
+    onError: (e) =>
+      setActionError(
+        extractApiError(
+          e,
+          "La soumission a échoué. Vérifiez qu'un circuit d'approbation actif " +
+            "couvre ce dossier, puis réessayez.",
+        ),
+      ),
+  });
+
+  const disburseMutation = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/credit-applications/${id}/disburse/`)).data,
+    onSuccess: () => {
+      setActionError(null);
+      qc.invalidateQueries({ queryKey: ["credit-application", id] });
+    },
+    onError: (e) =>
+      setActionError(extractApiError(e, "Le décaissement a échoué.")),
+  });
+
+  const requestDisburseMutation = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/credit-applications/${id}/request-disburse/`)).data,
+    onSuccess: () => {
+      setActionError(null);
+      qc.invalidateQueries({ queryKey: ["credit-application", id] });
+    },
+    onError: (e) =>
+      setActionError(
+        extractApiError(e, "La demande de décaissement a échoué."),
+      ),
+  });
+
+  const cancelDisburseRequestMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post(`/credit-applications/${id}/cancel-disburse-request/`)
+      ).data,
+    onSuccess: () => {
+      setActionError(null);
+      qc.invalidateQueries({ queryKey: ["credit-application", id] });
+    },
+    onError: (e) =>
+      setActionError(
+        extractApiError(e, "L'annulation de la demande a échoué."),
+      ),
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/credit-applications/${id}/cancel_submission/`)).data,
+    onSuccess: () => {
+      setActionError(null);
+      qc.invalidateQueries({ queryKey: ["credit-application", id] });
+      qc.invalidateQueries({ queryKey: ["workflow-instances"] });
+      qc.invalidateQueries({ queryKey: ["credit-timeline", id] });
+    },
+    onError: (e) =>
+      setActionError(
+        extractApiError(e, "L'annulation de la soumission a échoué."),
+      ),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => api.delete(`/credit-applications/${id}/`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["credit-applications"] });
+      navigate("/dossiers");
+    },
+    onError: (e) =>
+      setActionError(extractApiError(e, "La suppression a échoué.")),
+  });
+
+  const [activeSection, setActiveSection] = useScrollSpy(
+    [app?.id, app?.status],
+    "sec-financial",
+  );
+
+  // Accordéon : seule « Analyse financière » est dépliée à l'ouverture.
+  // (Doit rester au-dessus de tout return conditionnel — règle des hooks.)
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    () => new Set(["sec-financial"]),
+  );
+
+  if (isLoading || !app) return <Spinner />;
+
+  // Un dossier peut avoir plusieurs instances (cycles renvoyés/annulés puis
+  // re-soumis) : on privilégie le cycle actif, sinon le plus récent.
+  const appInstances = (instances?.results ?? []).filter(
+    (i) => i.object_id === app.id,
+  );
+  const instance =
+    appInstances.find((i) =>
+      ["IN_PROGRESS", "AWAITING_CONDITIONS"].includes(i.status),
+    ) ??
+    [...appInstances].sort((a, b) =>
+      (b.created_at ?? "").localeCompare(a.created_at ?? ""),
+    )[0];
+  const myTask =
+    myTasks?.results.find((t) => t.application?.id === app.id) ?? null;
+  const analyses = financials?.results ?? [];
+
+  const uid = user?.id;
+  const isSuper = !!user?.is_superuser;
+  const canChangeCredit = hasPerm(user, "credits.change_creditapplication");
+  const canDeleteCredit = hasPerm(user, "credits.delete_creditapplication");
+  const canAddAnalysis = hasPerm(user, "credits.add_financialanalysis");
+  const canAddVisit = hasPerm(user, "credits.add_fieldvisit");
+  const canAddContract = hasPerm(user, "contracts.add_generatedcontract");
+  const canAddGuarantee = hasPerm(user, "guarantees.add_guarantee");
+  const canAddSurety = hasPerm(user, "sureties.add_suretyengagement");
+  const isOwner =
+    !!uid && (app.created_by === uid || app.submitted_by === uid);
+  // Soumission et suppression : réservées au créateur du dossier (ou super-admin),
+  // en cohérence avec le contrôle backend.
+  const isCreator = isSuper || (!!uid && app.created_by === uid);
+  // L'annulation de soumission reste réservée au soumetteur (ou super-admin,
+  // en cohérence avec le contrôle backend).
+  const isSubmitter =
+    isSuper ||
+    (!!uid &&
+      (app.submitted_by === uid ||
+        (!app.submitted_by && app.created_by === uid)));
+
+  // Une étape a déjà statué (approbation, renvoi ou rejet) sur le dossier.
+  const aStepActed = !!instance?.tasks?.some((t) =>
+    ["APPROVED", "RETURNED", "REJECTED"].includes(t.status),
+  );
+
+  const editableStatus = ["DRAFT", "RETURNED"].includes(app.status);
+  const canSubmit = editableStatus && isCreator && canChangeCredit;
+  // Édition des champs du dossier : créateur seul (Analyste/Comité = analyses).
+  const canEdit = editableStatus && canChangeCredit && isCreator;
+  // L'annulation n'est possible que tant qu'aucune étape n'a agi (sauf super-admin).
+  const canCancel =
+    app.status === "IN_APPROVAL" &&
+    isSubmitter &&
+    canChangeCredit &&
+    (isSuper || !aStepActed);
+  const collateralStatuses = [
+    "DRAFT",
+    "RETURNED",
+    "APPROVED",
+    "CONTRACT_GENERATED",
+    "DISBURSEMENT_PENDING",
+  ];
+  const canAttachCollateral = collateralStatuses.includes(app.status);
+  const readyForDisburse = ["APPROVED", "CONTRACT_GENERATED"].includes(
+    app.status,
+  );
+  const canDisburse =
+    (readyForDisburse || app.status === "DISBURSEMENT_PENDING") &&
+    hasPerm(user, "credits.disburse_creditapplication");
+  const canRequestDisburse =
+    readyForDisburse &&
+    hasPerm(user, "credits.initiate_disburse_creditapplication") &&
+    !hasPerm(user, "credits.disburse_creditapplication");
+  const canCancelDisburseRequest =
+    app.status === "DISBURSEMENT_PENDING" &&
+    (hasPerm(user, "credits.initiate_disburse_creditapplication") ||
+      hasPerm(user, "credits.disburse_creditapplication"));
+  // Contractualisation : visible dès l'approbation ; génération réservée à
+  // l'initiateur (ou un profil privilégié) tant que le dossier n'est pas décaissé.
+  const showContracts = [
+    "APPROVED",
+    "CONTRACT_GENERATED",
+    "DISBURSEMENT_PENDING",
+    "DISBURSED",
+    "CLOSED",
+  ].includes(app.status);
+  const canGenerateContracts =
+    (isOwner || isSuper) &&
+    canAddContract &&
+    ["APPROVED", "CONTRACT_GENERATED", "DISBURSEMENT_PENDING"].includes(
+      app.status,
+    );
+  // Suppression réservée au créateur et uniquement sur un brouillon non soumis.
+  const canDelete = isCreator && canDeleteCredit && app.status === "DRAFT";
+  // Contribution : initiateur ou tâche PENDING, + droit d'ajout analyse/visite.
+  const openForContribution = [
+    "DRAFT",
+    "SUBMITTED",
+    "IN_APPROVAL",
+    "RETURNED",
+  ].includes(app.status);
+  const canContributeWindow =
+    isSuper || ((isOwner && openForContribution) || !!myTask);
+  const canContributeAnalysis = canContributeWindow && canAddAnalysis;
+  const canContributeVisit = canContributeWindow && canAddVisit;
+  const cur = app.currency;
+
+  const guaranteeTotal = (guarantees?.results ?? []).reduce(
+    (s, g) => s + Number(g.current_value || 0),
+    0,
+  );
+  const coverageBase = Number(
+    ([
+      "APPROVED",
+      "CONTRACT_GENERATED",
+      "DISBURSEMENT_PENDING",
+      "DISBURSED",
+      "CLOSED",
+    ].includes(app.status) &&
+      app.amount_approved) ||
+      app.amount_proposed ||
+      app.amount_requested ||
+      0,
+  );
+  const coveragePct =
+    coverageBase > 0 ? (guaranteeTotal / coverageBase) * 100 : null;
+
+  const schedule = computeSchedulePreview(app);
+
+  const showActivity = !!(
+    app.activity_start_date ||
+    app.exact_address ||
+    app.clientele ||
+    app.tax_regime ||
+    app.avg_client_payment_days != null ||
+    app.avg_supplier_payment_days != null ||
+    app.catchment_area ||
+    (app.stock_photos && app.stock_photos.length > 0)
+  );
+  const showApplicant = !!(
+    app.employer_name ||
+    app.contract_type ||
+    app.dependents_count != null ||
+    app.salary_domiciliation
+  );
+  const showBanking = !!(
+    app.client_account_number ||
+    app.relationship_start_date ||
+    Number(app.avg_monthly_credit_movements) > 0
+  );
+  const showInsurance = !!(
+    app.has_credit_insurance ||
+    app.insurance_company ||
+    Number(app.insurance_premium) > 0
+  );
+  const showSpecial = !!(app.special_conditions || app.suspensive_conditions);
+  const showCompliance = !!(
+    app.beneficial_owner ||
+    app.is_pep ||
+    app.funds_origin
+  );
+  const hasChecklist = !!(
+    app.document_checklist && app.document_checklist.length > 0
+  );
+  const hasConditions = (conditions?.results.length ?? 0) > 0;
+
+  const navSections = [
+    { id: "sec-financial", icon: LineChart, label: "Analyse financière", show: true },
+    { id: "sec-decision", icon: Gavel, label: "Décision à rendre", show: !!myTask },
+    { id: "sec-conditions", icon: ClipboardCheck, label: "Réserves", show: hasConditions },
+    { id: "sec-contracts", icon: FileSignature, label: "Contrats", show: showContracts },
+    { id: "sec-terms", icon: Banknote, label: "Conditions du crédit", show: true },
+    { id: "sec-activity", icon: Store, label: "Activité & commerce", show: showActivity },
+    { id: "sec-patrimoine", icon: Landmark, label: "Garanties & cautions", show: true },
+    { id: "sec-applicant", icon: Briefcase, label: "Demandeur & emploi", show: showApplicant },
+    { id: "sec-banking", icon: History, label: "Relation bancaire", show: showBanking },
+    { id: "sec-insurance", icon: ShieldCheck, label: "Assurance", show: showInsurance },
+    { id: "sec-special", icon: NotebookPen, label: "Conditions particulières", show: showSpecial },
+    { id: "sec-compliance", icon: ShieldCheck, label: "Conformité (LBC-FT)", show: showCompliance },
+    { id: "sec-schedule", icon: CalendarClock, label: "Échéancier", show: !!schedule },
+    { id: "sec-visits", icon: MapPin, label: "Visites terrain", show: true },
+    { id: "sec-checklist", icon: ClipboardList, label: "Pièces du dossier", show: hasChecklist },
+    { id: "sec-documents", icon: Paperclip, label: "Documents", show: true },
+    { id: "sec-workflow", icon: GitBranch, label: "Circuit d'approbation", show: true },
+    { id: "sec-timeline", icon: History, label: "Historique & audit", show: true },
+  ].filter((s) => s.show);
+
+  const collapseCtx = {
+    isOpen: (sid: string) => openSections.has(sid),
+    toggle: (sid: string) =>
+      setOpenSections((prev) => {
+        const next = new Set(prev);
+        if (next.has(sid)) next.delete(sid);
+        else next.add(sid);
+        return next;
+      }),
+  };
+  const openAllSections = () =>
+    setOpenSections(new Set(navSections.map((s) => s.id)));
+  const closeAllSections = () => setOpenSections(new Set());
+  const allOpen = navSections.every((s) => openSections.has(s.id));
+
+  function goToSection(sid: string) {
+    setActiveSection(sid);
+    setOpenSections((prev) => new Set(prev).add(sid));
+    // Laisse le contenu se déplier avant de défiler vers l'en-tête.
+    setTimeout(() => scrollToSection(sid), 60);
+  }
+
+  function cancelSubmission() {
+    if (
+      window.confirm(
+        "Annuler la soumission ? Le dossier repassera en brouillon et le circuit d'approbation en cours sera annulé.",
+      )
+    ) {
+      cancelMutation.mutate();
+    }
+  }
+
+  function deleteApplication() {
+    if (
+      window.confirm(
+        "Supprimer définitivement ce dossier ? Cette action est irréversible.",
+      )
+    ) {
+      deleteMutation.mutate();
+    }
+  }
+
+  return (
+    <div>
+      <PageHeader
+        icon={FileText}
+        title={`Dossier ${app.reference || app.id.slice(0, 8)}`}
+        subtitle={`${app.client_display} · ${app.product_label}`}
+        actions={
+          <div className="row-actions">
+            <Link className="btn btn-ghost" to="/dossiers">
+              <ArrowLeft />
+              Retour
+            </Link>
+            {canEdit && (
+              <Link className="btn btn-ghost" to={`/dossiers/${id}/modifier`}>
+                <FilePenLine />
+                Modifier
+              </Link>
+            )}
+            {canContributeAnalysis && (
+              <Link
+                className="btn btn-ghost"
+                to={`/dossiers/${id}/analyse-financiere`}
+              >
+                <LineChart />
+                Ajouter une analyse
+              </Link>
+            )}
+            {canCancel && (
+              <button
+                className="btn btn-danger"
+                onClick={cancelSubmission}
+                disabled={cancelMutation.isPending}
+              >
+                <Ban />
+                Annuler la soumission
+              </button>
+            )}
+            {canSubmit && (
+              <button
+                className="btn btn-primary"
+                onClick={() => submitMutation.mutate()}
+                disabled={submitMutation.isPending}
+              >
+                <Send />
+                Soumettre à validation
+              </button>
+            )}
+            {canRequestDisburse && (
+              <button
+                className="btn btn-success"
+                onClick={() => requestDisburseMutation.mutate()}
+                disabled={requestDisburseMutation.isPending}
+              >
+                <Wallet />
+                Demander le décaissement
+              </button>
+            )}
+            {canDisburse && (
+              <button
+                className="btn btn-success"
+                onClick={() => disburseMutation.mutate()}
+                disabled={disburseMutation.isPending}
+              >
+                <Wallet />
+                {app.status === "DISBURSEMENT_PENDING"
+                  ? "Valider le décaissement"
+                  : "Décaisser"}
+              </button>
+            )}
+            {canCancelDisburseRequest && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => cancelDisburseRequestMutation.mutate()}
+                disabled={cancelDisburseRequestMutation.isPending}
+              >
+                Annuler la demande
+              </button>
+            )}
+            {canDelete && (
+              <button
+                className="btn btn-danger"
+                onClick={deleteApplication}
+                disabled={deleteMutation.isPending}
+              >
+                <Trash2 />
+                Supprimer
+              </button>
+            )}
+          </div>
+        }
+      />
+
+      <div className="credit-hero">
+        <div className="credit-hero-main">
+          <span className="credit-hero-icon">
+            <FileText size={26} />
+          </span>
+          <div className="credit-hero-text">
+            <h2 className="credit-hero-name">
+              <Link className="link-inline" to={`/clients/${app.client}`}>
+                {app.client_display}
+              </Link>
+            </h2>
+            <div className="credit-hero-meta">
+              <code>{app.reference || "—"}</code>
+              <Badge value={app.status} label={app.status_display} />
+              <span className="muted">{app.product_label}</span>
+            </div>
+          </div>
+        </div>
+        <div className="credit-hero-metrics">
+          <div className="hero-metric">
+            <span className="hero-metric-label">
+              Montant{" "}
+              {[
+                "APPROVED",
+                "CONTRACT_GENERATED",
+                "DISBURSEMENT_PENDING",
+                "DISBURSED",
+                "CLOSED",
+              ].includes(app.status) && app.amount_approved
+                ? "accordé"
+                : app.amount_proposed
+                  ? "proposé"
+                  : "demandé"}
+            </span>
+            <span className="hero-metric-value">
+              {formatMoney(
+                (["APPROVED", "CONTRACT_GENERATED", "DISBURSED", "CLOSED"].includes(
+                  app.status,
+                ) &&
+                  app.amount_approved) ||
+                  app.amount_proposed ||
+                  app.amount_requested,
+                cur,
+              )}
+            </span>
+          </div>
+          <div className="hero-metric">
+            <span className="hero-metric-label">Durée</span>
+            <span className="hero-metric-value">{app.duration_months} mois</span>
+          </div>
+          {app.interest_rate && (
+            <div className="hero-metric">
+              <span className="hero-metric-label">Taux d'intérêt</span>
+              <span className="hero-metric-value">{app.interest_rate} %</span>
+            </div>
+          )}
+          <div className="hero-metric">
+            <span className="hero-metric-label">Périodicité</span>
+            <span className="hero-metric-value">
+              {lbl(CREDIT_LABELS.periodicity, app.periodicity)}
+            </span>
+          </div>
+          {coveragePct !== null && (
+            <div className={`hero-metric${coveragePct >= 100 ? " ok" : ""}`}>
+              <span className="hero-metric-label">Couverture garanties</span>
+              <span className="hero-metric-value">
+                {coveragePct.toFixed(0)} %
+              </span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {actionError && (
+        <div className="form-error" style={{ marginBottom: 16 }}>
+          {actionError}
+        </div>
+      )}
+
+      <div className="credit-form">
+        <aside className="credit-form-nav">
+          <div className="credit-form-nav-inner">
+            <p className="credit-form-nav-title">Sections</p>
+            {navSections.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={`credit-nav-item${activeSection === s.id ? " active" : ""}${
+                  openSections.has(s.id) ? " open" : ""
+                }`}
+                onClick={() => goToSection(s.id)}
+              >
+                <s.icon size={16} />
+                <span>{s.label}</span>
+              </button>
+            ))}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm credit-nav-toggle-all"
+              onClick={allOpen ? closeAllSections : openAllSections}
+            >
+              {allOpen ? "Tout replier" : "Tout déplier"}
+            </button>
+          </div>
+        </aside>
+
+        <SectionCollapseContext.Provider value={collapseCtx}>
+        <div className="credit-form-main stack">
+          <FinancialAnalysesSection
+            analyses={analyses}
+            currency={cur}
+            appId={app.id}
+            canContribute={canContributeAnalysis}
+          />
+
+          {myTask && (
+            <ViewSection
+              id="sec-decision"
+              icon={Gavel}
+              title={`Décision — ${myTask.step_name}`}
+              description="Vous êtes habilité à statuer sur cette étape."
+            >
+              <p className="muted small" style={{ marginTop: 0 }}>
+                Consultez ci-dessous l'ensemble du dossier, des garanties, des
+                cautions et des documents, puis validez, retournez ou rejetez le
+                dossier.
+              </p>
+              <DecisionPanel task={myTask} />
+            </ViewSection>
+          )}
+
+          {hasConditions && (
+            <ViewSection
+              id="sec-conditions"
+              icon={ClipboardCheck}
+              title="Réserves d'approbation"
+            >
+              <ApprovalConditionsCard
+                conditions={conditions!.results}
+                appId={app.id}
+              />
+            </ViewSection>
+          )}
+
+          {showContracts && (
+            <ContractsSection
+              appId={app.id}
+              canGenerate={canGenerateContracts}
+            />
+          )}
+
+          <ViewSection
+            id="sec-terms"
+            icon={Banknote}
+            title="Conditions du crédit"
+          >
+            <dl className="def-list two">
+            <Row term="Montant demandé" value={formatMoney(app.amount_requested, cur)} />
+            <Row term="Montant proposé" value={app.amount_proposed && formatMoney(app.amount_proposed, cur)} />
+            <Row term="Montant accordé" value={app.amount_approved && formatMoney(app.amount_approved, cur)} />
+            <Row term="Devise" value={app.currency} />
+            <Row term="Taux d'intérêt" value={app.interest_rate && `${app.interest_rate} %`} />
+            <Row
+              term="Épargne obligatoire"
+              value={
+                app.mandatory_savings_rate
+                  ? `${app.mandatory_savings_rate} % (hors ratios institution)`
+                  : undefined
+              }
+            />
+            <Row term="Périodicité" value={lbl(CREDIT_LABELS.periodicity, app.periodicity)} />
+            <Row term="Durée" value={`${app.duration_months} mois`} />
+            <Row term="Première échéance" value={app.first_due_date && formatDate(app.first_due_date)} />
+            <Row term="Dernière échéance" value={app.last_due_date && formatDate(app.last_due_date)} />
+            <Row term="Mécanisme" value={app.repayment_mechanism && lbl(CREDIT_LABELS.repayment_mechanism, app.repayment_mechanism)} />
+            <Row term="Objet du financement" value={app.purpose_type && lbl(CREDIT_LABELS.purpose_type, app.purpose_type)} />
+            <Row term="Niveau de risque (circuit)" value={app.risk_level ?? undefined} />
+          </dl>
+          {app.fees_breakdown && app.fees_breakdown.lines.length > 0 && (
+            <SubSection icon={Wallet} title="Frais">
+              <p className="muted small" style={{ marginTop: 0 }}>
+                Les % s’appliquent sur le montant de référence
+                {app.fees_breakdown.base_amount
+                  ? ` (${formatMoney(app.fees_breakdown.base_amount, cur)})`
+                  : ""}
+                . Au décaissement, Fin Flow envoie le{" "}
+                <strong>montant accordé</strong> ; le CBS prélève les frais.
+              </p>
+              <div className="fees-breakdown">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Intitulé</th>
+                      <th>Base</th>
+                      <th className="num">Montant</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {app.fees_breakdown.lines.map((line, idx) => (
+                      <tr key={line.id || `fee-${idx}`}>
+                        <td>{line.label}</td>
+                        <td>
+                          {line.mode === "PERCENT"
+                            ? `${line.value} %`
+                            : formatMoney(line.value, cur)}
+                        </td>
+                        <td className="num">
+                          {line.amount != null
+                            ? formatMoney(line.amount, cur)
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  {(app.fees_breakdown.total != null ||
+                    app.fees_breakdown.net_after_fees != null) && (
+                    <tfoot>
+                      {app.fees_breakdown.total != null && (
+                        <tr>
+                          <td colSpan={2}>
+                            <strong>Total des frais</strong>
+                          </td>
+                          <td className="num">
+                            <strong>
+                              {formatMoney(app.fees_breakdown.total, cur)}
+                            </strong>
+                          </td>
+                        </tr>
+                      )}
+                      {app.fees_breakdown.net_after_fees != null && (
+                        <tr>
+                          <td colSpan={2}>
+                            Net indicatif après frais (CBS)
+                          </td>
+                          <td className="num">
+                            {formatMoney(app.fees_breakdown.net_after_fees, cur)}
+                          </td>
+                        </tr>
+                      )}
+                    </tfoot>
+                  )}
+                </table>
+              </div>
+            </SubSection>
+          )}
+          {(Number(app.project_total_cost) > 0 ||
+            Number(app.personal_contribution) > 0 ||
+            app.financed_quota) && (
+            <SubSection icon={Wallet} title="Plan de financement">
+              <dl className="def-list two">
+                <Row
+                  term="Coût total du projet"
+                  value={Number(app.project_total_cost) > 0 ? formatMoney(app.project_total_cost!, cur) : undefined}
+                />
+                <Row
+                  term="Apport personnel"
+                  value={Number(app.personal_contribution) > 0 ? formatMoney(app.personal_contribution!, cur) : undefined}
+                />
+                <Row term="Quotité financée" value={app.financed_quota ? `${Number(app.financed_quota).toFixed(1)} %` : undefined} />
+              </dl>
+            </SubSection>
+          )}
+          {app.purpose && (
+            <SubSection icon={FileText} title="Détails de la demande">
+              <p className="prose">{app.purpose}</p>
+            </SubSection>
+          )}
+          {app.request_letter_scan && (
+            <div className="doc-row">
+              <a className="doc-chip" href={app.request_letter_scan} target="_blank" rel="noreferrer">
+                <FileText size={15} />
+                Lettre de demande
+              </a>
+            </div>
+          )}
+          </ViewSection>
+
+          {showActivity && (
+          <ViewSection
+            id="sec-activity"
+            icon={Store}
+            title="Activité et environnement commercial"
+          >
+          <dl className="def-list two">
+            <Row term="Date de création" value={app.activity_start_date && formatDate(app.activity_start_date)} />
+            <Row term="Adresse exacte" value={app.exact_address} />
+            <Row term="Clientèle" value={app.clientele} />
+            <Row term="Régime fiscal" value={app.tax_regime && lbl(CREDIT_LABELS.tax_regime, app.tax_regime)} />
+            <Row term="Délai paiement clients" value={app.avg_client_payment_days != null ? `${app.avg_client_payment_days} j` : undefined} />
+            <Row term="Délai paiement fournisseurs" value={app.avg_supplier_payment_days != null ? `${app.avg_supplier_payment_days} j` : undefined} />
+            <Row term="Zone de chalandise" value={app.catchment_area && lbl(CREDIT_LABELS.catchment_area, app.catchment_area)} />
+          </dl>
+          {app.stock_photos && app.stock_photos.length > 0 && (
+            <SubSection icon={Store} title="Photos du stock">
+              <div className="photo-gallery">
+                {app.stock_photos.map((p) => (
+                  <a key={p.id} href={p.image} target="_blank" rel="noreferrer">
+                    <img src={p.image} alt={p.caption || "Photo du stock"} />
+                  </a>
+                ))}
+              </div>
+            </SubSection>
+          )}
+          </ViewSection>
+          )}
+
+          <ViewSection
+            id="sec-patrimoine"
+            icon={Landmark}
+            title="Patrimoine, garanties et cautions"
+          >
+          <dl className="def-list two">
+            <Row term="Occupation des locaux" value={app.premises_status && lbl(CREDIT_LABELS.premises_status, app.premises_status)} />
+          </dl>
+
+          <SubSection icon={ShieldCheck} title="Garanties">
+            {canAttachCollateral && canAddGuarantee && (
+              <RenewGuaranteesPanel
+                applicationId={id!}
+                currency={cur}
+                enabled={!!id && canAttachCollateral && canAddGuarantee}
+              />
+            )}
+            {guarantees && guarantees.results.length > 0 ? (
+              <ul className="link-list">
+                {guarantees.results.map((g) => (
+                  <li
+                    key={g.id}
+                    className="row-clickable"
+                    onClick={() => navigate(`/dossiers/${id}/garanties/${g.id}`)}
+                  >
+                    <span>
+                      <ShieldCheck size={14} /> {g.type_display}
+                      {g.guarantee_type === "PLEDGE" && g.pledge_category && (
+                        <em className="muted small">
+                          {" "}
+                          — {GUARANTEE_LABELS.pledge_category[g.pledge_category]}
+                        </em>
+                      )}
+                      {describeGuarantee(g) && (
+                        <em className="muted small"> · {describeGuarantee(g)}</em>
+                      )}
+                      {g.renewed_from_reference && (
+                        <em className="muted small">
+                          {" "}
+                          · reconduite depuis {g.renewed_from_reference}
+                        </em>
+                      )}
+                      {g.belongs_to_applicant === false && (
+                        <em className="muted small">
+                          {" "}
+                          · bien hors client
+                          {g.surety_display ? ` (${g.surety_display})` : ""}
+                        </em>
+                      )}
+                    </span>
+                    <span className="muted">
+                      {formatMoney(g.current_value, cur)}
+                      {g.guarantee_type === "MORTGAGE" && g.ltv_ratio && (
+                        <> · LTV {(Number(g.ltv_ratio) * 100).toFixed(0)} %</>
+                      )}
+                    </span>
+                    <Badge value={g.status} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted small">Aucune garantie rattachée.</p>
+            )}
+            {guaranteeTotal > 0 && (
+              <div className="finance-recap" style={{ marginTop: 10 }}>
+                <div className="recap-item">
+                  <span className="recap-label">Valeur totale des garanties</span>
+                  <span className="recap-value">{formatMoney(guaranteeTotal, cur)}</span>
+                </div>
+                {coveragePct !== null && (
+                  <div className={`recap-item${coveragePct >= 100 ? " strong" : ""}`}>
+                    <span className="recap-label">Taux de couverture</span>
+                    <span className="recap-value">{coveragePct.toFixed(0)} %</span>
+                  </div>
+                )}
+              </div>
+            )}
+            {canAttachCollateral && canAddGuarantee && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/dossiers/${id}/garanties/nouvelle`}
+              >
+                <Plus size={15} />
+                Ajouter une garantie
+              </Link>
+            )}
+          </SubSection>
+
+          <SubSection icon={HandCoins} title="Cautions">
+            {engagements && engagements.results.length > 0 ? (
+              <ul className="link-list">
+                {engagements.results.map((e) => (
+                  <li
+                    key={e.id}
+                    className="row-clickable"
+                    onClick={() =>
+                      navigate(`/dossiers/${id}/cautions/${e.surety}`)
+                    }
+                  >
+                    <span>
+                      <HandCoins size={14} /> {e.surety_display}
+                    </span>
+                    <span className="muted">{formatMoney(e.amount, cur)}</span>
+                    <Badge value={e.status} />
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="muted small">Aucune caution rattachée.</p>
+            )}
+            {canAttachCollateral && canAddSurety && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/dossiers/${id}/cautions/nouvelle`}
+              >
+                <Plus size={15} />
+                Ajouter une caution
+              </Link>
+            )}
+          </SubSection>
+          </ViewSection>
+
+          {showApplicant && (
+          <ViewSection
+            id="sec-applicant"
+            icon={Briefcase}
+            title="Demandeur & emploi"
+          >
+            <dl className="def-list two">
+              <Row term="Employeur" value={app.employer_name} />
+              <Row term="Type de contrat" value={app.contract_type && lbl(CREDIT_LABELS.contract_type, app.contract_type)} />
+              <Row term="Personnes à charge" value={app.dependents_count ?? undefined} />
+              <Row term="Domiciliation du salaire" value={app.salary_domiciliation ? "Oui" : undefined} />
+            </dl>
+          </ViewSection>
+          )}
+
+          {showBanking && (
+          <ViewSection
+            id="sec-banking"
+            icon={History}
+            title="Relation bancaire"
+          >
+            <dl className="def-list two">
+              <Row term="Numéro de compte" value={app.client_account_number} />
+              <Row term="Début de la relation" value={app.relationship_start_date && formatDate(app.relationship_start_date)} />
+              <Row
+                term="Mouvements créditeurs moyens"
+                value={Number(app.avg_monthly_credit_movements) > 0 ? formatMoney(app.avg_monthly_credit_movements!, cur) : undefined}
+              />
+            </dl>
+          </ViewSection>
+          )}
+
+          {showInsurance && (
+          <ViewSection id="sec-insurance" icon={ShieldCheck} title="Assurance">
+            <dl className="def-list two">
+              <Row term="Assurance décès-invalidité (ADI)" value={app.has_credit_insurance ? "Oui" : "Non"} />
+              <Row term="Compagnie d'assurance" value={app.insurance_company} />
+              <Row
+                term="Prime d'assurance"
+                value={Number(app.insurance_premium) > 0 ? formatMoney(app.insurance_premium!, cur) : undefined}
+              />
+            </dl>
+          </ViewSection>
+          )}
+
+          {showSpecial && (
+          <ViewSection
+            id="sec-special"
+            icon={NotebookPen}
+            title="Conditions particulières"
+          >
+            {app.special_conditions && (
+              <SubSection icon={NotebookPen} title="Conditions particulières">
+                <p className="prose">{app.special_conditions}</p>
+              </SubSection>
+            )}
+            {app.suspensive_conditions && (
+              <SubSection icon={NotebookPen} title="Conditions suspensives">
+                <p className="prose">{app.suspensive_conditions}</p>
+              </SubSection>
+            )}
+          </ViewSection>
+          )}
+
+          {showCompliance && (
+          <ViewSection
+            id="sec-compliance"
+            icon={ShieldCheck}
+            title="Conformité (LBC-FT)"
+          >
+            <dl className="def-list two">
+              <Row term="Bénéficiaire effectif" value={app.beneficial_owner} />
+              <Row term="Origine des fonds / apport" value={app.funds_origin} />
+              <Row term="Personne politiquement exposée (PPE)" value={app.is_pep ? "Oui" : undefined} />
+            </dl>
+          </ViewSection>
+          )}
+
+          {schedule && (
+          <ViewSection
+            id="sec-schedule"
+            icon={CalendarClock}
+            title="Échéancier prévisionnel"
+          >
+            <div className="metric-grid">
+              <Metric
+                label={`Échéance institution (${schedule.periodLabel})`}
+                value={formatMoney(schedule.installment, cur)}
+              />
+              <Metric label="Nombre d'échéances" value={schedule.count} />
+              <Metric label="Intérêts totaux" value={formatMoney(schedule.totalInterest, cur)} />
+              {schedule.hasSavings && (
+                <Metric label="Épargne totale" value={formatMoney(schedule.totalSavings, cur)} />
+              )}
+              <Metric label="Total à rembourser" value={formatMoney(schedule.totalRepayment, cur)} />
+            </div>
+            <p className="muted small">
+              Simulation à échéances constantes (taux annuel réparti selon la
+              périodicité) sur la base du montant{" "}
+              {app.amount_proposed ? "proposé" : "demandé"}. Les échéances tombant
+              un week-end sont reportées au lundi. L'échéancier définitif est
+              généré au décaissement.
+            </p>
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setShowSchedule((v) => !v)}
+            >
+              <CalendarClock size={15} />
+              {showSchedule
+                ? "Masquer le tableau d'amortissement"
+                : "Voir le tableau d'amortissement"}
+            </button>
+            {showSchedule && (
+              <div className="table-scroll" style={{ marginTop: 12 }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>N°</th>
+                      <th>Date</th>
+                      <th className="num">Capital</th>
+                      <th className="num">Intérêt</th>
+                      {schedule.hasSavings && <th className="num">Épargne</th>}
+                      <th className="num">Montant échéance</th>
+                      <th className="num">Capital restant</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schedule.rows.map((row) => (
+                      <tr key={row.number}>
+                        <td>{row.number}</td>
+                        <td>{formatDate(row.dueDate)}</td>
+                        <td className="num">{formatMoney(row.principal, cur)}</td>
+                        <td className="num">{formatMoney(row.interest, cur)}</td>
+                        {schedule.hasSavings && (
+                          <td className="num">{formatMoney(row.savings, cur)}</td>
+                        )}
+                        <td className="num">{formatMoney(row.total, cur)}</td>
+                        <td className="num">{formatMoney(row.balance, cur)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </ViewSection>
+          )}
+
+          <FieldVisitsCard appId={app.id} canAdd={canContributeVisit} />
+
+          {hasChecklist && (
+          <ViewSection
+            id="sec-checklist"
+            icon={ClipboardList}
+            title="Pièces du dossier"
+          >
+            <div className="checklist-badges">
+              {app.document_checklist.map((item, idx) => {
+                const scan = app.documents?.find(
+                  (d) => d.label === item.label,
+                );
+                return scan ? (
+                  <a
+                    key={`${item.label}-${idx}`}
+                    className="doc-badge ok as-link"
+                    href={scan.file}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    <Check size={13} />
+                    {item.label}
+                    <Paperclip size={12} />
+                  </a>
+                ) : (
+                  <span
+                    key={`${item.label}-${idx}`}
+                    className={`doc-badge ${item.provided ? "ok" : "missing"}`}
+                  >
+                    {item.provided ? <Check size={13} /> : <X size={13} />}
+                    {item.label}
+                  </span>
+                );
+              })}
+            </div>
+          </ViewSection>
+          )}
+
+          <ViewSection
+            id="sec-documents"
+            icon={Paperclip}
+            title="Documents du dossier"
+          >
+          <SubSection icon={FileText} title="Dossier de prêt">
+            {app.request_letter_scan || (app.stock_photos?.length ?? 0) > 0 ? (
+              <>
+                <div className="doc-row">
+                  {app.request_letter_scan && (
+                    <DocLink
+                      label="Lettre de demande"
+                      url={app.request_letter_scan}
+                    />
+                  )}
+                </div>
+                {app.stock_photos && app.stock_photos.length > 0 && (
+                  <div className="photo-gallery" style={{ marginTop: 10 }}>
+                    {app.stock_photos.map((p) => (
+                      <a key={p.id} href={p.image} target="_blank" rel="noreferrer">
+                        <img src={p.image} alt={p.caption || "Photo du stock"} />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </>
+            ) : (
+              <p className="muted small">Aucun document.</p>
+            )}
+          </SubSection>
+
+          {client && clientDocs(client).length > 0 && (
+            <SubSection icon={UserRound} title={`Client — ${client.display_name}`}>
+              <div className="doc-row">
+                {clientDocs(client).map((d) => (
+                  <DocLink key={d.label} label={d.label} url={d.url} />
+                ))}
+              </div>
+            </SubSection>
+          )}
+
+          {guarantees?.results.map((g) => {
+            const docs = guaranteeDocs(g);
+            const photos = g.photos ?? [];
+            if (docs.length === 0 && photos.length === 0) return null;
+            return (
+              <SubSection
+                key={g.id}
+                icon={ShieldCheck}
+                title={`Garantie — ${g.type_display}`}
+              >
+                <div className="doc-row">
+                  {docs.map((d) => (
+                    <DocLink key={d.label} label={d.label} url={d.url} />
+                  ))}
+                  <Link
+                    className="doc-chip ghost"
+                    to={`/dossiers/${id}/garanties/${g.id}`}
+                  >
+                    <ShieldCheck size={15} />
+                    Voir la garantie
+                  </Link>
+                </div>
+                {photos.length > 0 && (
+                  <div className="photo-gallery" style={{ marginTop: 10 }}>
+                    {photos.map((p) => (
+                      <a key={p.id} href={p.image} target="_blank" rel="noreferrer">
+                        <img src={p.image} alt={p.caption || "Photo"} />
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </SubSection>
+            );
+          })}
+
+          {engagements?.results.map((e) => {
+            const docs: DocItem[] = [];
+            if (e.surety_id_document_scan)
+              docs.push({
+                label: "Pièce d'identité",
+                url: e.surety_id_document_scan,
+              });
+            if (e.surety_photo)
+              docs.push({ label: "Photo", url: e.surety_photo });
+            if (docs.length === 0) return null;
+            return (
+              <SubSection
+                key={e.id}
+                icon={HandCoins}
+                title={`Caution — ${e.surety_display}`}
+              >
+                <div className="doc-row">
+                  {docs.map((d) => (
+                    <DocLink key={d.label} label={d.label} url={d.url} />
+                  ))}
+                </div>
+              </SubSection>
+            );
+          })}
+          </ViewSection>
+
+          <ViewSection
+            id="sec-workflow"
+            icon={GitBranch}
+            title="Circuit d'approbation"
+          >
+          {!instance ? (
+            <p className="muted small">Dossier non encore soumis.</p>
+          ) : (
+            <>
+              <p className="muted small" style={{ marginTop: 0 }}>
+                État :{" "}
+                <Badge
+                  value={instance.status}
+                  label={
+                    WORKFLOW_LABELS.instance_status[instance.status] ||
+                    instance.status
+                  }
+                />
+              </p>
+              <ol className="workflow-steps">
+                {instance.tasks.map((t) => (
+                  <li key={t.id}>
+                    <div className="workflow-step-line">
+                      <span>{t.step_name}</span>
+                      <Badge value={t.status} />
+                      {t.opinion && (
+                        <span className="muted small">
+                          {" "}
+                          · {t.opinion_display || WORKFLOW_LABELS.opinion[t.opinion]}
+                        </span>
+                      )}
+                      {t.acted_by_display && (
+                        <span className="muted small">
+                          {" "}
+                          par {t.acted_by_display}
+                        </span>
+                      )}
+                      {t.proposed_amount && (
+                        <span className="muted small">
+                          {" "}
+                          · montant proposé {formatMoney(t.proposed_amount, cur)}
+                        </span>
+                      )}
+                    </div>
+                    {t.decision_comment && (
+                      <p className="workflow-step-comment">
+                        « {t.decision_comment} »
+                      </p>
+                    )}
+                  </li>
+                ))}
+              </ol>
+            </>
+          )}
+          </ViewSection>
+
+          <ViewSection
+            id="sec-timeline"
+            icon={History}
+            title="Historique & piste d'audit"
+            description="Chronologie des évènements clés du dossier."
+          >
+            {!timeline || timeline.results.length === 0 ? (
+              <p className="muted small">Aucun évènement enregistré.</p>
+            ) : (
+              <ul className="audit-timeline">
+                {timeline.results.map((ev, i) => {
+                  const tone = TIMELINE_TONE[ev.event] ?? "muted";
+                  const label = TIMELINE_LABELS[ev.event] ?? ev.event;
+                  return (
+                    <li key={`${ev.timestamp}-${i}`} className="audit-item">
+                      <span className={`audit-dot dot-${tone}`} />
+                      <div className="audit-body">
+                        <div className="audit-head">
+                          <span className="audit-label">
+                            {label}
+                            {ev.step && (
+                              <span className="muted"> · {ev.step}</span>
+                            )}
+                          </span>
+                          <span className="audit-time">
+                            {formatDate(ev.timestamp)}
+                          </span>
+                        </div>
+                        <div className="audit-meta">
+                          {ev.actor && <span>par {ev.actor}</span>}
+                          {ev.opinion && (
+                            <span>
+                              {" "}
+                              ·{" "}
+                              {WORKFLOW_LABELS.opinion[ev.opinion] ?? ev.opinion}
+                            </span>
+                          )}
+                        </div>
+                        {ev.comment && (
+                          <p className="audit-comment">« {ev.comment} »</p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </ViewSection>
+        </div>
+        </SectionCollapseContext.Provider>
+      </div>
+    </div>
+  );
+}

@@ -1,0 +1,1390 @@
+export interface Paginated<T> {
+  count: number;
+  next: string | null;
+  previous: string | null;
+  results: T[];
+}
+
+export interface TenantBranding {
+  id: string;
+  code: string;
+  name: string;
+  logo_url: string | null;
+  brand_primary: string;
+  brand_secondary: string;
+  brand_accent: string;
+}
+
+export type DataScope = "OWN" | "AGENCY" | "TENANT";
+
+export interface AgencySummary {
+  id: string;
+  code: string;
+  name: string;
+}
+
+export interface CurrentUser {
+  id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  tenant: string | null;
+  agency: string | null;
+  agencies_detail: AgencySummary[];
+  data_scope: DataScope;
+  is_group_level: boolean;
+  is_staff: boolean;
+  is_superuser: boolean;
+  mfa_enabled: boolean;
+  must_change_password: boolean;
+  roles: string[];
+  permissions: string[];
+  tenant_branding: TenantBranding | null;
+}
+
+export interface Permission {
+  id: number;
+  name: string;
+  codename: string;
+  app_label: string;
+  model: string;
+  label: string;
+}
+
+export interface Agency {
+  id: string;
+  tenant: string;
+  code: string;
+  name: string;
+  region: string;
+  address: string;
+  is_active: boolean;
+  manager_last_name: string;
+  manager_first_name: string;
+  manager_phone: string;
+  manager_display_name?: string;
+}
+
+export interface TenantOfficer {
+  id?: string;
+  title: string;
+  last_name: string;
+  first_name: string;
+  phone: string;
+  ordering?: number;
+}
+
+export interface Role {
+  id: number;
+  name: string;
+  tenant?: string;
+  permissions: number[];
+  permissions_detail: Permission[];
+  user_count: number;
+}
+
+export interface AdminUser {
+  id: string;
+  username: string;
+  email: string;
+  first_name: string;
+  last_name: string;
+  tenant: string | null;
+  agency: string | null;
+  agencies_detail: AgencySummary[];
+  data_scope: DataScope;
+  is_group_level: boolean;
+  is_staff: boolean;
+  is_active: boolean;
+  must_change_password?: boolean;
+  employee_id: string;
+  phone: string;
+  groups: Role[];
+}
+
+export interface WorkflowStep {
+  id: string;
+  definition: string;
+  name: string;
+  order: number;
+  required_group: number | null;
+  mode: string;
+  step_kind: string;
+  min_amount: string | null;
+  max_amount: string | null;
+  min_risk_level: number | null;
+  sla_hours: number | null;
+  allow_return: boolean;
+}
+
+export interface WorkflowDefinition {
+  id: string;
+  code: string;
+  name: string;
+  target_type: string;
+  version: number;
+  is_active: boolean;
+  is_used: boolean;
+  steps: WorkflowStep[];
+}
+
+export interface ProductCategory {
+  id: string;
+  code: string;
+  label: string;
+  description: string;
+  is_active: boolean;
+}
+
+export interface NotificationSettings {
+  id: string;
+  enabled: boolean;
+  notify_on_step: boolean;
+  notify_on_completion: boolean;
+  notify_on_rejection: boolean;
+  notify_on_return: boolean;
+  from_email: string;
+  reply_to: string;
+  cc_tenant_email: boolean;
+  smtp_host: string;
+  smtp_port: number;
+  smtp_use_tls: boolean;
+  smtp_use_ssl: boolean;
+  smtp_username: string;
+  /** Write-only à l'enregistrement ; jamais renvoyé par l'API. */
+  smtp_password?: string;
+  smtp_password_configured: boolean;
+  smtp_configured: boolean;
+  effective_from_email: string;
+  updated_at: string;
+}
+
+export interface NotificationLog {
+  id: string;
+  kind: string;
+  kind_display: string;
+  status: string;
+  status_display: string;
+  subject: string;
+  recipients: string[];
+  body_preview: string;
+  error_message: string;
+  workflow_instance_id: string | null;
+  approval_task_id: string | null;
+  created_at: string;
+}
+
+export interface CbsConnector {
+  id: string;
+  name: string;
+  protocol: string;
+  base_url: string;
+  is_active: boolean;
+  timeout_seconds: number;
+  max_retries: number;
+  mapping_rules?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface GuaranteeReleaseRequest {
+  id: string;
+  reference: string;
+  guarantee: string;
+  guarantee_reference: string;
+  application: string | null;
+  loan: string | null;
+  agency: string | null;
+  cbs_loan_reference: string;
+  cbs_client_id?: string;
+  cbs_settled: boolean | null;
+  cbs_outstanding: string | null;
+  cbs_currency: string;
+  cbs_checked_at: string | null;
+  cbs_raw: Record<string, unknown>;
+  request_date?: string | null;
+  release_fees?: string | null;
+  status: string;
+  status_display: string;
+  comment: string;
+  completed_at: string | null;
+  client_display: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReleaseClientCredit {
+  application_id: string;
+  application_reference: string;
+  application_status: string;
+  application_status_display: string;
+  product_label: string;
+  amount: string;
+  currency: string;
+  loan_id: string | null;
+  loan_status: string | null;
+  loan_status_display: string | null;
+  disbursed_at: string | null;
+  cbs_loan_reference: string;
+  cbs_settled: boolean | null;
+  cbs_outstanding: string | null;
+  cbs_currency: string;
+  cbs_error: string | null;
+  cbs_status_label: string;
+}
+
+export interface ReleaseClientContext {
+  client_id: string;
+  client_display: string;
+  cbs_client_id: string;
+  guarantees: Guarantee[];
+  credits: ReleaseClientCredit[];
+}
+
+export interface DationAsset {
+  id: string;
+  source: "EXISTING_GUARANTEE" | "ADDITIONAL" | string;
+  source_display: string;
+  guarantee: string | null;
+  guarantee_reference: string | null;
+  guarantee_type_display: string | null;
+  description: string;
+  value: string | null;
+  created_at: string;
+}
+
+export interface DationRequest {
+  id: string;
+  reference: string;
+  client: string;
+  client_display: string;
+  application: string | null;
+  agency: string | null;
+  cbs_client_id: string;
+  cbs_total_outstanding: string | null;
+  cbs_currency: string;
+  cbs_checked_at: string | null;
+  cbs_raw: Record<string, unknown>;
+  asset_description: string;
+  asset_value: string | null;
+  assets?: DationAsset[];
+  assets_total_value?: string | null;
+  covers_claim?: boolean | null;
+  coverage_gap?: string | null;
+  status: string;
+  status_display: string;
+  comment: string;
+  resulting_guarantee: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Tenant {
+  id: string;
+  code: string;
+  name: string;
+  country: string;
+  zone: string;
+  currency: string;
+  timezone: string;
+  is_active: boolean;
+  address: string;
+  phone: string;
+  email: string;
+  logo: string | null;
+  logo_url: string | null;
+  brand_primary: string;
+  brand_secondary: string;
+  brand_accent: string;
+  officers?: TenantOfficer[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ClientPhone {
+  id: string;
+  number: string;
+  label: string;
+}
+
+export interface Client {
+  id: string;
+  reference: string;
+  client_type: "INDIVIDUAL" | "PROFESSIONAL" | "CORPORATE";
+  display_name: string;
+  agency: string | null;
+  // Personne physique
+  civility: string;
+  first_name: string;
+  last_name: string;
+  birth_date: string | null;
+  birth_country: string;
+  country: string;
+  marital_status: string;
+  nationality: string;
+  profession: string;
+  id_document_type: string;
+  national_id: string;
+  id_document_issue_date: string | null;
+  id_document_expiry_date: string | null;
+  id_document_scan: string | null;
+  photo: string | null;
+  spouse_last_name: string;
+  spouse_first_name: string;
+  spouse_phone: string;
+  spouse_profession: string;
+  father_last_name: string;
+  father_first_name: string;
+  mother_last_name: string;
+  mother_first_name: string;
+  // Personne morale
+  company_name: string;
+  legal_form: string;
+  ifu: string;
+  rccm: string;
+  ifu_scan: string | null;
+  rccm_scan: string | null;
+  manager_last_name: string;
+  manager_first_name: string;
+  manager_phone: string;
+  manager_email: string;
+  manager_address: string;
+  manager_id_document_type: string;
+  manager_id_document_number: string;
+  manager_id_document_issue_date: string | null;
+  manager_id_document_expiry_date: string | null;
+  manager_id_document_scan: string | null;
+  manager_position: string;
+  manager_birth_date: string | null;
+  manager_birth_country: string;
+  manager_birth_city: string;
+  // Communs
+  phone: string;
+  email: string;
+  address: string;
+  city: string;
+  phones?: ClientPhone[];
+  // Core Banking
+  cbs_client_id: string;
+  cbs_account_number: string;
+  kyc_status: "PENDING" | "VALIDATED" | "REJECTED" | "EXPIRED";
+  kyc_validated_at: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export const CLIENT_LABELS = {
+  civility: {
+    MR: "Monsieur",
+    MRS: "Madame",
+    MISS: "Mademoiselle",
+  } as Record<string, string>,
+  marital_status: {
+    SINGLE: "Célibataire",
+    MARRIED: "Marié(e)",
+    DIVORCED: "Divorcé(e)",
+    WIDOWED: "Veuf/Veuve",
+  } as Record<string, string>,
+  id_document_type: {
+    PASSPORT: "Passeport",
+    CNI: "Carte nationale d'identité",
+    DRIVING_LICENSE: "Permis de conduire",
+    CONSULAR_CARD: "Carte consulaire",
+  } as Record<string, string>,
+  legal_form: {
+    SARL: "SARL",
+    SA: "SA",
+    ASSOCIATION: "Association",
+    INDIVIDUAL: "Entreprise individuelle",
+    SASU: "SASU",
+    SAS: "SAS",
+    EURL: "EURL",
+    SNC_SCS: "SNC / SCS",
+  } as Record<string, string>,
+  client_type: {
+    INDIVIDUAL: "Particulier",
+    PROFESSIONAL: "Professionnel",
+    CORPORATE: "Entreprise",
+  } as Record<string, string>,
+};
+
+export interface SuretyPhone {
+  id: string;
+  number: string;
+  label: string;
+}
+
+export interface Surety {
+  id: string;
+  surety_type: "PHYSICAL" | "MORAL";
+  display_name: string;
+  name: string;
+  first_name: string;
+  last_name: string;
+  birth_date: string | null;
+  birth_country: string;
+  activity: string;
+  estimated_income: string | null;
+  id_document_type: string;
+  national_id: string;
+  id_document_issue_date: string | null;
+  id_document_expiry_date: string | null;
+  id_document_scan: string | null;
+  photo: string | null;
+  // Entreprise
+  company_name: string;
+  legal_form: string;
+  ifu: string;
+  rccm: string;
+  ifu_scan: string | null;
+  rccm_scan: string | null;
+  city: string;
+  // Gérant
+  manager_last_name: string;
+  manager_first_name: string;
+  manager_phone: string;
+  manager_email: string;
+  manager_address: string;
+  manager_id_document_type: string;
+  manager_id_document_number: string;
+  manager_id_document_issue_date: string | null;
+  manager_id_document_expiry_date: string | null;
+  manager_id_document_scan: string | null;
+  manager_position: string;
+  manager_birth_date: string | null;
+  manager_birth_country: string;
+  manager_birth_city: string;
+  // Coordonnées
+  identifier: string;
+  phone: string;
+  email: string;
+  address: string;
+  phones?: SuretyPhone[];
+  documents?: { id: string; title: string; file: string | null; created_at?: string }[];
+  commitment_ceiling: string;
+  total_committed: string;
+  available_ceiling: string;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface CreditProduct {
+  id: string;
+  code: string;
+  label: string;
+  category: string;
+  category_label: string;
+  currency: string;
+  amount_min: string;
+  amount_max: string;
+  interest_rate: string;
+  is_active: boolean;
+}
+
+export interface StockPhoto {
+  id: string;
+  image: string;
+  caption: string;
+}
+
+export interface ChecklistItem {
+  label: string;
+  provided: boolean;
+}
+
+export interface CreditDocument {
+  id: string;
+  application: string;
+  file: string;
+  label: string;
+  created_at: string;
+}
+
+export interface CreditApplicationFee {
+  id?: string;
+  label: string;
+  mode: "PERCENT" | "AMOUNT" | string;
+  mode_display?: string;
+  value: string;
+  sort_order?: number;
+}
+
+export interface FeesBreakdownLine {
+  id: string | null;
+  label: string;
+  mode: "PERCENT" | "AMOUNT" | string;
+  value: string;
+  amount: string | null;
+  is_dossier: boolean;
+}
+
+export interface FeesBreakdown {
+  base_amount: string | null;
+  lines: FeesBreakdownLine[];
+  total: string | null;
+  /** Indicatif : base − total frais (prélèvement effectué par le CBS). */
+  net_after_fees?: string | null;
+}
+
+export interface CreditApplication {
+  id: string;
+  reference: string;
+  client: string;
+  client_display: string;
+  client_reference: string;
+  client_type: string;
+  product: string;
+  product_label: string;
+  agency: string | null;
+  // Conditions
+  amount_requested: string;
+  amount_proposed: string | null;
+  interest_rate: string | null;
+  fees_rate: string | null;
+  mandatory_savings_rate: string | null;
+  extra_fees?: CreditApplicationFee[];
+  fees_breakdown?: FeesBreakdown | null;
+  periodicity: string;
+  duration_months: number;
+  first_due_date: string | null;
+  last_due_date: string | null;
+  repayment_mechanism: string;
+  purpose_type: string;
+  purpose: string;
+  request_letter_scan: string | null;
+  currency: string;
+  // Plan de financement
+  project_total_cost: string | null;
+  personal_contribution: string | null;
+  financed_quota: string | null;
+  // Activité (contexte opérationnel)
+  activity_start_date: string | null;
+  exact_address: string;
+  clientele: string;
+  tax_regime: string;
+  avg_client_payment_days: number | null;
+  avg_supplier_payment_days: number | null;
+  stock_photos?: StockPhoto[];
+  // Environnement commercial
+  catchment_area: string;
+  // Patrimoine
+  premises_status: string;
+  // Demandeur & emploi
+  employer_name: string;
+  contract_type: string;
+  salary_domiciliation: boolean;
+  dependents_count: number | null;
+  // Relation bancaire
+  client_account_number: string;
+  relationship_start_date: string | null;
+  avg_monthly_credit_movements: string | null;
+  // Assurance
+  has_credit_insurance: boolean;
+  insurance_company: string;
+  insurance_premium: string | null;
+  // Conditions particulières
+  special_conditions: string;
+  suspensive_conditions: string;
+  // Conformité
+  beneficial_owner: string;
+  is_pep: boolean;
+  funds_origin: string;
+  // Complétude documentaire
+  document_checklist: ChecklistItem[];
+  documents?: CreditDocument[];
+  // Suivi
+  amount_approved: string | null;
+  status: string;
+  status_display: string;
+  risk_level: number | null;
+  submitted_at: string | null;
+  submitted_by: string | null;
+  submitted_by_display: string | null;
+  disbursed_at?: string | null;
+  disbursement_requested_at?: string | null;
+  disbursement_requested_by?: string | null;
+  created_by: string | null;
+  created_by_display: string | null;
+  created_at: string;
+}
+
+export interface FinancialDocument {
+  id: string;
+  file: string;
+  label: string;
+}
+
+export interface FinancialAnalysisFlags {
+  // Particulier
+  debt_ratio_ok?: boolean | null;
+  debt_ratio_stress_ok?: boolean | null;
+  disposable_ok?: boolean | null;
+  living_wage_ok?: boolean | null;
+  quota_ok?: boolean | null;
+  // Entreprise
+  dscr_ok?: boolean | null;
+  dscr_stress_ok?: boolean | null;
+  leverage_ok?: boolean | null;
+  gearing_ok?: boolean | null;
+  autonomy_ok?: boolean | null;
+  current_ratio_ok?: boolean | null;
+  interest_coverage_ok?: boolean | null;
+  // Commun
+  guarantee_ok?: boolean | null;
+}
+
+export interface AnalysisScoreComponent {
+  key: string;
+  label: string;
+  score: number | null;
+  weight: number;
+}
+
+export interface AnalysisScoreBreakdown {
+  total: number | null;
+  components: AnalysisScoreComponent[];
+}
+
+export type AnalysisMetrics = {
+  flags: Record<string, boolean | null>;
+} & Record<string, number | null | Record<string, boolean | null> | undefined>;
+
+export type AnalysisThresholds = Record<string, number>;
+
+export interface FinancialAnalysis {
+  id: string;
+  application: string;
+  author_role: string;
+  is_reference?: boolean;
+  created_by: string | null;
+  created_by_display: string;
+  can_edit: boolean;
+  client_type: string;
+  client_type_source: string;
+  reference_period: string;
+  analysis_date: string | null;
+  // Endettement consolidé & centrale des risques
+  active_loans_count: number;
+  credit_bureau_checked: boolean;
+  credit_bureau_date: string | null;
+  has_payment_incidents: boolean;
+  max_days_late: number | null;
+  incidents_comment: string;
+  prior_loans_count: number;
+  prior_repayment_rate: string | null;
+  prior_max_delay_days: number | null;
+  // Particulier — charges informelles & stabilité
+  tontine_expense: string;
+  social_contributions: string;
+  family_support_expense: string;
+  net_salary: string;
+  salary_deductions: string;
+  employment_seniority_months: number | null;
+  informal_income_weight: string | null;
+  // Entreprise — court terme & N-1
+  short_term_debt: string;
+  turnover_prev: string;
+  net_result_prev: string;
+  // Indicateurs calculés (contre-analyse)
+  debt_ratio_stress: string | null;
+  dscr_stress: string | null;
+  guarantee_coverage: string | null;
+  metrics: AnalysisMetrics;
+  thresholds: AnalysisThresholds;
+  // Synthèse & scoring
+  score_breakdown: AnalysisScoreBreakdown;
+  strengths: string;
+  weaknesses: string;
+  recommended_conditions: string;
+  // Analyse sectorielle
+  sector: string;
+  sub_sector: string;
+  value_chain_position: string;
+  market_dynamic: string;
+  seasonality_level: string;
+  competition_intensity: string;
+  supplier_dependency: string;
+  client_concentration: string;
+  input_price_sensitivity: string;
+  fx_exposure: string;
+  regulatory_sensitivity: string;
+  climate_sensitivity: string;
+  sector_risk_level: string;
+  sector_outlook: string;
+  sector_comment: string;
+  // Analyse environnementale & sociale (E&S)
+  es_category: string;
+  exclusion_list_ok: boolean;
+  env_permit_required: boolean;
+  env_permit_obtained: boolean;
+  permit_reference: string;
+  eia_required: boolean;
+  eia_done: boolean;
+  es_regulatory_compliance: boolean;
+  waste_management: string;
+  resource_use: string;
+  chemicals_pesticides: string;
+  nuisances_emissions: string;
+  working_conditions: string;
+  occupational_safety: string;
+  child_forced_labor_risk: string;
+  community_impact: string;
+  land_resettlement_risk: string;
+  jobs_created: number | null;
+  jobs_maintained: number | null;
+  jobs_women: number | null;
+  jobs_youth: number | null;
+  workforce_count?: number | null;
+  es_mitigation_plan: string;
+  es_action_required: boolean;
+  es_insurance: boolean;
+  es_risk_level: string;
+  es_comment: string;
+  // Particulier — revenus
+  salary_income: string;
+  spouse_income: string;
+  rental_income: string;
+  other_activity_income: string;
+  other_income: string;
+  // Particulier — charges
+  rent_expense: string;
+  food_expense: string;
+  utilities_expense: string;
+  transport_expense: string;
+  education_expense: string;
+  health_expense: string;
+  other_household_expenses: string;
+  // Entreprise — exploitation
+  turnover: string;
+  cogs: string;
+  op_rent: string;
+  op_salaries: string;
+  op_utilities: string;
+  op_transport: string;
+  op_telecom: string;
+  op_taxes: string;
+  op_maintenance: string;
+  op_other: string;
+  depreciation: string;
+  financial_charges: string;
+  // Entreprise — bilan
+  stock_value: string;
+  receivables: string;
+  cash_available: string;
+  fixed_assets: string;
+  supplier_debt: string;
+  ongoing_credit_balance: string;
+  // Commun — endettement existant
+  existing_debt_institution: string;
+  existing_debt_initial_amount: string;
+  existing_debt_monthly: string;
+  // Trésorerie prévisionnelle
+  projected_monthly_inflows: string;
+  projected_monthly_outflows: string;
+  projected_monthly_surplus: string | null;
+  cashflow_comment: string;
+  // Indicateurs calculés
+  new_installment: string | null;
+  repayment_capacity: string | null;
+  debt_ratio: string | null;
+  dscr: string | null;
+  // Dérivées
+  total_income: string;
+  total_household_charges: string;
+  disposable_income: string;
+  dependents_count: number | null;
+  disposable_per_capita: string | null;
+  gross_margin: string;
+  total_operating_expenses: string;
+  ebe: string;
+  net_result: string;
+  cash_flow: string;
+  total_assets: string;
+  total_debts: string;
+  equity: string;
+  bfr: string;
+  gross_margin_pct: string | null;
+  net_margin_pct: string | null;
+  // Décision
+  internal_score: string | null;
+  recommendation: string;
+  comment: string;
+  flags: FinancialAnalysisFlags;
+  documents: FinancialDocument[];
+  created_at: string;
+  updated_at: string;
+}
+
+export const FINANCE_LABELS = {
+  reference_period: {
+    MONTHLY: "Mensuelle",
+    QUARTERLY: "Trimestrielle",
+    ANNUAL: "Annuelle",
+  } as Record<string, string>,
+  recommendation: {
+    FAVORABLE: "Favorable",
+    CONDITIONAL: "Favorable sous conditions",
+    UNFAVORABLE: "Défavorable",
+  } as Record<string, string>,
+  risk_level: {
+    LOW: "Faible",
+    MEDIUM: "Moyen",
+    HIGH: "Élevé",
+  } as Record<string, string>,
+  quality_level: {
+    GOOD: "Satisfaisante",
+    IMPROVE: "À améliorer",
+    BAD: "Problématique",
+  } as Record<string, string>,
+  sector: {
+    AGRICULTURE: "Agriculture / élevage / pêche",
+    COMMERCE: "Commerce / négoce",
+    INDUSTRY: "Industrie / transformation",
+    CONSTRUCTION: "BTP / construction",
+    TRANSPORT: "Transport / logistique",
+    SERVICES: "Services",
+    CRAFTS: "Artisanat",
+    ICT: "TIC / numérique",
+    TOURISM: "Tourisme / hôtellerie / restauration",
+    HEALTH: "Santé",
+    EDUCATION: "Éducation",
+    ENERGY: "Énergie / mines",
+    OTHER: "Autre",
+  } as Record<string, string>,
+  value_chain_position: {
+    INPUTS: "Intrants / approvisionnement",
+    PRODUCTION: "Production",
+    PROCESSING: "Transformation",
+    DISTRIBUTION: "Distribution / commerce",
+    SERVICES: "Services",
+  } as Record<string, string>,
+  market_dynamic: {
+    GROWTH: "En croissance",
+    MATURE: "Mature / stable",
+    DECLINE: "En déclin",
+  } as Record<string, string>,
+  es_category: {
+    A: "A — Risque élevé",
+    B: "B — Risque moyen",
+    C: "C — Risque faible",
+  } as Record<string, string>,
+};
+
+export const CREDIT_LABELS = {
+  periodicity: {
+    DAILY: "Journalier",
+    WEEKLY: "Hebdomadaire",
+    MONTHLY: "Mensuelle",
+    QUARTERLY: "Trimestrielle",
+    SEMIANNUAL: "Semestrielle",
+    ANNUAL: "Annuelle",
+  } as Record<string, string>,
+  repayment_mechanism: {
+    CONSTANT: "Échéances constantes",
+    DEGRESSIVE: "Amortissement dégressif",
+    IN_FINE: "In fine (capital à terme)",
+    BULLET: "Remboursement unique (bullet)",
+  } as Record<string, string>,
+  tax_regime: {
+    SYNTHETIC: "Impôt synthétique",
+    REAL: "Régime réel",
+    SPECIFIC_EXEMPTION: "Exonérations spécifiques",
+    INFORMAL: "Secteur informel",
+  } as Record<string, string>,
+  catchment_area: {
+    LOCAL: "Local",
+    NATIONAL: "National",
+    EXPORT: "Export",
+  } as Record<string, string>,
+  premises_status: {
+    OWNER: "Propriétaire",
+    TENANT: "Locataire",
+  } as Record<string, string>,
+  purpose_type: {
+    WORKING_CAPITAL: "Fonds de roulement",
+    EQUIPMENT: "Investissement / équipement",
+    STOCK: "Achat de stock",
+    REAL_ESTATE: "Immobilier",
+    TREASURY: "Trésorerie",
+    CONSUMPTION: "Consommation",
+    OTHER: "Autre",
+  } as Record<string, string>,
+  contract_type: {
+    CDI: "CDI",
+    CDD: "CDD",
+    CIVIL_SERVANT: "Fonctionnaire",
+    INDEPENDENT: "Indépendant",
+    RETIRED: "Retraité",
+    OTHER: "Autre",
+  } as Record<string, string>,
+  risk_class: {
+    A: "A — Excellent",
+    B: "B — Bon",
+    C: "C — Moyen",
+    D: "D — Faible",
+    E: "E — Très risqué",
+  } as Record<string, string>,
+};
+
+export interface FieldVisit {
+  id: string;
+  application: string;
+  visit_date: string;
+  visited_by: string | null;
+  visited_by_display: string | null;
+  visitor_role: string;
+  can_edit: boolean;
+  latitude: string | null;
+  longitude: string | null;
+  report: string;
+  created_at?: string;
+}
+
+export interface SuretyEngagement {
+  id: string;
+  surety: string;
+  surety_display: string;
+  surety_activity: string;
+  surety_type?: "PHYSICAL" | "MORAL";
+  surety_id_document_scan: string | null;
+  surety_photo: string | null;
+  application: string;
+  amount: string;
+  signed_date: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface RejectReason {
+  id: string;
+  code: string;
+  label: string;
+  description: string;
+  is_active: boolean;
+}
+
+export interface ApprovalTaskApplication {
+  id: string;
+  reference: string;
+  client_display: string;
+  amount_requested: string;
+  amount_proposed: string | null;
+  currency: string;
+}
+
+export interface ApprovalTask {
+  id: string;
+  instance: string;
+  step: string;
+  step_name: string;
+  step_order: number;
+  step_kind: string;
+  allow_return: boolean;
+  status: string;
+  opinion: string;
+  opinion_display: string;
+  decision_comment: string;
+  proposed_amount: string | null;
+  reject_reason: string | null;
+  acted_by: string | null;
+  acted_by_display: string | null;
+  acted_at: string | null;
+  due_at: string | null;
+  application: ApprovalTaskApplication | null;
+  target_meta?: {
+    kind: string;
+    id: string;
+    reference: string;
+    detail_path: string | null;
+  } | null;
+}
+
+export interface MyDossierRow {
+  id: string;
+  target_kind?: "CREDIT" | "MAIN_LEVEE" | "DATION" | string;
+  detail_path?: string;
+  reference: string;
+  client_display: string;
+  client_type: "" | "INDIVIDUAL" | "PROFESSIONAL" | "CORPORATE";
+  client_type_display: string;
+  amount_requested: string;
+  amount_proposed: string | null;
+  currency: string;
+  status: string;
+  status_display: string;
+  product_label: string;
+  created_by_display: string;
+  created_at: string | null;
+  definition_name: string;
+  instance_status: string;
+  current_step_name: string;
+  current_order: number;
+  my_task_status: string | null;
+  my_step_name: string;
+  my_step_order: number | null;
+  my_task_due_at: string | null;
+  is_actionable: boolean;
+}
+
+export interface ApprovalCondition {
+  id: string;
+  application: string;
+  task: string;
+  step_name: string;
+  description: string;
+  status: string;
+  issued_by: string | null;
+  issued_by_display: string | null;
+  issued_at: string;
+  lifted_by: string | null;
+  lifted_by_display: string | null;
+  lifted_at: string | null;
+  lift_comment: string;
+  validated_by: string | null;
+  validated_by_display: string | null;
+  validated_at: string | null;
+  validation_comment: string;
+  can_lift: boolean;
+  can_validate: boolean;
+  created_at: string;
+}
+
+export const WORKFLOW_LABELS = {
+  opinion: {
+    FAVORABLE: "Favorable",
+    FAVORABLE_SOUS_RESERVE: "Favorable sous réserve",
+    DEFAVORABLE: "Défavorable",
+  } as Record<string, string>,
+  step_kind: {
+    CONSULTATIVE: "Consultative",
+    DECISIONAL: "Décisionnelle",
+  } as Record<string, string>,
+  target_type: {
+    CREDIT: "Dossier de crédit",
+    MAIN_LEVEE: "Main levée",
+    DATION: "Dation en paiement",
+  } as Record<string, string>,
+  condition_status: {
+    PENDING: "En attente de levée",
+    LIFTED: "Levée — en attente de validation",
+    VALIDATED: "Validée",
+  } as Record<string, string>,
+  instance_status: {
+    IN_PROGRESS: "En cours",
+    AWAITING_CONDITIONS: "En attente de levée des réserves",
+    APPROVED: "Approuvé",
+    REJECTED: "Rejeté",
+    RETURNED: "Retourné pour correction",
+    CANCELLED: "Annulé",
+  } as Record<string, string>,
+};
+
+export interface GuaranteePhoto {
+  id: string;
+  image: string;
+  caption: string;
+}
+
+export interface GuaranteeDocument {
+  id: string;
+  title: string;
+  file: string | null;
+  created_at?: string;
+}
+
+export interface GuaranteeJewelryItem {
+  id?: string;
+  nature: string;
+  weight: string | number | null;
+  description: string;
+}
+
+export interface Guarantee {
+  id: string;
+  reference: string;
+  guarantee_type: string;
+  type_display: string;
+  pledge_category: string;
+  client: string;
+  application: string | null;
+  belongs_to_applicant?: boolean;
+  surety?: string | null;
+  surety_display?: string | null;
+  description: string;
+  owners: string;
+  expertise_value: string;
+  current_value: string;
+  is_insured: boolean;
+  insurance_reference: string;
+  // Propriétaire
+  owner_last_name: string;
+  owner_first_name: string;
+  owner_marital_status: string;
+  matrimonial_regime: string;
+  // Hypothèque
+  document_type: string;
+  document_number: string;
+  document_issue_date: string | null;
+  address: string;
+  expertise_date: string | null;
+  expertise_firm: string;
+  expert_name: string;
+  value_to_consider: string | null;
+  ltv_ratio: string | null;
+  occupancy_status: string;
+  document_scan: string | null;
+  expertise_report_scan: string | null;
+  lease_contract_scan: string | null;
+  legal_situation_certificate_scan: string | null;
+  // Gage — moyen roulant
+  chassis_number: string;
+  engine_number: string;
+  brand: string;
+  model_name: string;
+  registration: string;
+  power: string;
+  first_registration_year: number | null;
+  acquisition_date: string | null;
+  acquisition_value: string | null;
+  resale_value: string | null;
+  estimation_date: string | null;
+  registration_card_scan: string | null;
+  mechanical_expertise_scan: string | null;
+  technical_inspection_scan: string | null;
+  insurance_scan: string | null;
+  purchase_invoice_scan: string | null;
+  additional_info: string;
+  // Gage — objet de valeur
+  raw_material_price: string | null;
+  expertise_certificate_scan: string | null;
+  origin_certificate_scan: string | null;
+  jewelry_items?: GuaranteeJewelryItem[];
+  // Garantie financière
+  financial_type: string;
+  account_number: string;
+  balance: string | null;
+  remuneration_rate: string | null;
+  deposit_maturity_date: string | null;
+  isin_code: string;
+  volatility_history: string;
+  security_discount: string | null;
+  pledge_deed_scan: string | null;
+  // Suivi
+  status: string;
+  last_valuation_date: string | null;
+  photos?: GuaranteePhoto[];
+  documents?: GuaranteeDocument[];
+  renewed_from?: string | null;
+  renewed_from_reference?: string | null;
+}
+
+export const GUARANTEE_LABELS = {
+  guarantee_type: {
+    MORTGAGE: "Hypothèque",
+    PLEDGE: "Gage",
+    FINANCIAL: "Garantie financière",
+    LIEN: "Nantissement",
+    DEPOSIT: "Dépôt de garantie",
+    BANK_GUARANTEE: "Garantie bancaire",
+    DATION: "Dation en paiement",
+    JOINT: "Garantie solidaire",
+    OTHER: "Autre",
+  } as Record<string, string>,
+  pledge_category: {
+    VEHICLE: "Moyen roulant",
+    VALUABLE: "Objet de valeur",
+  } as Record<string, string>,
+  document_type: {
+    LAND_TITLE: "Titre foncier",
+    ATTRIBUTION_CERT: "Attestation d'attribution",
+  } as Record<string, string>,
+  matrimonial_regime: {
+    COMMUNITY: "Communauté de biens",
+    SEPARATION: "Séparation de biens",
+  } as Record<string, string>,
+  occupancy_status: {
+    FREE: "Libre",
+    FAMILY_HOME: "Domicile familial",
+    DEVELOPER: "Occupé par le promoteur",
+    RENTED: "En location",
+  } as Record<string, string>,
+  financial_type: {
+    DAT: "Dépôt à terme (DAT)",
+    SAVINGS: "Épargne",
+    SECURITY: "Titre",
+  } as Record<string, string>,
+};
+
+export interface AuditLog {
+  id: string;
+  user_display: string;
+  action: string;
+  model_label: string;
+  object_id?: string;
+  object_repr: string;
+  changes?: Record<string, unknown>;
+  ip_address: string | null;
+  timestamp: string;
+}
+
+export interface DashboardData {
+  scope: "FILIALE" | "GROUPE";
+  filters_applied?: Record<string, string>;
+  credits: {
+    summary: {
+      total: number;
+      amount_requested: string | null;
+      amount_approved: string | null;
+      approved_count: number;
+      rejected_count: number;
+      returned_count?: number;
+      draft_count?: number;
+      disbursed_count: number;
+      disbursed_amount: string | null;
+      pending_count: number;
+      in_approval_count: number;
+      contract_generated_count?: number;
+      disbursement_pending_count?: number;
+      disbursement_pending_amount?: string | null;
+    };
+    by_status: { status: string; count: number; amount: string | null }[];
+    by_product: { product: string; count: number; amount: string | null }[];
+    by_agency?: {
+      agency_id: string;
+      agency: string;
+      count: number;
+      amount: string | null;
+    }[];
+    monthly: { month: string; count: number; amount: string | number | null }[];
+    recent: {
+      id: string;
+      reference: string;
+      client: string;
+      product: string;
+      amount: string | null;
+      status: string;
+      created_at: string;
+      owner?: string;
+      agency?: string;
+    }[];
+  };
+  portfolio: {
+    active_loans: number;
+    total_loans: number;
+    disbursed_total: string | number | null;
+    outstanding: string | number | null;
+    overdue_installments: number;
+  };
+  clients: {
+    total: number;
+    by_type: { client_type: string; count: number }[];
+    new_this_month: number;
+    new_period_label?: "month" | "period";
+  };
+  guarantees: {
+    count: number;
+    active_count?: number;
+    total_current_value: string | null;
+    active_value?: string | null;
+  };
+  contracts?: {
+    generated: number;
+    signed: number;
+    total: number;
+  };
+  workflow?: {
+    pending_tasks: number;
+    my_pending_tasks: number;
+    conditions_pending: number;
+  };
+  risk: {
+    by_par_class: { par_class: string; count: number; amount: string | null }[];
+    by_stage?: { stage: string; count: number; amount: string | null }[];
+    open_cases?: number;
+    total_overdue: string | number;
+  };
+  cbs?: {
+    failed: number;
+    pending: number;
+    retry: number;
+  };
+}
+
+export interface SimulationResult {
+  monthly_payment: string;
+  total_repayment: string;
+  total_interest: string;
+  schedule: {
+    number: number;
+    due_date: string;
+    principal: string;
+    interest: string;
+    total: string;
+  }[];
+}
+
+// ------------------------------------------------------------------------- //
+// Contrats
+// ------------------------------------------------------------------------- //
+export interface ContractExtraField {
+  key: string;
+  label: string;
+  type?: "text" | "date" | "number";
+}
+
+export interface ContractTemplate {
+  id: string;
+  code: string;
+  name: string;
+  category: string;
+  category_display: string;
+  description: string;
+  engine: "DOCX" | "XLSX";
+  file: string;
+  applies_to: "ANY" | "INDIVIDUAL" | "CORPORATE";
+  applies_to_display: string;
+  product: string | null;
+  product_label: string | null;
+  amount_min: string | null;
+  amount_max: string | null;
+  extra_fields: ContractExtraField[];
+  is_required: boolean;
+  is_active: boolean;
+  ordering: number;
+  created_at: string;
+}
+
+export interface ApplicableTemplate {
+  template: ContractTemplate;
+  generated: boolean;
+  generated_contract_id: string | null;
+}
+
+export interface GeneratedContract {
+  id: string;
+  application: string;
+  template: string | null;
+  template_name: string;
+  category: string;
+  file: string;
+  status: "GENERATED" | "SIGNED" | "CANCELLED";
+  status_display: string;
+  signed_file: string | null;
+  signed_at: string | null;
+  notes: string;
+  extra_values: Record<string, string>;
+  created_by_name: string | null;
+  created_at: string;
+}
+
+export interface VariableCatalogGroup {
+  group: string;
+  items: [string, string][];
+}
+
+export interface VariableCatalog {
+  groups: VariableCatalogGroup[];
+  loop_help: string;
+}

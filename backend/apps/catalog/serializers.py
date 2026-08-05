@@ -1,0 +1,52 @@
+from rest_framework import serializers
+
+from .models import (
+    ChecklistItem,
+    CreditProduct,
+    ProductCategory,
+    RejectReason,
+)
+
+
+class ProductCategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductCategory
+        fields = ["id", "code", "label", "description", "is_active"]
+        read_only_fields = ["id"]
+
+
+class CreditProductSerializer(serializers.ModelSerializer):
+    category_label = serializers.CharField(source="category.label", read_only=True)
+
+    class Meta:
+        model = CreditProduct
+        fields = [
+            "id", "code", "label", "description", "category", "category_label",
+            "client_type", "currency", "amount_min", "amount_max",
+            "duration_min_months", "duration_max_months", "interest_rate",
+            "processing_fee_rate", "requires_guarantee", "is_active",
+        ]
+        read_only_fields = ["id"]
+
+    def validate(self, attrs):
+        amount_min = attrs.get("amount_min")
+        amount_max = attrs.get("amount_max")
+        if amount_min is not None and amount_max is not None and amount_min > amount_max:
+            raise serializers.ValidationError(
+                "Le montant minimum ne peut excéder le montant maximum."
+            )
+        return attrs
+
+
+class RejectReasonSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RejectReason
+        fields = ["id", "code", "label", "description", "is_active"]
+        read_only_fields = ["id"]
+
+
+class ChecklistItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ChecklistItem
+        fields = ["id", "product", "label", "is_mandatory", "order"]
+        read_only_fields = ["id"]
