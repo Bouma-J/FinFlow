@@ -2,6 +2,9 @@
 
 Guide pas à pas pour déployer **FIN_FLOW** sur un serveur **Ubuntu Server 22.04 LTS** ou **24.04 LTS**, avec Docker Compose, reverse-proxy TLS et l’ensemble des outils nécessaires.
 
+**Dépôt Git :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
+**Clone :** `git clone https://github.com/Bouma-J/FinFlow.git`
+
 Pour la vue d’ensemble multi-environnements (Compose démo, Kubernetes, bare metal), voir aussi [04 — Guide de déploiement](04-guide-deploiement.md).
 
 ---
@@ -160,14 +163,21 @@ Avant le certificat TLS, créez les enregistrements :
 
 ## 4. Récupération du projet
 
+Dépôt officiel : **https://github.com/Bouma-J/FinFlow.git**
+
 ```bash
 sudo mkdir -p /opt/finflow
 sudo chown "$USER":"$USER" /opt/finflow
 cd /opt/finflow
 
-# Clone (adapter l’URL du dépôt)
-git clone <URL_DU_DEPOT> .
-# ou copie scp/rsync du projet « fin flow »
+git clone https://github.com/Bouma-J/FinFlow.git .
+```
+
+Mises à jour ultérieures :
+
+```bash
+cd /opt/finflow
+git pull origin main
 ```
 
 Structure attendue à la racine : `docker-compose.yml`, `backend/`, `frontend/`, `documentation/`.
@@ -561,6 +571,7 @@ journalctl -u nginx -u docker -n 100 --no-pager
 
 ## 15. Références
 
+- **Dépôt GitHub :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
 - Configuration détaillée : [05 — Configuration](05-configuration.md)  
 - Architecture : [02 — Architecture technique](02-architecture-technique.md)  
 - Exploitation : [10 — Exploitation](10-exploitation-supervision.md)  

@@ -1,5 +1,8 @@
 # 04 — Guide de déploiement complet
 
+> **Dépôt Git :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
+> (`git clone https://github.com/Bouma-J/FinFlow.git`)
+>
 > **Production sur Ubuntu Server** (outils, Docker, Nginx/TLS, sauvegardes) :  
 > voir le guide dédié [13 — Déploiement Ubuntu](13-guide-deploiement-ubuntu.md)  
 > et le fichier `docker-compose.prod.yml` à la racine du dépôt.
