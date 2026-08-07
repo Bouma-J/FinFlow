@@ -336,11 +336,18 @@ curl -sS http://127.0.0.1:8080/api/v1/health/
 # → {"status":"ok","ready":true,...}
 ```
 
-Créer le premier administrateur Groupe :
+Créer le premier administrateur Groupe (`createsuperuser` positionne `is_group_level=True`) :
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend \
   python manage.py createsuperuser
+```
+
+Si un superuser existant apparaît comme filiale, corriger :
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend \
+  python manage.py shell -c "from django.contrib.auth import get_user_model; u=get_user_model().objects.get(username='Admin'); u.is_group_level=True; u.tenant=None; u.agency=None; u.save(); print(u.username, u.is_group_level)"
 ```
 
 Ou peupler une démo **uniquement en UAT** :

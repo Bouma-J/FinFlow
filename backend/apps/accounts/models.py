@@ -7,7 +7,7 @@ temporairement les pouvoirs d'un valideur à un autre.
 """
 import uuid
 
-from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.models import AbstractUser, UserManager as DjangoUserManager
 from django.db import models
 from django.utils import timezone
 
@@ -18,8 +18,22 @@ class DataScope(models.TextChoices):
     TENANT = "TENANT", "Toute la filiale"
 
 
+class UserManager(DjangoUserManager):
+    """Superuser CLI = administrateur Groupe (is_group_level=True)."""
+
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields.setdefault("is_group_level", True)
+        extra_fields.setdefault("tenant", None)
+        extra_fields.setdefault("agency", None)
+        return super().create_superuser(
+            username, email=email, password=password, **extra_fields
+        )
+
+
 class User(AbstractUser):
     """Utilisateur rattaché à une filiale, ou de niveau Groupe."""
+
+    objects = UserManager()
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
