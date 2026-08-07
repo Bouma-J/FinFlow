@@ -47,11 +47,18 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 function raiseAuthError(err: unknown): never {
   if (axios.isAxiosError(err)) {
-    const detail = err.response?.data?.detail;
+    // L'API enveloppe les erreurs sous { success, errors: … }.
+    const payload = err.response?.data as
+      | { detail?: unknown; code?: string; errors?: { detail?: unknown; code?: string } }
+      | undefined;
+    const nested = payload?.errors;
+    const detail = nested?.detail ?? payload?.detail;
     const code =
       (typeof detail === "object" && detail && "code" in detail
         ? (detail as { code?: string }).code
-        : undefined) || err.response?.data?.code;
+        : undefined) ||
+      nested?.code ||
+      payload?.code;
     if (code === "mfa_required" || err.response?.status === 401) {
       if (
         code === "mfa_required" ||
