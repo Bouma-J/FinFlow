@@ -1,4 +1,5 @@
 # FIN_FLOW
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
 
 Plateforme **SaaS multi-tenants** de gestion du cycle de vie complet des dossiers de crédit, avec intégration multi-Core Banking. Ce dépôt contient le **backend** (API REST Django) et le **frontend** (SPA React) conformes au cahier des charges `charge.txt`, ainsi qu'une **orchestration Docker** complète.
 
