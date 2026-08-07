@@ -50,7 +50,6 @@ const PERIODICITY = [
   { value: "ANNUAL", label: "Annuelle" },
 ];
 const MECHANISM = [
-  { value: "CONSTANT", label: "Échéances constantes" },
   { value: "DEGRESSIVE", label: "Amortissement dégressif" },
   { value: "IN_FINE", label: "In fine (capital à terme)" },
   { value: "BULLET", label: "Remboursement unique (bullet)" },

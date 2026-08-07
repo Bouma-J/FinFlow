@@ -16,9 +16,8 @@ from .models import CreditApplication, Installment, Loan, _PERIODS_PER_YEAR
 
 CENTS = Decimal("0.01")
 
-# Pas d'arrondi des montants du tableau d'amortissement : la dizaine de F CFA,
-# conformément à la base de calcul du core banking (cf. tableau LB SERVICES où
-# tous les intérêts et capitaux sont des multiples de 10).
+# Pas d'arrondi des montants du tableau d'amortissement : la dizaine de F CFA
+# (base LB SERVICES / CBS sur les montants élevés).
 AMOUNT_STEP = Decimal("10")
 
 # Nombre de mois représenté par une période (hors journalier / hebdomadaire).
@@ -37,8 +36,8 @@ def _q(value):
 def _round_step(value, step=AMOUNT_STEP):
     """Arrondit au multiple de `step` le plus proche (arrondi commercial).
 
-    Reproduit la présentation du tableau d'amortissement du core banking, où les
-    intérêts et le capital sont arrondis à la dizaine de F CFA la plus proche.
+    Reproduit la présentation du tableau d'amortissement du core banking
+    (intérêts / capital arrondis à la dizaine de F CFA).
     """
     step = Decimal(step)
     return (Decimal(value) / step).quantize(Decimal(1), rounding=ROUND_HALF_UP) * step
@@ -75,15 +74,21 @@ def compute_amortization_schedule(
     start_date=None,
     first_due_date=None,
     savings_rate=0,
-    mechanism="CONSTANT",
+    mechanism="DEGRESSIVE",
 ):
     """
     Échéancier d'amortissement aligné sur la base core banking (ACT/365,
     arrondi à la dizaine, report week-end des échéances intermédiaires).
 
     Mécanismes :
-    - CONSTANT : annuité fixe (capital + intérêt), capital = résidu
-    - DEGRESSIVE : capital constant par période, intérêt sur solde
+    - DEGRESSIVE : échéance institution constante ; intérêts décroissants,
+      capital croissant. Convention CBS : le 1er calcul d'intérêts porte sur
+      **une période théorique pleine** depuis ``start_date`` (date d'effet /
+      simulation → start_date + 1 période), même si la 1ʳᵉ échéance est
+      anticipée ou reportée. Les périodes suivantes utilisent les jours
+      calendaires entre échéances nominales.
+    - CONSTANT : legacy — annuité fixe, intérêts sur période nominale avant
+      la 1ʳᵉ échéance (conservé pour les dossiers historiques).
     - IN_FINE : intérêts seuls puis capital à la dernière échéance
     - BULLET : une seule échéance en fin (capital + intérêts de la durée)
 
@@ -96,17 +101,21 @@ def compute_amortization_schedule(
     principal = Decimal(principal)
     annual_rate = Decimal(annual_rate or 0)
     savings_rate = Decimal(savings_rate or 0)
-    mechanism = (mechanism or RepaymentMechanism.CONSTANT).upper()
+    mechanism = (mechanism or RepaymentMechanism.DEGRESSIVE).upper()
     per_year = _PERIODS_PER_YEAR.get(periodicity, 12)
     count = int(period_count(duration_months, periodicity))
     period_rate = annual_rate / Decimal(100) / Decimal(per_year)
     daily_rate = annual_rate / Decimal(100) / Decimal(365)
     savings_flat = _round_step(principal * savings_rate / Decimal(100))
+    origin = start_date or date.today()
 
     if first_due_date:
         first = first_due_date
     else:
-        first = _add_periods(start_date or date.today(), periodicity, 1)
+        first = _add_periods(origin, periodicity, 1)
+
+    # Longueur de la 1ʳᵉ période d'intérêts (convention CBS / dégressif).
+    first_period_days = max((_add_periods(origin, periodicity, 1) - origin).days, 0)
 
     def _due(n, nominal, last_n):
         if n == 1 or n == last_n:
@@ -129,12 +138,11 @@ def compute_amortization_schedule(
     # ----- BULLET : une échéance au terme ----- #
     if mechanism == RepaymentMechanism.BULLET:
         last_nominal = _add_periods(first, periodicity, count - 1)
-        prev_nominal = _add_periods(first, periodicity, -1)
-        days = max((last_nominal - prev_nominal).days, 0)
+        days = max((last_nominal - origin).days, 0)
         interest = _round_step(principal * daily_rate * Decimal(days))
         return [_row(1, last_nominal, principal, interest, Decimal("0"))]
 
-    # Annuité de référence (CONSTANT)
+    # Annuité de référence (DEGRESSIVE / CONSTANT)
     if period_rate == 0:
         payment = principal / count
     else:
@@ -142,29 +150,40 @@ def compute_amortization_schedule(
         payment = principal * period_rate * factor / (factor - Decimal(1))
     payment = _round_step(payment)
 
-    # Capital constant (DEGRESSIVE)
-    flat_principal = _round_step(principal / count) if count else principal
-
     schedule = []
     balance = principal
-    prev_nominal = _add_periods(first, periodicity, -1)
+    # CONSTANT (legacy) : période nominale avant la 1ʳᵉ échéance.
+    # DEGRESSIVE : après la 1ʳᵉ ligne, jours calendaires entre échéances.
+    prev_nominal = (
+        _add_periods(first, periodicity, -1)
+        if mechanism != RepaymentMechanism.DEGRESSIVE
+        else first
+    )
+
     for n in range(1, count + 1):
         nominal = _add_periods(first, periodicity, n - 1)
-        days = max((nominal - prev_nominal).days, 0)
+        if mechanism == RepaymentMechanism.DEGRESSIVE and n == 1:
+            days = first_period_days
+        else:
+            days = max((nominal - prev_nominal).days, 0)
         interest = _round_step(balance * daily_rate * Decimal(days))
         is_last = n == count
 
         if mechanism == RepaymentMechanism.IN_FINE:
             principal_part = balance if is_last else Decimal("0")
-        elif mechanism == RepaymentMechanism.DEGRESSIVE:
-            principal_part = balance if is_last else min(flat_principal, balance)
-        else:  # CONSTANT (défaut)
+        elif mechanism in (
+            RepaymentMechanism.DEGRESSIVE,
+            RepaymentMechanism.CONSTANT,
+        ):
+            # Échéance constante : capital = annuité − intérêts (↑), intérêts ↓
             if is_last:
                 principal_part = balance
             else:
                 principal_part = payment - interest
                 if principal_part < 0:
                     principal_part = Decimal("0")
+        else:  # filet de sécurité
+            principal_part = balance if is_last else Decimal("0")
 
         balance = balance - principal_part
         schedule.append(
@@ -413,7 +432,7 @@ def disburse_application(application, disburse_date=None):
     rate = application.interest_rate or application.product.interest_rate
     periodicity = application.periodicity
     savings_rate = application.mandatory_savings_rate or 0
-    mechanism = application.repayment_mechanism or "CONSTANT"
+    mechanism = application.repayment_mechanism or "DEGRESSIVE"
     # 1re échéance : celle du dossier si renseignée, sinon une période après le
     # décaissement (reportée au 1er jour ouvrable).
     first_due = application.first_due_date or _next_business_day(

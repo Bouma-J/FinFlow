@@ -363,9 +363,10 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
         schedule = compute_amortization_schedule(
             data["amount"], data["annual_rate"], data["months"],
             periodicity=data.get("periodicity", "MONTHLY"),
+            start_date=data.get("simulation_date"),
             first_due_date=data.get("first_due_date"),
             savings_rate=data.get("savings_rate") or 0,
-            mechanism=data.get("mechanism") or "CONSTANT",
+            mechanism=data.get("mechanism") or "DEGRESSIVE",
         )
         total = sum(row["total"] for row in schedule)
         total_savings = sum(row["savings"] for row in schedule)

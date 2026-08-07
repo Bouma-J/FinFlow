@@ -29,10 +29,11 @@ class Periodicity(models.TextChoices):
 
 
 class RepaymentMechanism(models.TextChoices):
-    CONSTANT = "CONSTANT", "Échéances constantes"
     DEGRESSIVE = "DEGRESSIVE", "Amortissement dégressif"
     IN_FINE = "IN_FINE", "In fine (capital à terme)"
     BULLET = "BULLET", "Remboursement unique (bullet)"
+    # Conservé pour les dossiers historiques (plus proposé à la saisie).
+    CONSTANT = "CONSTANT", "Échéances constantes (historique)"
 
 
 class TaxRegime(models.TextChoices):
@@ -1252,7 +1253,7 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
                 periodicity=app.periodicity or "MONTHLY",
                 first_due_date=app.first_due_date,
                 savings_rate=0,
-                mechanism=app.repayment_mechanism or "CONSTANT",
+                mechanism=app.repayment_mechanism or "DEGRESSIVE",
             )
         except Exception:
             return None

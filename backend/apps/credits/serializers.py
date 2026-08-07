@@ -498,12 +498,13 @@ class SimulationSerializer(serializers.Serializer):
         default="MONTHLY",
     )
     first_due_date = serializers.DateField(required=False, allow_null=True)
+    simulation_date = serializers.DateField(required=False, allow_null=True)
     savings_rate = serializers.DecimalField(
         max_digits=6, decimal_places=3, min_value=Decimal("0"),
         required=False, default=Decimal("0"),
     )
     mechanism = serializers.ChoiceField(
-        choices=["CONSTANT", "DEGRESSIVE", "IN_FINE", "BULLET"],
+        choices=["DEGRESSIVE", "IN_FINE", "BULLET", "CONSTANT"],
         required=False,
-        default="CONSTANT",
+        default="DEGRESSIVE",
     )

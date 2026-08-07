@@ -450,9 +450,8 @@ interface SchedulePreview {
 }
 
 // Les montants du tableau d'amortissement (intérêt, capital, échéance) sont
-// arrondis à la dizaine de F CFA la plus proche, conformément à la base de
-// calcul du core banking (cf. tableau LB SERVICES).
-const round10 = (n: number) => Math.round(n / 10) * 10;
+// arrondis à la dizaine de F CFA (base CBS / LB SERVICES).
+const roundStep = (n: number) => Math.round(n / 10) * 10;
 
 function nextBusinessDay(d: Date): Date {
   const r = new Date(d);
@@ -498,18 +497,28 @@ function computeSchedulePreview(app: CreditApplication): SchedulePreview | null 
   const annualRate = Number(app.interest_rate || 0) / 100;
   const perYear = PERIODS_PER_YEAR[app.periodicity];
   const months = Number(app.duration_months || 0);
-  const mechanism = (app.repayment_mechanism || "CONSTANT").toUpperCase();
+  const mechanism = (app.repayment_mechanism || "DEGRESSIVE").toUpperCase();
   if (!principal || !perYear || !months) return null;
   const count = Math.max(1, Math.ceil((months / 12) * perYear));
   const periodRate = annualRate / perYear;
   const dailyRate = annualRate / 365;
-  const savingsFlat = round10(
+  const savingsFlat = roundStep(
     principal * (Number(app.mandatory_savings_rate || 0) / 100),
   );
 
+  const origin = new Date();
+  origin.setHours(0, 0, 0, 0);
   const firstBase = app.first_due_date
     ? new Date(app.first_due_date)
-    : addPeriods(new Date(), app.periodicity, 1);
+    : addPeriods(origin, app.periodicity, 1);
+  // Convention CBS : 1ʳᵉ période d'intérêts = période théorique pleine
+  const firstPeriodDays = Math.max(
+    0,
+    Math.round(
+      (addPeriods(origin, app.periodicity, 1).getTime() - origin.getTime()) /
+        DAY_MS,
+    ),
+  );
 
   const rows: ScheduleRow[] = [];
   let totalInterest = 0;
@@ -517,11 +526,10 @@ function computeSchedulePreview(app: CreditApplication): SchedulePreview | null 
   // BULLET : une seule échéance au terme
   if (mechanism === "BULLET") {
     const lastNominal = addPeriods(firstBase, app.periodicity, count - 1);
-    const prevNominal = addPeriods(firstBase, app.periodicity, -1);
     const days = Math.round(
-      (lastNominal.getTime() - prevNominal.getTime()) / DAY_MS,
+      (lastNominal.getTime() - origin.getTime()) / DAY_MS,
     );
-    const interest = round10(principal * dailyRate * days);
+    const interest = roundStep(principal * dailyRate * Math.max(days, 0));
     const institution = principal + interest;
     totalInterest = interest;
     rows.push({
@@ -535,32 +543,38 @@ function computeSchedulePreview(app: CreditApplication): SchedulePreview | null 
     });
   } else {
     let payment = 0;
-    if (mechanism === "CONSTANT") {
+    if (mechanism === "DEGRESSIVE" || mechanism === "CONSTANT") {
       if (periodRate > 0) {
         payment =
           (principal * periodRate) / (1 - Math.pow(1 + periodRate, -count));
       } else {
         payment = principal / count;
       }
-      payment = round10(payment);
+      payment = roundStep(payment);
     }
-    const flatPrincipal = round10(principal / count);
 
     let balance = principal;
-    let prevNominal = addPeriods(firstBase, app.periodicity, -1);
+    // CONSTANT legacy : période avant 1re échéance
+    let prevNominal =
+      mechanism === "DEGRESSIVE"
+        ? firstBase
+        : addPeriods(firstBase, app.periodicity, -1);
     for (let n = 1; n <= count; n++) {
       const nominal = addPeriods(firstBase, app.periodicity, n - 1);
-      const days = Math.round(
-        (nominal.getTime() - prevNominal.getTime()) / DAY_MS,
-      );
-      const interest = round10(balance * dailyRate * days);
+      const days =
+        mechanism === "DEGRESSIVE" && n === 1
+          ? firstPeriodDays
+          : Math.max(
+              0,
+              Math.round((nominal.getTime() - prevNominal.getTime()) / DAY_MS),
+            );
+      const interest = roundStep(balance * dailyRate * days);
       const isLast = n === count;
       let principalPart: number;
       if (mechanism === "IN_FINE") {
         principalPart = isLast ? balance : 0;
-      } else if (mechanism === "DEGRESSIVE") {
-        principalPart = isLast ? balance : Math.min(flatPrincipal, balance);
       } else {
+        // DEGRESSIVE / CONSTANT : échéance constante, capital = annuité − intérêts
         principalPart = isLast ? balance : Math.max(0, payment - interest);
       }
       balance = balance - principalPart;

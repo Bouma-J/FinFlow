@@ -882,10 +882,10 @@ export const CREDIT_LABELS = {
     ANNUAL: "Annuelle",
   } as Record<string, string>,
   repayment_mechanism: {
-    CONSTANT: "Échéances constantes",
     DEGRESSIVE: "Amortissement dégressif",
     IN_FINE: "In fine (capital à terme)",
     BULLET: "Remboursement unique (bullet)",
+    CONSTANT: "Échéances constantes (historique)",
   } as Record<string, string>,
   tax_regime: {
     SYNTHETIC: "Impôt synthétique",
@@ -1312,17 +1312,27 @@ export interface DashboardData {
   };
 }
 
+export interface SimulationScheduleRow {
+  number: number;
+  due_date: string;
+  principal: string | number;
+  interest: string | number;
+  savings: string | number;
+  institution_due: string | number;
+  total: string | number;
+  balance: string | number;
+}
+
+/** Réponse de POST /credit-applications/simulate/ (engine ACT/365, convention CBS). */
 export interface SimulationResult {
-  monthly_payment: string;
-  total_repayment: string;
-  total_interest: string;
-  schedule: {
-    number: number;
-    due_date: string;
-    principal: string;
-    interest: string;
-    total: string;
-  }[];
+  installment: string | number;
+  monthly_payment: string | number;
+  client_total_first: string | number;
+  total_repayment: string | number;
+  total_institution: string | number;
+  total_interest: string | number;
+  total_savings: string | number;
+  schedule: SimulationScheduleRow[];
 }
 
 // ------------------------------------------------------------------------- //

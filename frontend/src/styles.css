@@ -4909,3 +4909,88 @@ code {
   margin-top: 4px;
   font-size: 12px;
 }
+
+/* ---------- Simulateur d'amortissement ---------- */
+.simulator-page .detail-row {
+  max-width: 1100px;
+}
+.simulator-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+.simulator-savings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.simulator-savings.is-on {
+  border-color: color-mix(in srgb, var(--teal-400) 55%, var(--border));
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--teal-50) 80%, #fff),
+    var(--surface)
+  );
+}
+.simulator-savings-toggle {
+  font-weight: 600;
+  color: var(--text);
+}
+.simulator-savings-toggle svg {
+  color: var(--teal-600);
+}
+.simulator-savings-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 320px;
+}
+.simulator-savings-fields .field {
+  margin: 0;
+}
+.simulator-card-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.simulator-schedule-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  flex: 1;
+}
+.simulator-meta {
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+.simulator-basis {
+  align-items: flex-start;
+  margin-bottom: 0;
+  font-weight: 400;
+}
+.simulator-basis strong {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+.simulator-basis ul {
+  margin: 0;
+  padding-left: 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.simulator-page .table tfoot td {
+  font-weight: 600;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}

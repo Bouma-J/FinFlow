@@ -7,6 +7,24 @@ Guide pas à pas pour déployer **FIN_FLOW** sur un serveur **Ubuntu Server 22.0
 
 Pour la vue d’ensemble multi-environnements (Compose démo, Kubernetes, bare metal), voir aussi [04 — Guide de déploiement](04-guide-deploiement.md).
 
+### Installation assistée (recommandée)
+
+Un script interactif automatise Docker, Nginx, le `.env`, Compose prod et Let’s Encrypt :
+
+```bash
+# Sur Ubuntu 22.04 / 24.04, en root
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
+```
+
+Ou, si le dépôt est déjà cloné :
+
+```bash
+cd /chemin/vers/FinFlow
+sudo bash deploy/ubuntu-install.sh
+```
+
+Le script demande domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, e-mail Certbot, etc., puis déploie sous `/opt/finflow` (personnalisable). Les sections ci-dessous restent la référence manuelle pas à pas.
+
 ---
 
 ## 1. Architecture déployée
@@ -150,14 +168,29 @@ sudo systemctl enable --now fail2ban
 sudo fail2ban-client status sshd
 ```
 
-### 3.5 DNS
+### 3.5 DNS (chez le registrar / serveur DNS — pas sur le serveur FinFlow)
 
-Avant le certificat TLS, créez les enregistrements :
+Ces enregistrements se créent **sur le DNS public** de votre domaine (espace client OVH, Cloudflare, Gandi, serveur Bind/PowerDNS du prestataire, etc.).
 
-| Type | Nom | Valeur |
-|------|-----|--------|
-| A | `finflow.votredomaine.tld` | IP du serveur |
-| A | `minio.votredomaine.tld` | IP du serveur (recommandé pour les fichiers) |
+Ils ne se mettent **pas** dans `/etc/hosts` du serveur qui héberge FIN_FLOW : ce fichier ne sert qu’à des tests locaux sur une machine de développement.
+
+Avant le certificat TLS (Let’s Encrypt), créez :
+
+| Type | Nom | Valeur | Où le configurer |
+|------|-----|--------|------------------|
+| A | `finflow.votredomaine.tld` | IP publique du serveur FinFlow | Panneau DNS du domaine |
+| A | `minio.votredomaine.tld` | IP publique du serveur FinFlow | Panneau DNS du domaine (recommandé pour les fichiers) |
+
+Vérification depuis n’importe quelle machine :
+
+```bash
+dig +short finflow.votredomaine.tld
+# doit renvoyer l’IP publique du serveur
+```
+
+> **Exception lab / sans domaine :** uniquement pour un essai interne, vous pouvez ajouter une ligne dans `/etc/hosts` **sur le PC client** (celui du navigateur), pas comme solution de production :
+> `IP_DU_SERVEUR  finflow.local minio.local`
+
 
 ---
 
@@ -572,6 +605,7 @@ journalctl -u nginx -u docker -n 100 --no-pager
 ## 15. Références
 
 - **Dépôt GitHub :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
+- **Script d’install Ubuntu :** [`../deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh)  
 - Configuration détaillée : [05 — Configuration](05-configuration.md)  
 - Architecture : [02 — Architecture technique](02-architecture-technique.md)  
 - Exploitation : [10 — Exploitation](10-exploitation-supervision.md)  

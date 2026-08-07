@@ -568,7 +568,7 @@ def build_context(application, extra_values: dict | None = None) -> dict:
                 periodicity=application.periodicity,
                 first_due_date=application.first_due_date,
                 savings_rate=application.mandatory_savings_rate or 0,
-                mechanism=application.repayment_mechanism or "CONSTANT",
+                mechanism=application.repayment_mechanism or "DEGRESSIVE",
             )
             for row in schedule:
                 total_interets += Decimal(str(row["interest"]))
