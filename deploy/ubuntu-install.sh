@@ -118,7 +118,7 @@ install_base_packages() {
     ca-certificates curl wget gnupg lsb-release \
     apt-transport-https software-properties-common \
     git unzip jq htop net-tools openssl ufw fail2ban \
-    dnsutils rsync \
+    dnsutils rsync openssh-server \
     nginx certbot python3-certbot-nginx
   ok "Paquets système installés."
 }
@@ -150,7 +150,15 @@ configure_ufw() {
   log "Configuration UFW…"
   ufw default deny incoming
   ufw default allow outgoing
-  ufw allow OpenSSH
+
+  # Profil « OpenSSH » absent si openssh-server n'est pas installé (ex. certaines images cloud).
+  if ufw app list 2>/dev/null | grep -qx 'OpenSSH'; then
+    ufw allow OpenSSH
+  else
+    warn "Profil UFW OpenSSH introuvable — ouverture du port 22/tcp."
+    ufw allow 22/tcp
+  fi
+
   ufw allow 80/tcp
   ufw allow 443/tcp
   # MinIO public uniquement si pas de sous-domaine HTTPS dédié
