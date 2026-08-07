@@ -189,13 +189,18 @@ class UserSerializer(serializers.ModelSerializer):
         tenant = attrs.get("tenant", getattr(self.instance, "tenant", None))
         agency = attrs.get("agency", getattr(self.instance, "agency", None))
         agencies = attrs.get("agencies")
+        data_scope = attrs.get(
+            "data_scope",
+            getattr(self.instance, "data_scope", DataScope.AGENCY),
+        )
 
         if not is_group:
-            if agency is None:
+            # Admin filiale (TENANT) : agence non obligatoire.
+            if agency is None and data_scope != DataScope.TENANT:
                 raise serializers.ValidationError({
                     "agency": "L'agence principale est obligatoire."
                 })
-            if tenant and agency.tenant_id != tenant.id:
+            if agency is not None and tenant and agency.tenant_id != tenant.id:
                 raise serializers.ValidationError({
                     "agency": "L'agence doit appartenir à la filiale."
                 })
@@ -328,23 +333,39 @@ class UserCreateSerializer(serializers.ModelSerializer):
                         "tenant": "La filiale est obligatoire pour un utilisateur filiale."
                     })
             agency = attrs.get("agency")
-            if agency is None:
-                raise serializers.ValidationError({
-                    "agency": "L'agence principale est obligatoire."
-                })
-            if agency.tenant_id != attrs["tenant"].id:
-                raise serializers.ValidationError({
-                    "agency": "L'agence doit appartenir à la filiale."
-                })
-            agencies = attrs.get("agencies", [])
-            if agencies:
+            if as_admin:
+                # Admin filiale = périmètre toute la filiale ; agence optionnelle.
+                attrs["data_scope"] = DataScope.TENANT
+                if agency is not None and agency.tenant_id != attrs["tenant"].id:
+                    raise serializers.ValidationError({
+                        "agency": "L'agence doit appartenir à la filiale."
+                    })
+                agencies = attrs.get("agencies", [])
                 for ag in agencies:
                     if ag.tenant_id != attrs["tenant"].id:
                         raise serializers.ValidationError({
                             "agency_ids": "Toutes les agences doivent appartenir à la filiale."
                         })
+                if not agencies and agency is not None:
+                    attrs["agencies"] = [agency]
             else:
-                attrs["agencies"] = [agency]
+                if agency is None:
+                    raise serializers.ValidationError({
+                        "agency": "L'agence principale est obligatoire."
+                    })
+                if agency.tenant_id != attrs["tenant"].id:
+                    raise serializers.ValidationError({
+                        "agency": "L'agence doit appartenir à la filiale."
+                    })
+                agencies = attrs.get("agencies", [])
+                if agencies:
+                    for ag in agencies:
+                        if ag.tenant_id != attrs["tenant"].id:
+                            raise serializers.ValidationError({
+                                "agency_ids": "Toutes les agences doivent appartenir à la filiale."
+                            })
+                else:
+                    attrs["agencies"] = [agency]
             groups = attrs.get("groups", [])
             if groups and not as_admin:
                 try:
@@ -379,7 +400,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             send_mail = delivery == PASSWORD_DELIVERY_EMAIL
             user, _ = provision_filiale_admin(
                 tenant=validated_data["tenant"],
-                agency=validated_data["agency"],
+                agency=validated_data.get("agency"),
                 username=validated_data["username"],
                 password=None if send_mail else raw_password,
                 email=validated_data.get("email", ""),
@@ -450,7 +471,7 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
         required=False, allow_blank=True, default="", max_length=50
     )
     tenant = serializers.UUIDField(required=False)
-    agency = serializers.UUIDField()
+    agency = serializers.UUIDField(required=False, allow_null=True)
     agency_ids = serializers.ListField(
         child=serializers.UUIDField(),
         required=False,
@@ -488,17 +509,19 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
                 "tenant": "Filiale introuvable."
             }) from exc
 
-        try:
-            agency = Agency.objects.get(pk=attrs["agency"])
-        except Agency.DoesNotExist as exc:
-            raise serializers.ValidationError({
-                "agency": "Agence introuvable."
-            }) from exc
-
-        if agency.tenant_id != tenant.id:
-            raise serializers.ValidationError({
-                "agency": "L'agence doit appartenir à la filiale."
-            })
+        agency = None
+        agency_id = attrs.get("agency")
+        if agency_id:
+            try:
+                agency = Agency.objects.get(pk=agency_id)
+            except Agency.DoesNotExist as exc:
+                raise serializers.ValidationError({
+                    "agency": "Agence introuvable."
+                }) from exc
+            if agency.tenant_id != tenant.id:
+                raise serializers.ValidationError({
+                    "agency": "L'agence doit appartenir à la filiale."
+                })
 
         extra_ids = attrs.get("agency_ids") or []
         agencies = []
@@ -530,7 +553,7 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
 
         user, created = provision_filiale_admin(
             tenant=validated_data["tenant_obj"],
-            agency=validated_data["agency_obj"],
+            agency=validated_data.get("agency_obj"),
             username=validated_data["username"],
             password=None if send_mail else raw_password,
             email=validated_data.get("email", ""),

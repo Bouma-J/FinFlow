@@ -113,13 +113,8 @@ export function AdminUsersPage() {
             phone: payload.phone,
             employee_id: payload.employee_id,
             tenant: payload.tenant || activeTenant,
-            agency: payload.agency,
-            agency_ids:
-              payload.agency_ids.length > 0
-                ? payload.agency_ids
-                : payload.agency
-                  ? [payload.agency]
-                  : [],
+            ...(payload.agency ? { agency: payload.agency } : {}),
+            agency_ids: payload.agency_ids,
             ...passwordFields,
           })
         ).data;
@@ -238,7 +233,7 @@ export function AdminUsersPage() {
         return;
       }
     }
-    if (!form.is_group_level && !form.agency) {
+    if (!form.is_group_level && !form.as_filiale_admin && !form.agency) {
       setError("L'agence principale est obligatoire.");
       return;
     }
@@ -290,6 +285,8 @@ export function AdminUsersPage() {
       as_filiale_admin: checked,
       is_group_level: false,
       data_scope: checked ? "TENANT" : f.data_scope,
+      agency: checked ? "" : f.agency,
+      agency_ids: checked ? [] : f.agency_ids,
       group_ids:
         checked && adminRole
           ? Array.from(new Set([...f.group_ids, adminRole.id]))
@@ -475,7 +472,7 @@ export function AdminUsersPage() {
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
               />
             </label>
-            {!form.is_group_level && (
+            {!form.is_group_level && !form.as_filiale_admin && (
               <>
                 <label className="field">
                   <span>Agence principale *</span>
@@ -503,33 +500,31 @@ export function AdminUsersPage() {
                     ))}
                   </select>
                 </label>
-                {!form.as_filiale_admin && (
-                  <label className="field">
-                    <span>Périmètre de données</span>
-                    <select
-                      value={form.data_scope}
-                      onChange={(e) =>
-                        setForm({
-                          ...form,
-                          data_scope: e.target.value as DataScope,
-                        })
-                      }
-                    >
-                      {DATA_SCOPE_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                )}
-                {form.as_filiale_admin && (
-                  <label className="field">
-                    <span>Périmètre de données</span>
-                    <input value="Toute la filiale" readOnly />
-                  </label>
-                )}
+                <label className="field">
+                  <span>Périmètre de données</span>
+                  <select
+                    value={form.data_scope}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        data_scope: e.target.value as DataScope,
+                      })
+                    }
+                  >
+                    {DATA_SCOPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </>
+            )}
+            {form.as_filiale_admin && (
+              <label className="field">
+                <span>Périmètre de données</span>
+                <input value="Toute la filiale (toutes agences)" readOnly />
+              </label>
             )}
             {user?.is_group_level && !activeTenant && (
               <>
@@ -573,7 +568,7 @@ export function AdminUsersPage() {
             )}
           </div>
 
-          {!form.is_group_level && (
+          {!form.is_group_level && !form.as_filiale_admin && (
             <div className="checkbox-group">
               <span className="field-legend">
                 Agences supplémentaires (accès multi-agences)
@@ -632,7 +627,8 @@ export function AdminUsersPage() {
           {form.as_filiale_admin && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Le rôle <strong>Administrateur filiale</strong> sera attribué
-              automatiquement.
+              automatiquement. Accès à toute la filiale — aucune agence à
+              sélectionner.
             </p>
           )}
 

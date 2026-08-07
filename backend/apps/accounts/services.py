@@ -610,8 +610,8 @@ def ensure_default_role_packs(tenant):
 def provision_filiale_admin(
     *,
     tenant,
-    agency,
     username,
+    agency=None,
     password=None,
     email="",
     first_name="",
@@ -624,7 +624,7 @@ def provision_filiale_admin(
 ):
     """
     Crée (ou met à jour) un administrateur de filiale :
-    - rattachement tenant + agence
+    - rattachement tenant (agence optionnelle — périmètre toute la filiale)
     - data_scope = TENANT
     - is_staff = True (accès menus Administration)
     - rôle Administrateur filiale (toutes permissions métier)
@@ -637,7 +637,7 @@ def provision_filiale_admin(
         send_credentials_email,
     )
 
-    if agency.tenant_id != tenant.id:
+    if agency is not None and agency.tenant_id != tenant.id:
         raise ValueError("L'agence doit appartenir à la filiale.")
     if send_credentials and not (email or "").strip():
         raise ValueError(
@@ -646,7 +646,7 @@ def provision_filiale_admin(
 
     admin_group = ensure_filiale_admin_role(tenant)
     agencies = list(agency_ids or [])
-    if agency not in agencies:
+    if agency is not None and agency not in agencies:
         agencies = [agency, *agencies]
     for ag in agencies:
         if ag.tenant_id != tenant.id:

@@ -109,7 +109,12 @@ class User(AbstractUser):
             raise ValidationError(
                 "Un utilisateur Groupe ne doit pas être rattaché à une filiale."
             )
-        if not self.is_group_level and self.agency_id is None:
+        # Admin filiale (périmètre TENANT) : agence optionnelle.
+        if (
+            not self.is_group_level
+            and self.agency_id is None
+            and self.data_scope != DataScope.TENANT
+        ):
             raise ValidationError(
                 "Un utilisateur filiale doit être rattaché à une agence."
             )
