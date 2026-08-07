@@ -9,21 +9,30 @@ Pour la vue d’ensemble multi-environnements (Compose démo, Kubernetes, bare m
 
 ### Installation assistée (recommandée)
 
-Un script interactif automatise Docker, Nginx, le `.env`, Compose prod et Let’s Encrypt :
+Deux scripts interactifs au choix :
+
+| Script | Cas d’usage | Accès |
+|--------|-------------|--------|
+| [`deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh) | Domaines DNS + Let’s Encrypt | `https://finflow.…` |
+| [`deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh) | Lab / IP seule, sans DNS | `http://<IP>/` |
+
+**Avec domaines + TLS :**
 
 ```bash
-# Sur Ubuntu 22.04 / 24.04, en root
 sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
-```
-
-Ou, si le dépôt est déjà cloné :
-
-```bash
-cd /chemin/vers/FinFlow
+# ou dépôt cloné :
 sudo bash deploy/ubuntu-install.sh
 ```
 
-Le script demande domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, e-mail Certbot, etc., puis déploie sous `/opt/finflow` (personnalisable). Les sections ci-dessous restent la référence manuelle pas à pas.
+**Par adresse IP (HTTP, sans domaine) :**
+
+```bash
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install-ip.sh | bash'
+# ou dépôt cloné :
+sudo bash deploy/ubuntu-install-ip.sh
+```
+
+Les scripts demandent IP ou domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, etc., puis déploient sous `/opt/finflow` (personnalisable). Le mode IP utilise aussi [`docker-compose.ip.yml`](../docker-compose.ip.yml) (MinIO exposé sur `:9000`). Les sections ci-dessous restent la référence manuelle pas à pas.
 
 ---
 
@@ -605,7 +614,9 @@ journalctl -u nginx -u docker -n 100 --no-pager
 ## 15. Références
 
 - **Dépôt GitHub :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
-- **Script d’install Ubuntu :** [`../deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh)  
+- **Script d’install Ubuntu (domaines + TLS) :** [`../deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh)  
+- **Script d’install Ubuntu (IP / HTTP) :** [`../deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh)  
+- **Compose surcharge IP :** [`../docker-compose.ip.yml`](../docker-compose.ip.yml)  
 - Configuration détaillée : [05 — Configuration](05-configuration.md)  
 - Architecture : [02 — Architecture technique](02-architecture-technique.md)  
 - Exploitation : [10 — Exploitation](10-exploitation-supervision.md)  
