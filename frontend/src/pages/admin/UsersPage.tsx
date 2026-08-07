@@ -13,6 +13,8 @@ const DATA_SCOPE_OPTIONS: { value: DataScope; label: string }[] = [
   { value: "TENANT", label: "Toute la filiale" },
 ];
 
+type PasswordDelivery = "email" | "manual";
+
 const EMPTY = {
   username: "",
   first_name: "",
@@ -28,6 +30,9 @@ const EMPTY = {
   is_active: true,
   group_ids: [] as number[],
   as_filiale_admin: false,
+  password_delivery: "email" as PasswordDelivery,
+  password: "",
+  password_confirm: "",
 };
 
 export function AdminUsersPage() {
@@ -42,6 +47,11 @@ export function AdminUsersPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<AdminUser | null>(null);
+  const [resetTarget, setResetTarget] = useState<AdminUser | null>(null);
+  const [resetDelivery, setResetDelivery] = useState<PasswordDelivery>("email");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [resetError, setResetError] = useState<string | null>(null);
 
   const tenants = useQuery({
     queryKey: ["tenants"],
@@ -84,6 +94,15 @@ export function AdminUsersPage() {
 
   const createMutation = useMutation({
     mutationFn: async (payload: typeof form) => {
+      const passwordFields = {
+        password_delivery: payload.password_delivery,
+        ...(payload.password_delivery === "manual"
+          ? {
+              password: payload.password,
+              password_confirm: payload.password_confirm,
+            }
+          : {}),
+      };
       if (payload.as_filiale_admin && user?.is_group_level) {
         return (
           await api.post("/users/provision-filiale-admin/", {
@@ -101,6 +120,7 @@ export function AdminUsersPage() {
                 : payload.agency
                   ? [payload.agency]
                   : [],
+            ...passwordFields,
           })
         ).data;
       }
@@ -124,6 +144,7 @@ export function AdminUsersPage() {
         is_active: payload.is_active,
         group_ids: payload.group_ids,
         as_filiale_admin: false,
+        ...passwordFields,
       };
       return (await api.post("/users/", body)).data;
     },
@@ -145,7 +166,7 @@ export function AdminUsersPage() {
     },
     onError: () =>
       setError(
-        "Création impossible (identifiant déjà pris, e-mail ou agence manquants ?).",
+        "Création impossible (identifiant, mot de passe, e-mail ou agence ?).",
       ),
   });
 
@@ -164,33 +185,92 @@ export function AdminUsersPage() {
   });
 
   const resetPwdMutation = useMutation({
-    mutationFn: async (id: string) =>
-      (await api.post(`/users/${id}/reset-password/`)).data as {
+    mutationFn: async ({
+      id,
+      password_delivery,
+      password,
+      password_confirm,
+    }: {
+      id: string;
+      password_delivery: PasswordDelivery;
+      password?: string;
+      password_confirm?: string;
+    }) =>
+      (
+        await api.post(`/users/${id}/reset-password/`, {
+          password_delivery,
+          ...(password_delivery === "manual"
+            ? { password, password_confirm }
+            : {}),
+        })
+      ).data as {
         detail: string;
         email_sent: boolean;
       },
     onSuccess: (data) => {
       invalidate();
+      setResetTarget(null);
+      setResetPassword("");
+      setResetPasswordConfirm("");
+      setResetError(null);
       setSuccess(data.detail);
     },
     onError: () =>
-      setError(
-        "Régénération impossible (vérifiez que l'utilisateur a une adresse e-mail).",
+      setResetError(
+        "Régénération impossible (e-mail manquant, mot de passe trop faible ?).",
       ),
   });
 
   function submit(e: FormEvent) {
     e.preventDefault();
     setSuccess(null);
-    if (!form.email.trim()) {
-      setError("L'adresse e-mail est obligatoire (envoi du mot de passe).");
+    if (form.password_delivery === "email" && !form.email.trim()) {
+      setError("L'adresse e-mail est obligatoire pour l'envoi du mot de passe.");
       return;
+    }
+    if (form.password_delivery === "manual") {
+      if (form.password.length < 10) {
+        setError("Le mot de passe doit contenir au moins 10 caractères.");
+        return;
+      }
+      if (form.password !== form.password_confirm) {
+        setError("Les mots de passe ne correspondent pas.");
+        return;
+      }
     }
     if (!form.is_group_level && !form.agency) {
       setError("L'agence principale est obligatoire.");
       return;
     }
     createMutation.mutate(form);
+  }
+
+  function submitReset(e: FormEvent) {
+    e.preventDefault();
+    if (!resetTarget) return;
+    setResetError(null);
+    if (resetDelivery === "email" && !resetTarget.email?.trim()) {
+      setResetError(
+        "Cet utilisateur n'a pas d'e-mail. Choisissez la définition manuelle.",
+      );
+      return;
+    }
+    if (resetDelivery === "manual") {
+      if (resetPassword.length < 10) {
+        setResetError("Le mot de passe doit contenir au moins 10 caractères.");
+        return;
+      }
+      if (resetPassword !== resetPasswordConfirm) {
+        setResetError("Les mots de passe ne correspondent pas.");
+        return;
+      }
+    }
+    resetPwdMutation.mutate({
+      id: resetTarget.id,
+      password_delivery: resetDelivery,
+      password: resetPassword,
+      password_confirm: resetPasswordConfirm,
+    });
   }
 
   function toggleRole(list: number[], id: number): number[] {
@@ -268,11 +348,40 @@ export function AdminUsersPage() {
 
       {showForm && (
         <form className="inline-form" onSubmit={submit}>
-          <p className="muted small" style={{ marginBottom: 12 }}>
-            Le mot de passe est généré automatiquement et envoyé à l&apos;adresse
-            e-mail renseignée. L&apos;utilisateur devra le changer à la première
-            connexion.
-          </p>
+          <fieldset className="password-delivery">
+            <legend>Mot de passe initial</legend>
+            <label className="radio">
+              <input
+                type="radio"
+                name="password_delivery"
+                checked={form.password_delivery === "email"}
+                onChange={() =>
+                  setForm({
+                    ...form,
+                    password_delivery: "email",
+                    password: "",
+                    password_confirm: "",
+                  })
+                }
+              />
+              <span>Générer et envoyer par e-mail</span>
+            </label>
+            <label className="radio">
+              <input
+                type="radio"
+                name="password_delivery"
+                checked={form.password_delivery === "manual"}
+                onChange={() =>
+                  setForm({ ...form, password_delivery: "manual" })
+                }
+              />
+              <span>Définir manuellement (si le serveur mail est indisponible)</span>
+            </label>
+            <p className="muted small" style={{ marginTop: 8 }}>
+              Dans les deux cas, l&apos;utilisateur devra changer ce mot de passe
+              à la première connexion.
+            </p>
+          </fieldset>
           {canProvisionFilialeAdmin && (
             <label className="checkbox" style={{ marginBottom: 12 }}>
               <input
@@ -298,14 +407,49 @@ export function AdminUsersPage() {
               />
             </label>
             <label className="field">
-              <span>E-mail * (réception du mot de passe)</span>
+              <span>
+                E-mail
+                {form.password_delivery === "email"
+                  ? " * (réception du mot de passe)"
+                  : " (optionnel)"}
+              </span>
               <input
                 type="email"
                 value={form.email}
                 onChange={(e) => setForm({ ...form, email: e.target.value })}
-                required
+                required={form.password_delivery === "email"}
               />
             </label>
+            {form.password_delivery === "manual" && (
+              <>
+                <label className="field">
+                  <span>Mot de passe * (min. 10 car.)</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={form.password}
+                    onChange={(e) =>
+                      setForm({ ...form, password: e.target.value })
+                    }
+                    required
+                    minLength={10}
+                  />
+                </label>
+                <label className="field">
+                  <span>Confirmer le mot de passe *</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={form.password_confirm}
+                    onChange={(e) =>
+                      setForm({ ...form, password_confirm: e.target.value })
+                    }
+                    required
+                    minLength={10}
+                  />
+                </label>
+              </>
+            )}
             <label className="field">
               <span>Prénom</span>
               <input
@@ -488,7 +632,7 @@ export function AdminUsersPage() {
           {form.as_filiale_admin && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Le rôle <strong>Administrateur filiale</strong> sera attribué
-              automatiquement. Le mot de passe temporaire partira par e-mail.
+              automatiquement.
             </p>
           )}
 
@@ -725,17 +869,16 @@ export function AdminUsersPage() {
                     </button>
                     <button
                       className="btn btn-ghost btn-sm"
-                      title="Régénérer le mot de passe et l'envoyer par e-mail"
-                      disabled={resetPwdMutation.isPending || !u.email}
+                      title="Régénérer le mot de passe"
+                      disabled={resetPwdMutation.isPending}
                       onClick={() => {
-                        if (
-                          window.confirm(
-                            `Régénérer le mot de passe de ${u.username} et l'envoyer à ${u.email} ?`,
-                          )
-                        ) {
-                          setError(null);
-                          resetPwdMutation.mutate(u.id);
-                        }
+                        setError(null);
+                        setSuccess(null);
+                        setResetError(null);
+                        setResetDelivery(u.email ? "email" : "manual");
+                        setResetPassword("");
+                        setResetPasswordConfirm("");
+                        setResetTarget(u);
                       }}
                     >
                       <KeyRound size={14} /> Mot de passe
@@ -752,6 +895,98 @@ export function AdminUsersPage() {
           onPageChange={setPage}
         />
         </>
+      )}
+
+      {resetTarget && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() => !resetPwdMutation.isPending && setResetTarget(null)}
+        >
+          <form
+            className="modal-card"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={submitReset}
+          >
+            <h3>Mot de passe — {resetTarget.username}</h3>
+            <fieldset className="password-delivery">
+              <legend>Mode</legend>
+              <label className="radio">
+                <input
+                  type="radio"
+                  name="reset_delivery"
+                  checked={resetDelivery === "email"}
+                  disabled={!resetTarget.email}
+                  onChange={() => setResetDelivery("email")}
+                />
+                <span>
+                  Générer et envoyer par e-mail
+                  {resetTarget.email
+                    ? ` (${resetTarget.email})`
+                    : " — aucun e-mail renseigné"}
+                </span>
+              </label>
+              <label className="radio">
+                <input
+                  type="radio"
+                  name="reset_delivery"
+                  checked={resetDelivery === "manual"}
+                  onChange={() => setResetDelivery("manual")}
+                />
+                <span>Définir manuellement</span>
+              </label>
+            </fieldset>
+            {resetDelivery === "manual" && (
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span>Nouveau mot de passe * (min. 10 car.)</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={resetPassword}
+                    onChange={(e) => setResetPassword(e.target.value)}
+                    required
+                    minLength={10}
+                    autoFocus
+                  />
+                </label>
+                <label className="field">
+                  <span>Confirmation *</span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={resetPasswordConfirm}
+                    onChange={(e) => setResetPasswordConfirm(e.target.value)}
+                    required
+                    minLength={10}
+                  />
+                </label>
+              </div>
+            )}
+            <p className="muted small" style={{ marginTop: 8 }}>
+              L&apos;utilisateur devra changer ce mot de passe à la prochaine
+              connexion.
+            </p>
+            {resetError && <div className="form-error">{resetError}</div>}
+            <div className="row-actions" style={{ marginTop: 12 }}>
+              <button
+                type="submit"
+                className="btn btn-primary btn-sm"
+                disabled={resetPwdMutation.isPending}
+              >
+                {resetPwdMutation.isPending ? "En cours…" : "Appliquer"}
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={resetPwdMutation.isPending}
+                onClick={() => setResetTarget(null)}
+              >
+                Annuler
+              </button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );

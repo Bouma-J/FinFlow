@@ -631,7 +631,11 @@ def provision_filiale_admin(
     - mot de passe temporaire généré et envoyé par e-mail (sauf override)
     """
     from .models import DataScope, User
-    from .password_services import issue_temporary_password
+    from .password_services import (
+        assign_password,
+        issue_temporary_password,
+        send_credentials_email,
+    )
 
     if agency.tenant_id != tenant.id:
         raise ValueError("L'agence doit appartenir à la filiale.")
@@ -670,12 +674,12 @@ def provision_filiale_admin(
     email_sent = False
     if created:
         if password:
-            user.set_password(password)
-            user.must_change_password = must_change_password
-            user.save()
+            assign_password(
+                user,
+                password,
+                must_change_password=must_change_password,
+            )
             if send_credentials:
-                from .password_services import send_credentials_email
-
                 email_sent = send_credentials_email(
                     user, password, reason="created"
                 )
@@ -708,9 +712,11 @@ def provision_filiale_admin(
             user.employee_id = employee_id
         user.save()
         if password is not None:
-            user.set_password(password)
-            user.must_change_password = must_change_password
-            user.save(update_fields=["password", "must_change_password"])
+            assign_password(
+                user,
+                password,
+                must_change_password=must_change_password,
+            )
         elif send_credentials:
             _, email_sent = issue_temporary_password(
                 user, reason="reset", send_email=True

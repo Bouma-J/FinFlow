@@ -123,6 +123,33 @@ def send_credentials_email(user, raw_password: str, *, reason: str = "created") 
         return False
 
 
+def _invalidate_me_cache(user) -> None:
+    try:
+        from apps.common.cache_utils import invalidate_prefix
+
+        invalidate_prefix("me", user.id)
+    except Exception:  # noqa: BLE001
+        logger.debug("Impossible d'invalider le cache me pour %s", user.pk)
+
+
+def assign_password(
+    user,
+    raw_password: str,
+    *,
+    must_change_password: bool = True,
+    commit: bool = True,
+) -> None:
+    """Applique un mot de passe choisi (admin) après validation Django."""
+    from django.contrib.auth.password_validation import validate_password
+
+    validate_password(raw_password, user=user)
+    user.set_password(raw_password)
+    user.must_change_password = must_change_password
+    if commit:
+        user.save(update_fields=["password", "must_change_password"])
+        _invalidate_me_cache(user)
+
+
 def issue_temporary_password(
     user,
     *,
@@ -136,13 +163,63 @@ def issue_temporary_password(
     user.must_change_password = True
     if commit:
         user.save(update_fields=["password", "must_change_password"])
-        try:
-            from apps.common.cache_utils import invalidate_prefix
-
-            invalidate_prefix("me", user.id)
-        except Exception:  # noqa: BLE001
-            logger.debug("Impossible d'invalider le cache me pour %s", user.pk)
+        _invalidate_me_cache(user)
     email_sent = False
     if send_email:
         email_sent = send_credentials_email(user, raw, reason=reason)
     return raw, email_sent
+
+
+PASSWORD_DELIVERY_EMAIL = "email"
+PASSWORD_DELIVERY_MANUAL = "manual"
+PASSWORD_DELIVERY_CHOICES = (
+    (PASSWORD_DELIVERY_EMAIL, "Envoyer par e-mail"),
+    (PASSWORD_DELIVERY_MANUAL, "Définir manuellement"),
+)
+
+
+def validate_password_delivery(attrs: dict, *, email_field: str = "email") -> dict:
+    """
+    Valide password_delivery / password / password_confirm.
+
+    - email : adresse e-mail obligatoire, mot de passe généré côté serveur.
+    - manual : mot de passe + confirmation obligatoires (e-mail optionnel).
+    """
+    from rest_framework import serializers
+
+    delivery = (attrs.get("password_delivery") or PASSWORD_DELIVERY_EMAIL).strip()
+    if delivery not in (PASSWORD_DELIVERY_EMAIL, PASSWORD_DELIVERY_MANUAL):
+        raise serializers.ValidationError({
+            "password_delivery": "Choix invalide (email ou manual)."
+        })
+    attrs["password_delivery"] = delivery
+
+    email = (attrs.get(email_field) or "").strip()
+    if delivery == PASSWORD_DELIVERY_EMAIL and not email:
+        raise serializers.ValidationError({
+            email_field: (
+                "L'adresse e-mail est obligatoire pour envoyer le mot de passe."
+            )
+        })
+    if email_field in attrs or email:
+        attrs[email_field] = email
+
+    password = attrs.get("password") or ""
+    confirm = attrs.get("password_confirm") or ""
+    if delivery == PASSWORD_DELIVERY_MANUAL:
+        if not password:
+            raise serializers.ValidationError({
+                "password": "Indiquez le mot de passe à attribuer."
+            })
+        if password != confirm:
+            raise serializers.ValidationError({
+                "password_confirm": "Les mots de passe ne correspondent pas."
+            })
+        if len(password) < 10:
+            raise serializers.ValidationError({
+                "password": "Le mot de passe doit contenir au moins 10 caractères."
+            })
+    else:
+        attrs.pop("password", None)
+        attrs.pop("password_confirm", None)
+    return attrs

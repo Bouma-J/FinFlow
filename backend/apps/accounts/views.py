@@ -82,15 +82,23 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
         headers = self.get_success_headers(serializer.data)
         data = UserCreateSerializer(user, context={"request": request}).data
         email_sent = bool(getattr(user, "_email_sent", False))
+        delivery = getattr(user, "_password_delivery", "email")
         data["email_sent"] = email_sent
-        data["detail"] = (
-            "Utilisateur créé. Mot de passe temporaire envoyé par e-mail."
-            if email_sent
-            else (
-                "Utilisateur créé, mais l'e-mail n'a pas pu être envoyé. "
-                "Utilisez « Régénérer le mot de passe »."
+        data["password_delivery"] = delivery
+        if delivery == "manual":
+            data["detail"] = (
+                "Utilisateur créé. Mot de passe défini manuellement "
+                "(changement obligatoire à la première connexion)."
             )
-        )
+        elif email_sent:
+            data["detail"] = (
+                "Utilisateur créé. Mot de passe temporaire envoyé par e-mail."
+            )
+        else:
+            data["detail"] = (
+                "Utilisateur créé, mais l'e-mail n'a pas pu être envoyé. "
+                "Utilisez « Mot de passe » pour le définir manuellement."
+            )
         return Response(data, status=status.HTTP_201_CREATED, headers=headers)
 
     @action(detail=False, methods=["get", "patch"])
@@ -153,7 +161,13 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="reset-password")
     def reset_password(self, request, pk=None):
-        """Régénère un mot de passe temporaire et l'envoie par e-mail (admin)."""
+        """Régénère un mot de passe (envoi e-mail ou définition manuelle)."""
+        from .password_services import (
+            PASSWORD_DELIVERY_EMAIL,
+            assign_password,
+        )
+        from .serializers import AdminSetPasswordSerializer
+
         actor = request.user
         if not (
             getattr(actor, "is_group_level", False)
@@ -164,24 +178,57 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
                 "Seuls les administrateurs peuvent régénérer un mot de passe."
             )
         user = self.get_object()
-        if not (user.email or "").strip():
-            raise ValidationError({
-                "email": (
-                    "Cet utilisateur n'a pas d'adresse e-mail. "
-                    "Renseignez-en une avant de régénérer le mot de passe."
-                )
+        serializer = AdminSetPasswordSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        delivery = serializer.validated_data["password_delivery"]
+
+        if delivery == PASSWORD_DELIVERY_EMAIL:
+            if not (user.email or "").strip():
+                raise ValidationError({
+                    "email": (
+                        "Cet utilisateur n'a pas d'adresse e-mail. "
+                        "Renseignez-en une, ou choisissez la définition manuelle."
+                    )
+                })
+            _, email_sent = issue_temporary_password(
+                user, reason="reset", send_email=True
+            )
+            invalidate_prefix("me", user.id)
+            return Response({
+                "detail": (
+                    "Mot de passe temporaire envoyé par e-mail."
+                    if email_sent
+                    else (
+                        "Mot de passe régénéré, mais l'e-mail n'a pas pu être "
+                        "envoyé. Réessayez en mode manuel."
+                    )
+                ),
+                "email_sent": email_sent,
+                "password_delivery": delivery,
+                "must_change_password": True,
+                "user_id": str(user.id),
             })
-        _, email_sent = issue_temporary_password(
-            user, reason="reset", send_email=True
-        )
+
+        try:
+            assign_password(
+                user,
+                serializer.validated_data["password"],
+                must_change_password=True,
+            )
+        except Exception as exc:  # noqa: BLE001 — ValidationError Django
+            raise ValidationError({
+                "password": list(exc.messages)
+                if hasattr(exc, "messages")
+                else [str(exc)]
+            }) from exc
         invalidate_prefix("me", user.id)
         return Response({
             "detail": (
-                "Mot de passe temporaire envoyé par e-mail."
-                if email_sent
-                else "Mot de passe régénéré, mais l'e-mail n'a pas pu être envoyé."
+                "Mot de passe défini manuellement "
+                "(changement obligatoire à la prochaine connexion)."
             ),
-            "email_sent": email_sent,
+            "email_sent": False,
+            "password_delivery": delivery,
             "must_change_password": True,
             "user_id": str(user.id),
         })
@@ -208,22 +255,30 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
             raise ValidationError({"detail": str(exc)}) from exc
         created = getattr(user, "_provision_created", True)
         email_sent = bool(getattr(user, "_email_sent", False))
+        delivery = getattr(user, "_password_delivery", "email")
         data = UserSerializer(user, context={"request": request}).data
+        if not created:
+            detail = "Compte existant élevé en administrateur filiale."
+        elif delivery == "manual":
+            detail = (
+                "Administrateur filiale créé. Mot de passe défini manuellement."
+            )
+        elif email_sent:
+            detail = (
+                "Administrateur filiale créé. Mot de passe envoyé par e-mail."
+            )
+        else:
+            detail = (
+                "Administrateur filiale créé, mais l'e-mail n'a pas pu être envoyé."
+            )
         return Response(
             {
                 **data,
                 "provisioned": True,
                 "created": created,
                 "email_sent": email_sent,
-                "detail": (
-                    "Administrateur filiale créé. Mot de passe envoyé par e-mail."
-                    if created and email_sent
-                    else (
-                        "Administrateur filiale créé."
-                        if created
-                        else "Compte existant élevé en administrateur filiale."
-                    )
-                ),
+                "password_delivery": delivery,
+                "detail": detail,
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )

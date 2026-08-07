@@ -247,7 +247,21 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "filiale (is_staff, périmètre TENANT, rôle Administrateur filiale)."
         ),
     )
+    password_delivery = serializers.ChoiceField(
+        choices=["email", "manual"],
+        required=False,
+        default="email",
+        write_only=True,
+        help_text="email = générer et envoyer ; manual = mot de passe saisi.",
+    )
+    password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, min_length=10
+    )
+    password_confirm = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, min_length=10
+    )
     email_sent = serializers.SerializerMethodField(read_only=True)
+    password_delivery_mode = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -255,26 +269,28 @@ class UserCreateSerializer(serializers.ModelSerializer):
             "id", "username", "email", "first_name", "last_name",
             "tenant", "agency", "agency_ids", "data_scope",
             "is_group_level", "employee_id", "phone",
-            "is_active", "group_ids", "as_filiale_admin", "email_sent",
+            "is_active", "group_ids", "as_filiale_admin",
+            "password_delivery", "password", "password_confirm",
+            "email_sent", "password_delivery_mode",
         ]
+        extra_kwargs = {
+            "email": {"required": False, "allow_blank": True},
+        }
 
     def get_email_sent(self, obj):
         return bool(getattr(obj, "_email_sent", False))
 
+    def get_password_delivery_mode(self, obj):
+        return getattr(obj, "_password_delivery", "email")
+
     def validate(self, attrs):
+        from .password_services import validate_password_delivery
+
         as_admin = attrs.pop("as_filiale_admin", False)
         request = self.context.get("request")
         actor = getattr(request, "user", None) if request else None
 
-        email = (attrs.get("email") or "").strip()
-        if not email:
-            raise serializers.ValidationError({
-                "email": (
-                    "L'adresse e-mail est obligatoire : le mot de passe "
-                    "temporaire y sera envoyé."
-                )
-            })
-        attrs["email"] = email
+        attrs = validate_password_delivery(attrs, email_field="email")
 
         if as_admin:
             if not (
@@ -344,27 +360,35 @@ class UserCreateSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        from .password_services import issue_temporary_password
+        from .password_services import (
+            PASSWORD_DELIVERY_EMAIL,
+            assign_password,
+            issue_temporary_password,
+        )
 
         as_admin = validated_data.pop("_as_filiale_admin", False)
         groups = validated_data.pop("groups", [])
         agencies = validated_data.pop("agencies", [])
+        delivery = validated_data.pop("password_delivery", PASSWORD_DELIVERY_EMAIL)
+        raw_password = validated_data.pop("password", None) or None
+        validated_data.pop("password_confirm", None)
 
         if as_admin:
             from .services import provision_filiale_admin
 
+            send_mail = delivery == PASSWORD_DELIVERY_EMAIL
             user, _ = provision_filiale_admin(
                 tenant=validated_data["tenant"],
                 agency=validated_data["agency"],
                 username=validated_data["username"],
-                password=None,
+                password=None if send_mail else raw_password,
                 email=validated_data.get("email", ""),
                 first_name=validated_data.get("first_name", ""),
                 last_name=validated_data.get("last_name", ""),
                 phone=validated_data.get("phone", ""),
                 employee_id=validated_data.get("employee_id", ""),
                 agency_ids=agencies,
-                send_credentials=True,
+                send_credentials=send_mail,
                 must_change_password=True,
             )
             if groups:
@@ -373,6 +397,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
                 except ValueError as exc:
                     raise serializers.ValidationError({"group_ids": str(exc)})
                 user.groups.add(*groups)
+            user._password_delivery = delivery  # noqa: SLF001
             return user
 
         validated_data["must_change_password"] = True
@@ -386,10 +411,24 @@ class UserCreateSerializer(serializers.ModelSerializer):
             user.agencies.add(user.agency)
         if groups:
             user.groups.set(groups)
-        _, email_sent = issue_temporary_password(
-            user, reason="created", send_email=True
-        )
-        user._email_sent = email_sent  # noqa: SLF001
+
+        if delivery == PASSWORD_DELIVERY_EMAIL:
+            _, email_sent = issue_temporary_password(
+                user, reason="created", send_email=True
+            )
+            user._email_sent = email_sent  # noqa: SLF001
+        else:
+            try:
+                assign_password(user, raw_password, must_change_password=True)
+            except Exception as exc:  # noqa: BLE001 — ValidationError Django
+                user.delete()
+                raise serializers.ValidationError({
+                    "password": list(exc.messages)
+                    if hasattr(exc, "messages")
+                    else [str(exc)]
+                }) from exc
+            user._email_sent = False  # noqa: SLF001
+        user._password_delivery = delivery  # noqa: SLF001
         return user
 
 
@@ -397,7 +436,7 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
     """Payload dédié : création d'un admin filiale par l'admin Groupe."""
 
     username = serializers.CharField(max_length=150)
-    email = serializers.EmailField()
+    email = serializers.EmailField(required=False, allow_blank=True)
     first_name = serializers.CharField(
         required=False, allow_blank=True, default="", max_length=150
     )
@@ -417,9 +456,23 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
         required=False,
         default=list,
     )
+    password_delivery = serializers.ChoiceField(
+        choices=["email", "manual"],
+        required=False,
+        default="email",
+    )
+    password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, min_length=10
+    )
+    password_confirm = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, min_length=10
+    )
 
     def validate(self, attrs):
         from apps.tenants.models import Agency, Tenant
+        from .password_services import validate_password_delivery
+
+        attrs = validate_password_delivery(attrs, email_field="email")
 
         tenant_id = attrs.get("tenant") or get_current_tenant_id()
         if not tenant_id:
@@ -468,24 +521,71 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
         return attrs
 
     def create(self, validated_data):
+        from .password_services import PASSWORD_DELIVERY_EMAIL
         from .services import provision_filiale_admin
+
+        delivery = validated_data.get("password_delivery", PASSWORD_DELIVERY_EMAIL)
+        send_mail = delivery == PASSWORD_DELIVERY_EMAIL
+        raw_password = validated_data.get("password") or None
 
         user, created = provision_filiale_admin(
             tenant=validated_data["tenant_obj"],
             agency=validated_data["agency_obj"],
             username=validated_data["username"],
-            password=None,
-            email=validated_data["email"],
+            password=None if send_mail else raw_password,
+            email=validated_data.get("email", ""),
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
             phone=validated_data.get("phone", ""),
             employee_id=validated_data.get("employee_id", ""),
             agency_ids=validated_data.get("agency_objs") or [],
-            send_credentials=True,
+            send_credentials=send_mail,
             must_change_password=True,
         )
         user._provision_created = created  # noqa: SLF001
+        user._password_delivery = delivery  # noqa: SLF001
         return user
+
+
+class AdminSetPasswordSerializer(serializers.Serializer):
+    """Régénération de mot de passe par un administrateur."""
+
+    password_delivery = serializers.ChoiceField(
+        choices=["email", "manual"],
+        required=False,
+        default="email",
+    )
+    password = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, min_length=10
+    )
+    password_confirm = serializers.CharField(
+        write_only=True, required=False, allow_blank=True, min_length=10
+    )
+
+    def validate(self, attrs):
+        from .password_services import (
+            PASSWORD_DELIVERY_EMAIL,
+            PASSWORD_DELIVERY_MANUAL,
+        )
+
+        delivery = attrs.get("password_delivery") or PASSWORD_DELIVERY_EMAIL
+        attrs["password_delivery"] = delivery
+        if delivery == PASSWORD_DELIVERY_MANUAL:
+            password = attrs.get("password") or ""
+            confirm = attrs.get("password_confirm") or ""
+            if not password:
+                raise serializers.ValidationError({
+                    "password": "Indiquez le mot de passe à attribuer."
+                })
+            if password != confirm:
+                raise serializers.ValidationError({
+                    "password_confirm": "Les mots de passe ne correspondent pas."
+                })
+        elif delivery != PASSWORD_DELIVERY_EMAIL:
+            raise serializers.ValidationError({
+                "password_delivery": "Choix invalide (email ou manual)."
+            })
+        return attrs
 
 
 class ChangePasswordSerializer(serializers.Serializer):
