@@ -82,10 +82,10 @@ Une fois les services démarrés :
 
 | Service | URL |
 |---------|-----|
-| Application (SPA) | http://localhost |
-| API REST | http://localhost/api/v1/ |
-| Documentation Swagger | http://localhost/api/docs/ |
-| Back-office Django | http://localhost/django-admin/ |
+| Application (SPA) | http://localhost:8080 |
+| API REST | http://localhost:8080/api/v1/ |
+| Documentation Swagger | http://localhost:8080/api/docs/ |
+| Back-office Django | http://localhost:8080/django-admin/ |
 | Console MinIO | http://localhost:9001 (`minioadmin` / `minioadmin`) |
 
 Au premier lancement, le backend applique les migrations, collecte les fichiers statiques puis charge les [données de démonstration](#données-de-démonstration). Connectez-vous ensuite avec l'un des comptes de démo.
