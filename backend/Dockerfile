@@ -19,7 +19,9 @@ RUN apt-get update \
 # vers ce magasin, qui contient déjà les racines publiques. Robuste que le
 # bundle d'entreprise soit présent, vide ou absent.
 COPY certs/ /certs/
-RUN if [ -s /certs/ca-bundle.crt ]; then \
+# Hors proxy d'entreprise le dossier peut ne contenir que .gitkeep.
+RUN touch /certs/ca-bundle.crt \
+    && if [ -s /certs/ca-bundle.crt ]; then \
         cat /certs/ca-bundle.crt >> /etc/ssl/certs/ca-certificates.crt; \
     fi
 ENV PIP_CERT=/etc/ssl/certs/ca-certificates.crt \

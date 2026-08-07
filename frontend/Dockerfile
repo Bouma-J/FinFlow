@@ -4,7 +4,9 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 # Certificats CA d'entreprise (proxy à inspection TLS) pour npm.
+# Hors proxy le dossier peut ne contenir que .gitkeep.
 COPY certs/ /certs/
+RUN touch /certs/ca-bundle.crt
 ENV NODE_EXTRA_CA_CERTS=/certs/ca-bundle.crt
 COPY package*.json ./
 RUN npm install

@@ -23,8 +23,11 @@ db.sqlite3
 *.env
 !*.env.example
 
-# Certificats CA locaux (proxy à inspection TLS) — spécifiques au poste
-certs/
+# Certificats CA locaux (proxy à inspection TLS) — spécifiques au poste.
+# Les dossiers backend/certs et frontend/certs restent versionnés (.gitkeep)
+# pour que Docker COPY certs/ fonctionne hors proxy d'entreprise.
+**/certs/*
+!**/certs/.gitkeep
 **/certs/ca-bundle.crt
 
 # Frontend (Node / Vite)
