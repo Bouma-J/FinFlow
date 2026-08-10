@@ -9,7 +9,10 @@ logger = logging.getLogger("finflow")
 @shared_task(ignore_result=True)
 def refresh_all_overdue_loans():
     """Recalcule les retards PAR pour tous les prêts actifs."""
-    from apps.collections.services import refresh_loan_overdue
+    from apps.collections.services import (
+        refresh_broken_promises,
+        refresh_loan_overdue,
+    )
     from apps.credits.models import Loan
 
     loans = Loan.all_tenants.filter(status=Loan.Status.ACTIVE).iterator()
@@ -20,5 +23,10 @@ def refresh_all_overdue_loans():
             count += 1
         except Exception:  # noqa: BLE001
             logger.exception("Échec refresh overdue loan=%s", loan.id)
-    logger.info("Recouvrement : %s prêts actualisés", count)
+    broken = refresh_broken_promises()
+    logger.info(
+        "Recouvrement : %s prêts actualisés, %s promesses rompues",
+        count,
+        broken,
+    )
     return count

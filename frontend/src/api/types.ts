@@ -1398,3 +1398,92 @@ export interface VariableCatalog {
   groups: VariableCatalogGroup[];
   loop_help: string;
 }
+
+export type CollectionStage =
+  | "AMICABLE"
+  | "PRECONTENTIOUS"
+  | "LITIGATION"
+  | "CLOSED";
+
+export type ParClass =
+  | "PAR0"
+  | "PAR1_30"
+  | "PAR31_90"
+  | "PAR91_180"
+  | "PAR180_PLUS";
+
+export type CollectionActionType =
+  | "CALL"
+  | "SMS"
+  | "EMAIL"
+  | "LETTER"
+  | "VISIT"
+  | "LEGAL";
+
+export type PromiseStatus = "PENDING" | "KEPT" | "BROKEN";
+
+export type InstallmentStatus = "PENDING" | "PAID" | "PARTIAL" | "OVERDUE";
+
+export interface CollectionAction {
+  id: string;
+  case: string;
+  action_type: CollectionActionType;
+  action_type_display: string;
+  action_date: string;
+  result: string;
+  comment: string;
+}
+
+export interface PaymentPromise {
+  id: string;
+  case: string;
+  amount: string;
+  promised_date: string;
+  status: PromiseStatus;
+  status_display: string;
+}
+
+export interface LoanRepayment {
+  id: string;
+  loan: string;
+  amount: string;
+  payment_date: string;
+  reference: string;
+  created_at: string;
+}
+
+export interface LoanInstallment {
+  id: string;
+  number: number;
+  due_date: string;
+  total_due: string;
+  amount_paid: string;
+  balance: string;
+  status: InstallmentStatus;
+  status_display: string;
+}
+
+export interface CollectionCase {
+  id: string;
+  loan: string;
+  loan_status: string;
+  loan_principal: string;
+  application_id: string;
+  application_reference: string;
+  client_name: string;
+  agency_name: string;
+  stage: CollectionStage;
+  stage_display: string;
+  par_class: ParClass;
+  par_class_display: string;
+  days_overdue: number;
+  overdue_amount: string;
+  assigned_to: string | null;
+  assigned_to_name: string | null;
+  created_at: string;
+  actions?: CollectionAction[];
+  promises?: PaymentPromise[];
+  repayments?: LoanRepayment[];
+  installments?: LoanInstallment[];
+  core_banking_reference?: string;
+}

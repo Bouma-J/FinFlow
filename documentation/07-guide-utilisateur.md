@@ -63,8 +63,12 @@ Menu **Tâches** / panneau de décision sur le dossier :
 
 ## 6. Recouvrement
 
-Les dossiers PAR sont mis à jour automatiquement (batch).  
-Consulter les cas, enregistrer actions / promesses / encaissements selon les écrans disponibles.
+Menu **Recouvrement** (`/recouvrement`) :
+- liste filtrable (PAR, stade, mon portefeuille, recherche) ;
+- fiche dossier : situation, échéancier, encaissement (répartition FIFO sur les échéances), actions de relance, promesses ;
+- changement de stade (amiable → précontentieux → contentieux / clôturé).
+
+Les retards PAR sont recalculés automatiquement (batch nocturne). Un encaissement soldant le prêt clôture le dossier et passe le prêt en **Soldé**.
 
 ## 7. Administration filiale (droits requis)
 

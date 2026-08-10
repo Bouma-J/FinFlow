@@ -27,6 +27,8 @@ import {
   DationNewPage,
   DationsPage,
 } from "@/pages/DationsPage";
+import { CollectionsPage } from "@/pages/CollectionsPage";
+import { CollectionCaseDetailPage } from "@/pages/CollectionCaseDetailPage";
 import { SuretyEngagementAddPage } from "@/pages/SuretyEngagementAddPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ForceChangePasswordPage } from "@/pages/ForceChangePasswordPage";
@@ -125,6 +127,8 @@ export default function App() {
         <Route path="/dations" element={<DationsPage />} />
         <Route path="/dations/nouvelle" element={<DationNewPage />} />
         <Route path="/dations/:id" element={<DationDetailPage />} />
+        <Route path="/recouvrement" element={<CollectionsPage />} />
+        <Route path="/recouvrement/:id" element={<CollectionCaseDetailPage />} />
         <Route path="/simulateur" element={<SimulatorPage />} />
         <Route path="/audit" element={<Navigate to="/admin/audit" replace />} />
         <Route

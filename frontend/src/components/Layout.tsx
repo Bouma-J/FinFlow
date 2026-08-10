@@ -5,6 +5,7 @@ import {
   Cable,
   Calculator,
   ChevronDown,
+  CircleDollarSign,
   ClipboardCheck,
   Bell,
   FileSignature,
@@ -54,6 +55,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/garanties", label: "Garanties", icon: ShieldCheck },
   { to: "/mains-levees", label: "Mains levées", icon: ShieldOff },
   { to: "/dations", label: "Dations", icon: Unlock },
+  { to: "/recouvrement", label: "Recouvrement", icon: CircleDollarSign },
   { to: "/simulateur", label: "Simulateur", icon: Calculator },
 ];
 

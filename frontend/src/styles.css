@@ -821,6 +821,38 @@ h3 {
   grid-template-columns: 1fr;
 }
 
+.filters-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.filters-bar input[type="search"],
+.filters-bar select {
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+.timeline-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.timeline-list li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.timeline-list li:last-child {
+  border-bottom: 0;
+}
+.mt-card {
+  margin-top: 16px;
+}
+
 /* Sections empilées verticalement, l'une après l'autre (pleine largeur) */
 .detail-row {
   display: flex;
