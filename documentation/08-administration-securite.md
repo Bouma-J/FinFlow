@@ -24,7 +24,7 @@ l’action est refusée (403), pas seulement masquée dans l’UI.
 
 ### Packs bootstrap (création de filiale)
 
-À chaque création de filiale, **20 rôles** sont créés avec un pack adaptable
+À chaque création de filiale, **23 rôles** sont créés avec un pack adaptable
 (modifiable ensuite dans Administration → Rôles & droits) :
 
 | Rôle | Contenu typique |
@@ -43,6 +43,9 @@ l’action est refusée (403), pas seulement masquée dans l’UI.
 | **Assistant des opérations** | Contrats générés + **initiation** du décaissement (à valider par le responsable) |
 | **Responsable Juridique** / **Assistant juridique** | Garanties, cautions (y compris après approbation), contrats générés — **aucun** paramétrage catalogue / modèles ni édition dossier |
 | **Responsable / Assistant recouvrement** | Module recouvrement (+ lecture clients / dossiers) |
+| **Responsable administratif et financier** | Lecture transverse + pilotage encaissements / recouvrement financier + audit |
+| **Chef comptable** | Lecture prêts / clients / CBS + gestion des remboursements (y compris suppression) |
+| **Comptable** | Lecture prêts / clients + saisie / modification des remboursements |
 | **Responsable / Assistant contrôle interne** | Lecture large + piste d'audit |
 | **Responsable / Assistant Audit** | Piste d'audit + lecture métier pour investigations |
 

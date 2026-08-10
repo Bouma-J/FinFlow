@@ -25,6 +25,9 @@ ASSISTANT_AUDIT_ROLE_NAME = "Assistant Audit"
 RESP_AUDIT_ROLE_NAME = "Responsable Audit"
 ASSISTANT_RECOUVREMENT_ROLE_NAME = "Assistant recouvrement"
 RESP_RECOUVREMENT_ROLE_NAME = "Responsable recouvrement"
+RESP_ADMIN_FINANCIER_ROLE_NAME = "Responsable administratif et financier"
+CHEF_COMPTABLE_ROLE_NAME = "Chef comptable"
+COMPTABLE_ROLE_NAME = "Comptable"
 LECTEUR_ROLE_NAME = "Lecteur"
 
 # Anciens rôles bootstrap — retirés, supprimés s'ils n'ont plus d'utilisateur.
@@ -444,6 +447,49 @@ _LECTEUR_PERMS = (
     ("tenants", "view_agency"),
 )
 
+# Finance / comptabilité : encaissements, lecture prêts & clients.
+_WRITE_COMPTA = (
+    ("collections", "add_repayment"),
+    ("collections", "change_repayment"),
+)
+
+_WRITE_COMPTA_CHEF = (
+    *_WRITE_COMPTA,
+    ("collections", "delete_repayment"),
+    ("collections", "view_collectioncase"),
+    ("collections", "view_collectionaction"),
+    ("collections", "view_paymentpromise"),
+)
+
+_COMPTABLE_PERMS = (
+    *_VIEW_CLIENTS,
+    *_VIEW_CREDIT,
+    *_VIEW_COLLECTIONS,
+    *_VIEW_DOCS,
+    *_VIEW_CONTRACTS,
+    ("tenants", "view_agency"),
+    *_WRITE_COMPTA,
+)
+
+_CHEF_COMPTABLE_PERMS = (
+    *_VIEW_CLIENTS,
+    *_VIEW_CREDIT,
+    *_VIEW_COLLECTIONS,
+    *_VIEW_GUARANTEES,
+    *_VIEW_DOCS,
+    *_VIEW_CONTRACTS,
+    *_VIEW_CBS,
+    *_VIEW_TRANSVERSE,
+    *_WRITE_COMPTA_CHEF,
+)
+
+# RAF / DAF : vision transverse + pilotage encaissements / recouvrement financier.
+_RESP_ADMIN_FINANCIER_PERMS = (
+    *_READ_METIER,
+    *_WRITE_COLLECTIONS_MGR,
+    ("audit", "view_auditlog"),
+)
+
 # Packs appliqués aux rôles métier bootstrap (hors admin filiale).
 DEFAULT_ROLE_PACKS = {
     CHARGE_AFFAIRE_ROLE_NAME: _CHARGE_AFFAIRE_PERMS,
@@ -464,6 +510,9 @@ DEFAULT_ROLE_PACKS = {
     RESP_AUDIT_ROLE_NAME: _RESP_AUDIT_PERMS,
     ASSISTANT_RECOUVREMENT_ROLE_NAME: _ASSISTANT_RECOUVREMENT_PERMS,
     RESP_RECOUVREMENT_ROLE_NAME: _RESP_RECOUVREMENT_PERMS,
+    RESP_ADMIN_FINANCIER_ROLE_NAME: _RESP_ADMIN_FINANCIER_PERMS,
+    CHEF_COMPTABLE_ROLE_NAME: _CHEF_COMPTABLE_PERMS,
+    COMPTABLE_ROLE_NAME: _COMPTABLE_PERMS,
     LECTEUR_ROLE_NAME: _LECTEUR_PERMS,
 }
 
@@ -597,7 +646,7 @@ def ensure_default_role_packs(tenant):
     Synchronise les packs RBAC des rôles bootstrap d'une filiale.
 
     - Administrateur filiale : pack complet
-    - 19 rôles métier (dont Lecteur) : packs adaptés (modifiables ensuite dans l'UI)
+    - Rôles métier bootstrap (dont finance / compta / Lecteur) : packs adaptés
     - Anciens rôles (Analyste crédit, Responsable agence) : retirés si inutilisés
     """
     ensure_filiale_admin_role(tenant)

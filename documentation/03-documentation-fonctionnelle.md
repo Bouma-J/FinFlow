@@ -10,7 +10,7 @@ Rattachée à une filiale. Sert de périmètre pour la création de dossiers et 
 
 ### Utilisateurs et rôles
 - Un **rôle** = groupe Django lié à la filiale (`TenantRole`).
-- À la création d’une filiale, **20 rôles métier** sont provisionnés avec des packs de droits adaptables (voir `08-administration-securite.md`).
+- À la création d’une filiale, **23 rôles** sont provisionnés avec des packs de droits adaptables (voir `08-administration-securite.md`), dont finance / comptabilité.
 - **Périmètre de données** (`data_scope`) :
   - `OWN` — ses propres dossiers
   - `AGENCY` — agence(s) autorisée(s)
