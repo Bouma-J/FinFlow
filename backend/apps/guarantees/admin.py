@@ -2,12 +2,14 @@ from django.contrib import admin
 
 from .models import (
     DationAsset,
+    DationFee,
     DationRequest,
     Guarantee,
     GuaranteeJewelryItem,
     GuaranteeMovement,
     GuaranteePhoto,
     GuaranteeReleaseRequest,
+    ReleaseFee,
 )
 
 
@@ -40,26 +42,53 @@ class GuaranteeAdmin(admin.ModelAdmin):
     inlines = [JewelryItemInline, GuaranteePhotoInline, MovementInline]
 
 
+class ReleaseFeeInline(admin.TabularInline):
+    model = ReleaseFee
+    extra = 0
+    fields = ["fee_type", "label", "amount", "payer", "fee_date", "recoverable"]
+
+
 @admin.register(GuaranteeReleaseRequest)
 class GuaranteeReleaseRequestAdmin(admin.ModelAdmin):
     list_display = [
-        "reference", "guarantee", "status", "cbs_settled", "cbs_loan_reference", "tenant",
+        "reference",
+        "guarantee",
+        "status",
+        "acte_status",
+        "cbs_settled",
+        "cbs_loan_reference",
+        "tenant",
     ]
-    list_filter = ["status", "tenant"]
+    list_filter = ["status", "acte_status", "tenant"]
     search_fields = ["reference", "cbs_loan_reference"]
+    inlines = [ReleaseFeeInline]
 
 
 class DationAssetInline(admin.TabularInline):
     model = DationAsset
     extra = 0
-    fields = ["source", "guarantee", "description", "value"]
+    fields = ["source", "asset_type", "guarantee", "description", "value", "notes"]
+
+
+class DationFeeInline(admin.TabularInline):
+    model = DationFee
+    extra = 0
+    fields = [
+        "fee_type", "label", "amount", "payer", "fee_date", "recoverable", "asset",
+    ]
 
 
 @admin.register(DationRequest)
 class DationRequestAdmin(admin.ModelAdmin):
     list_display = [
-        "reference", "client", "status", "cbs_total_outstanding", "tenant",
+        "reference",
+        "client",
+        "status",
+        "cbs_total_outstanding",
+        "claim_to_cover",
+        "residual_balance",
+        "tenant",
     ]
     list_filter = ["status", "tenant"]
     search_fields = ["reference", "cbs_client_id"]
-    inlines = [DationAssetInline]
+    inlines = [DationAssetInline, DationFeeInline]

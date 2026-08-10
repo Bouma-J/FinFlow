@@ -144,6 +144,8 @@ export interface NotificationSettings {
   notify_on_completion: boolean;
   notify_on_rejection: boolean;
   notify_on_return: boolean;
+  notify_collection_email: boolean;
+  notify_collection_sms: boolean;
   from_email: string;
   reply_to: string;
   cc_tenant_email: boolean;
@@ -187,6 +189,20 @@ export interface CbsConnector {
   created_at: string;
 }
 
+export interface ReleaseFee {
+  id: string;
+  fee_type: string;
+  fee_type_display: string;
+  label: string;
+  amount: string;
+  payer: string;
+  payer_display: string;
+  fee_date: string | null;
+  recoverable: boolean;
+  notes: string;
+  created_at: string;
+}
+
 export interface GuaranteeReleaseRequest {
   id: string;
   reference: string;
@@ -204,6 +220,18 @@ export interface GuaranteeReleaseRequest {
   cbs_raw: Record<string, unknown>;
   request_date?: string | null;
   release_fees?: string | null;
+  fees?: ReleaseFee[];
+  fees_client_total?: string | null;
+  fees_institution_total?: string | null;
+  acte_status?: string;
+  acte_status_display?: string;
+  acte_generated_at?: string | null;
+  acte_signed_at?: string | null;
+  acte_generated_url?: string | null;
+  acte_signed_url?: string | null;
+  has_client_demande?: boolean;
+  has_generated_acte?: boolean;
+  has_signed_acte?: boolean;
   status: string;
   status_display: string;
   comment: string;
@@ -245,12 +273,42 @@ export interface DationAsset {
   id: string;
   source: "EXISTING_GUARANTEE" | "ADDITIONAL" | string;
   source_display: string;
+  asset_type?: string;
+  asset_type_display?: string;
   guarantee: string | null;
   guarantee_reference: string | null;
   guarantee_type_display: string | null;
   description: string;
   value: string | null;
+  notes?: string;
   created_at: string;
+}
+
+export interface DationFee {
+  id: string;
+  asset: string | null;
+  fee_type: string;
+  fee_type_display: string;
+  label: string;
+  amount: string;
+  payer: "CLIENT" | "INSTITUTION" | string;
+  payer_display: string;
+  fee_date: string | null;
+  recoverable: boolean;
+  notes: string;
+  created_at: string;
+}
+
+export interface DationSettlement {
+  assets_total: string;
+  claim: string;
+  fees_client_total: string;
+  fees_institution_total: string;
+  claim_to_cover: string;
+  coverage_gap: string;
+  residual_balance: string;
+  surplus_amount: string;
+  covers_claim: boolean | null;
 }
 
 export interface DationRequest {
@@ -268,9 +326,18 @@ export interface DationRequest {
   asset_description: string;
   asset_value: string | null;
   assets?: DationAsset[];
+  fees?: DationFee[];
   assets_total_value?: string | null;
+  fees_client_total?: string | null;
+  fees_institution_total?: string | null;
+  claim_to_cover?: string | null;
+  residual_balance?: string | null;
+  surplus_amount?: string | null;
+  require_full_coverage?: boolean;
+  settlement_notes?: string;
   covers_claim?: boolean | null;
   coverage_gap?: string | null;
+  settlement?: DationSettlement;
   status: string;
   status_display: string;
   comment: string;
@@ -278,6 +345,18 @@ export interface DationRequest {
   completed_at: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface GedDocument {
+  id: string;
+  category: string;
+  category_label: string;
+  name: string;
+  file: string;
+  mime_type: string;
+  size_bytes: number;
+  object_id: string;
+  created_at: string;
 }
 
 export interface Tenant {
@@ -1432,6 +1511,7 @@ export interface CollectionAction {
   action_date: string;
   result: string;
   comment: string;
+  next_follow_up_date?: string | null;
 }
 
 export interface PaymentPromise {
@@ -1441,6 +1521,71 @@ export interface PaymentPromise {
   promised_date: string;
   status: PromiseStatus;
   status_display: string;
+}
+
+export interface CollectionStageHistory {
+  id: string;
+  from_stage: CollectionStage | "";
+  from_stage_display: string;
+  to_stage: CollectionStage;
+  to_stage_display: string;
+  reason: string;
+  automatic: boolean;
+  changed_by: string | null;
+  changed_by_name: string | null;
+  created_at: string;
+}
+
+export interface CollectionEscalationRule {
+  id: string;
+  min_days_overdue: number;
+  target_stage: Exclude<CollectionStage, "CLOSED">;
+  target_stage_display: string;
+  is_active: boolean;
+  label: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CollectionGuaranteeLink {
+  id: string;
+  guarantee_type: string;
+  guarantee_type_display: string;
+  status: string;
+  status_display: string;
+  description: string;
+  current_value: string;
+}
+
+export interface CollectionDationLink {
+  id: string;
+  status: string;
+  status_display: string;
+  created_at: string;
+}
+
+export interface AgentCollectionDashboard {
+  assigned_open: number;
+  followups_due: number;
+  pending_promises: number;
+  broken_promises_30d: number;
+  repayments_this_month_count: number;
+  repayments_this_month_amount: string;
+  by_par_class: Record<string, number>;
+  by_stage: Record<string, number>;
+  due_followups: Array<{
+    id: string;
+    application_reference: string;
+    client_name: string;
+    next_action_date: string | null;
+    next_action_type: string;
+    next_action_note: string;
+    days_overdue: number;
+    overdue_amount: string;
+    par_class: ParClass;
+    stage: CollectionStage;
+  }>;
+  as_of: string;
 }
 
 export interface LoanRepayment {
@@ -1463,6 +1608,212 @@ export interface LoanInstallment {
   status_display: string;
 }
 
+export type LegalPartyType =
+  | "LAW_FIRM"
+  | "LAWYER"
+  | "BAILIFF"
+  | "NOTARY"
+  | "EXPERT"
+  | "OTHER";
+
+export interface LegalParty {
+  id: string;
+  party_type: LegalPartyType;
+  party_type_display: string;
+  name: string;
+  registration_no: string;
+  contact_name: string;
+  phone: string;
+  email: string;
+  address: string;
+  notes: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type LitigationStatus =
+  | "PRE_LITIGATION"
+  | "FILED"
+  | "IN_PROGRESS"
+  | "JUDGMENT"
+  | "ENFORCEMENT"
+  | "APPEAL"
+  | "SETTLED"
+  | "ABANDONED"
+  | "CLOSED"
+  | "OPEN"
+  | "SUSPENDED";
+
+export type LitigationActionType =
+  | "PAYMENT_ORDER"
+  | "SUMMONS"
+  | "SUMMARY"
+  | "ATTACHMENT"
+  | "OHADA"
+  | "APPEAL"
+  | "OTHER";
+
+export type LitigationEventType =
+  | "NOTICE"
+  | "FILING"
+  | "HEARING"
+  | "BRIEF"
+  | "JUDGMENT"
+  | "SERVICE"
+  | "SEIZURE"
+  | "APPEAL"
+  | "SETTLEMENT"
+  | "OTHER";
+
+export interface LitigationEvent {
+  id: string;
+  litigation?: string;
+  event_date: string;
+  event_time?: string | null;
+  event_type: LitigationEventType;
+  event_type_display: string;
+  location?: string;
+  outcome?: string;
+  amount?: string | null;
+  postponed?: boolean;
+  next_date?: string | null;
+  performed_by?: string | null;
+  performed_by_detail?: LegalParty | null;
+  comment: string;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface LitigationSeizure {
+  id: string;
+  seizure_type: string;
+  seizure_type_display: string;
+  status: string;
+  status_display: string;
+  seizure_date: string | null;
+  amount: string | null;
+  bailiff: string | null;
+  bailiff_detail?: LegalParty | null;
+  guarantee: string | null;
+  report_reference: string;
+  inventory: string;
+  notes: string;
+  created_at: string;
+}
+
+export interface LitigationCost {
+  id: string;
+  cost_type: string;
+  cost_type_display: string;
+  label: string;
+  amount: string;
+  cost_date: string;
+  is_paid: boolean;
+  recoverable: boolean;
+  party: string | null;
+  party_detail?: LegalParty | null;
+  notes: string;
+  created_at: string;
+}
+
+export interface LitigationDocument {
+  id: string;
+  name: string;
+  file: string | null;
+  category: string;
+  mime_type?: string;
+  size_bytes?: number;
+  created_at: string;
+}
+
+export interface LitigationFile {
+  id: string;
+  case: string;
+  title: string;
+  action_type: LitigationActionType | "";
+  action_type_display?: string;
+  court_name: string;
+  court_registry?: string;
+  case_reference: string;
+  chamber?: string;
+  law_firm?: string | null;
+  law_firm_detail?: LegalParty | null;
+  lawyer_party?: string | null;
+  lawyer_party_detail?: LegalParty | null;
+  bailiff_party?: string | null;
+  bailiff_party_detail?: LegalParty | null;
+  lawyer: string;
+  bailiff: string;
+  mandate_start?: string | null;
+  mandate_end?: string | null;
+  mandate_fee?: string | null;
+  mandate_notes?: string;
+  claimed_principal?: string | null;
+  claimed_interest?: string | null;
+  claimed_penalties?: string | null;
+  claimed_costs?: string | null;
+  claimed_total?: string | null;
+  notice_date?: string | null;
+  filing_date: string | null;
+  service_date?: string | null;
+  first_hearing_date?: string | null;
+  hearing_date: string | null;
+  hearing_time?: string | null;
+  hearing_location?: string;
+  judgment_date?: string | null;
+  judgment_outcome?: string;
+  judgment_outcome_display?: string;
+  judgment_amount?: string | null;
+  judgment_enforceable?: boolean;
+  judgment_served_at?: string | null;
+  status: LitigationStatus;
+  status_display: string;
+  notes: string;
+  related_guarantee_ids?: string[];
+  events?: LitigationEvent[];
+  seizures?: LitigationSeizure[];
+  costs?: LitigationCost[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface HearingAgendaItem {
+  id: string;
+  case_id: string;
+  title: string;
+  case_reference: string;
+  application_reference: string;
+  client_name: string;
+  hearing_date: string | null;
+  hearing_time: string | null;
+  hearing_location: string;
+  court_name: string;
+  status: string;
+  law_firm_name: string;
+}
+
+export interface LoanRestructure {
+  id: string;
+  effective_date: string;
+  previous_duration_months: number;
+  new_duration_months: number;
+  previous_rate: string;
+  new_rate: string;
+  outstanding_principal: string;
+  reason: string;
+  status: string;
+  created_at: string;
+}
+
+export interface WriteOff {
+  id: string;
+  amount: string;
+  write_off_date: string;
+  reason: string;
+  created_at: string;
+}
+
 export interface CollectionCase {
   id: string;
   loan: string;
@@ -1470,6 +1821,8 @@ export interface CollectionCase {
   loan_principal: string;
   application_id: string;
   application_reference: string;
+  product_name?: string;
+  client_id?: string | null;
   client_name: string;
   agency_name: string;
   stage: CollectionStage;
@@ -1480,10 +1833,26 @@ export interface CollectionCase {
   overdue_amount: string;
   assigned_to: string | null;
   assigned_to_name: string | null;
+  next_action_date?: string | null;
+  next_action_type?: CollectionActionType | "";
+  next_action_type_display?: string;
+  next_action_note?: string;
+  stage_changed_at?: string | null;
+  next_due_date?: string | null;
+  pending_promises_count?: number;
+  guarantees_count?: number;
+  outstanding_principal?: string;
   created_at: string;
   actions?: CollectionAction[];
   promises?: PaymentPromise[];
+  stage_history?: CollectionStageHistory[];
+  restructures?: LoanRestructure[];
+  write_offs?: WriteOff[];
+  litigation?: LitigationFile | null;
+  litigations?: LitigationFile[];
   repayments?: LoanRepayment[];
   installments?: LoanInstallment[];
+  guarantees?: CollectionGuaranteeLink[];
+  dation_requests?: CollectionDationLink[];
   core_banking_reference?: string;
 }

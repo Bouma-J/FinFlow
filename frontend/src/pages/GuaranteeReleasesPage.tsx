@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Banknote,
+  FileUp,
   Gavel,
   Plus,
   RefreshCw,
@@ -17,6 +18,7 @@ import { api } from "@/api/client";
 import type {
   ApprovalTask,
   Client,
+  GedDocument,
   GuaranteeReleaseRequest,
   Paginated,
   ReleaseClientContext,
@@ -72,7 +74,7 @@ export function GuaranteeReleasesPage() {
       <PageHeader
         icon={ShieldOff}
         title="Mains levées"
-        subtitle="Client → garanties Fin Flow + crédits CBS (soldé / actif)"
+        subtitle="Brouillon → demande client → acte généré/signé → circuit CBS"
         actions={
           canInitiate ? (
             <Link className="btn btn-primary" to="/mains-levees/nouvelle">
@@ -189,6 +191,7 @@ export function GuaranteeReleaseNewPage() {
           cbs_client_id: cbsClientId,
           request_date: requestDate,
           release_fees: releaseFees || null,
+          as_draft: true,
           comment,
         })
       ).data,
@@ -204,7 +207,7 @@ export function GuaranteeReleaseNewPage() {
           ? raw
           : Array.isArray(raw)
             ? raw.map(String).join(" · ")
-            : "Initiation impossible (prêt non soldé, CBS ou circuit manquant).",
+            : "Création impossible (prêt non soldé, CBS ou circuit manquant).",
       );
     },
   });
@@ -607,7 +610,7 @@ export function GuaranteeReleaseNewPage() {
               >
                 {create.isPending
                   ? "Vérification CBS…"
-                  : "Vérifier CBS et démarrer le circuit"}
+                  : "Créer le brouillon"}
               </button>
               <Link className="btn btn-ghost" to="/mains-levees">
                 Annuler
@@ -627,11 +630,28 @@ function creditKey(c: ReleaseClientCredit) {
 export function GuaranteeReleaseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const canInitiate = hasPerm(
+    user,
+    "guarantees.initiate_guaranteereleaserequest",
+  );
+
+  const [demandeFile, setDemandeFile] = useState<File | null>(null);
+  const [signedFile, setSignedFile] = useState<File | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const detail = useQuery({
     queryKey: ["guarantee-release", id],
     queryFn: async () =>
       (await api.get<GuaranteeReleaseRequest>(`/guarantee-releases/${id}/`))
+        .data,
+    enabled: !!id,
+  });
+
+  const docs = useQuery({
+    queryKey: ["guarantee-release-docs", id],
+    queryFn: async () =>
+      (await api.get<GedDocument[]>(`/guarantee-releases/${id}/documents/`))
         .data,
     enabled: !!id,
   });
@@ -654,23 +674,108 @@ export function GuaranteeReleaseDetailPage() {
         .data,
   });
 
+  function invalidateAll() {
+    qc.invalidateQueries({ queryKey: ["guarantee-release", id] });
+    qc.invalidateQueries({ queryKey: ["guarantee-release-docs", id] });
+    qc.invalidateQueries({ queryKey: ["guarantee-release-workflow", id] });
+    qc.invalidateQueries({ queryKey: ["guarantee-releases"] });
+    qc.invalidateQueries({ queryKey: ["guarantees"] });
+  }
+
+  function errMsg(err: unknown, fallback: string) {
+    const data = (err as { response?: { data?: unknown } })?.response?.data;
+    const raw =
+      data && typeof data === "object" && "errors" in data
+        ? (data as { errors: unknown }).errors
+        : data;
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) return raw.map(String).join(" · ");
+    return fallback;
+  }
+
   const retry = useMutation({
     mutationFn: async () =>
       (await api.post(`/guarantee-releases/${id}/retry_cbs/`)).data,
+    onSuccess: () => invalidateAll(),
+    onError: (e) => setActionError(errMsg(e, "Échec retry CBS.")),
+  });
+
+  const submit = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/guarantee-releases/${id}/submit/`)).data,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["guarantee-release", id] });
-      qc.invalidateQueries({ queryKey: ["guarantees"] });
+      setActionError(null);
+      invalidateAll();
     },
+    onError: (e) => setActionError(errMsg(e, "Soumission impossible.")),
+  });
+
+  const cancel = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post(`/guarantee-releases/${id}/cancel/`, {
+          comment: "Annulé",
+        })
+      ).data,
+    onSuccess: () => invalidateAll(),
+    onError: (e) => setActionError(errMsg(e, "Annulation impossible.")),
+  });
+
+  const generateActe = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/guarantee-releases/${id}/generate-acte/`)).data,
+    onSuccess: () => invalidateAll(),
+    onError: (e) => setActionError(errMsg(e, "Génération impossible.")),
+  });
+
+  const uploadDemande = useMutation({
+    mutationFn: async () => {
+      const fd = new FormData();
+      if (demandeFile) fd.append("file", demandeFile);
+      fd.append("name", demandeFile?.name || "Demande client");
+      fd.append("category", "ML_DEMANDE");
+      return (
+        await api.post(`/guarantee-releases/${id}/documents/`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+      ).data;
+    },
+    onSuccess: () => {
+      setDemandeFile(null);
+      invalidateAll();
+    },
+    onError: (e) => setActionError(errMsg(e, "Upload demande impossible.")),
+  });
+
+  const uploadSigned = useMutation({
+    mutationFn: async () => {
+      const fd = new FormData();
+      if (signedFile) fd.append("file", signedFile);
+      return (
+        await api.post(`/guarantee-releases/${id}/upload-acte-signe/`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+      ).data;
+    },
+    onSuccess: () => {
+      setSignedFile(null);
+      invalidateAll();
+    },
+    onError: (e) => setActionError(errMsg(e, "Dépôt acte signé impossible.")),
   });
 
   if (detail.isLoading || !detail.data) return <Spinner />;
   const r = detail.data;
+  const cur = r.cbs_currency || "XAF";
+  const editable = r.status === "DRAFT" || r.status === "RETURNED";
+  const canUploadDocs = !["COMPLETED", "CANCELLED", "REJECTED"].includes(
+    r.status,
+  );
   const myTask =
     myTasks?.results.find(
       (t) =>
         t.target_meta?.kind === "MAIN_LEVEE" && t.target_meta.id === r.id,
     ) ?? null;
-
   return (
     <div>
       <PageHeader
@@ -683,6 +788,24 @@ export function GuaranteeReleaseDetailPage() {
               <ArrowLeft />
               Retour
             </Link>
+            {canInitiate && editable && (
+              <button
+                className="btn btn-primary"
+                onClick={() => submit.mutate()}
+                disabled={submit.isPending}
+              >
+                Soumettre au circuit
+              </button>
+            )}
+            {canInitiate && editable && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => cancel.mutate()}
+                disabled={cancel.isPending}
+              >
+                Annuler
+              </button>
+            )}
             {r.status === "BLOCKED" && (
               <button
                 className="btn btn-primary"
@@ -696,6 +819,15 @@ export function GuaranteeReleaseDetailPage() {
           </div>
         }
       />
+
+      {actionError && <div className="form-error">{actionError}</div>}
+
+      {r.status === "APPROVED" && !r.has_signed_acte && (
+        <div className="form-error">
+          Dossier approuvé : déposez l&apos;acte signé pour clôturer la main
+          levée.
+        </div>
+      )}
 
       <div className="detail-grid">
         <Card title="Demande">
@@ -715,22 +847,6 @@ export function GuaranteeReleaseDetailPage() {
               </dd>
             </div>
             <div>
-              <dt>Matricule client CBS</dt>
-              <dd>
-                <code>{r.cbs_client_id || "—"}</code>
-              </dd>
-            </div>
-            <div>
-              <dt>Date de la demande</dt>
-              <dd>{r.request_date ? formatDate(r.request_date) : "—"}</dd>
-            </div>
-            <div>
-              <dt>Frais de main levée</dt>
-              <dd>
-                {formatMoney(r.release_fees ?? null, r.cbs_currency || "XAF")}
-              </dd>
-            </div>
-            <div>
               <dt>Réf. prêt CBS</dt>
               <dd>
                 <code>{r.cbs_loan_reference || "—"}</code>
@@ -743,20 +859,153 @@ export function GuaranteeReleaseDetailPage() {
               </dd>
             </div>
             <div>
-              <dt>Encours CBS</dt>
+              <dt>Frais</dt>
               <dd>
-                {formatMoney(r.cbs_outstanding, r.cbs_currency || "XAF")}
+                {formatMoney(
+                  r.release_fees ?? r.fees_client_total ?? null,
+                  cur,
+                )}
               </dd>
             </div>
             <div>
-              <dt>Vérifié le</dt>
-              <dd>{r.cbs_checked_at ? formatDate(r.cbs_checked_at) : "—"}</dd>
+              <dt>Acte</dt>
+              <dd>
+                <Badge
+                  value={r.acte_status || "NONE"}
+                  label={r.acte_status_display || "Non généré"}
+                />
+              </dd>
             </div>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <dt>Commentaire</dt>
-              <dd>{r.comment || "—"}</dd>
+            <div>
+              <dt>Demande client</dt>
+              <dd>{r.has_client_demande ? "Jointe" : "Manquante"}</dd>
+            </div>
+            <div>
+              <dt>Acte signé</dt>
+              <dd>{r.has_signed_acte ? "Déposé" : "Manquant"}</dd>
             </div>
           </dl>
+        </Card>
+
+        <Card title="1. Demande client">
+          <p className="muted small">
+            Joindre la demande de main levée transmise par le client
+            (obligatoire avant soumission).
+          </p>
+          {(docs.data ?? []).length > 0 && (
+            <ul className="link-list">
+              {(docs.data ?? []).map((d) => (
+                <li key={d.id}>
+                  <span>
+                    <FileUp size={14} /> {d.name}
+                    <em className="muted small"> · {d.category_label}</em>
+                  </span>
+                  <a
+                    className="btn btn-ghost btn-sm"
+                    href={d.file}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Ouvrir
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+          {canInitiate && canUploadDocs && (
+            <div className="form-grid" style={{ marginTop: 12 }}>
+              <label className="field">
+                <span>Fichier demande</span>
+                <input
+                  type="file"
+                  accept=".pdf,.jpg,.jpeg,.png"
+                  onChange={(e) =>
+                    setDemandeFile(e.target.files?.[0] ?? null)
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!demandeFile || uploadDemande.isPending}
+                onClick={() => uploadDemande.mutate()}
+              >
+                <FileUp size={14} />
+                Charger la demande
+              </button>
+            </div>
+          )}
+        </Card>
+
+        <Card title="2. Acte de main levée">
+          <p className="muted small">
+            Générez l&apos;acte, faites-le signer, puis déposez le scan. L&apos;acte
+            signé est obligatoire pour clôturer.
+          </p>
+          <dl className="def-list two">
+            <div>
+              <dt>Acte généré</dt>
+              <dd>
+                {r.acte_generated_url ? (
+                  <a href={r.acte_generated_url} target="_blank" rel="noreferrer">
+                    Télécharger
+                  </a>
+                ) : (
+                  "—"
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt>Acte signé</dt>
+              <dd>
+                {r.acte_signed_url ? (
+                  <a href={r.acte_signed_url} target="_blank" rel="noreferrer">
+                    Voir le dépôt
+                  </a>
+                ) : (
+                  "—"
+                )}
+              </dd>
+            </div>
+          </dl>
+          {canInitiate && canUploadDocs && (
+            <div className="row-actions" style={{ marginTop: 12, gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={generateActe.isPending || r.has_signed_acte}
+                onClick={() => generateActe.mutate()}
+              >
+                {r.has_generated_acte ? "Régénérer l'acte" : "Générer l'acte"}
+              </button>
+            </div>
+          )}
+          {canInitiate &&
+            r.has_generated_acte &&
+            !r.has_signed_acte &&
+            canUploadDocs && (
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span>Acte signé (PDF / scan)</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png"
+                    onChange={(e) =>
+                      setSignedFile(e.target.files?.[0] ?? null)
+                    }
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={!signedFile || uploadSigned.isPending}
+                  onClick={() => uploadSigned.mutate()}
+                >
+                  <FileUp size={14} />
+                  Déposer l&apos;acte signé
+                </button>
+              </div>
+            )}
         </Card>
 
         {myTask && (
@@ -770,7 +1019,13 @@ export function GuaranteeReleaseDetailPage() {
 
         <Card title="Circuit">
           {!workflow.data?.instance ? (
-            <EmptyState message="Aucun circuit associé." />
+            <EmptyState
+              message={
+                editable
+                  ? "Circuit non démarré — joignez la demande, générez l'acte, puis soumettez."
+                  : "Aucun circuit associé."
+              }
+            />
           ) : (
             <dl className="def-list two">
               <div>

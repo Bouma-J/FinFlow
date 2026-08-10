@@ -2,24 +2,28 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Banknote,
+  FileUp,
   Gavel,
   HandCoins,
   Landmark,
   MessageSquareText,
   Plus,
+  Receipt,
   RefreshCw,
   ShieldCheck,
   Trash2,
   UserRound,
 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type {
   ApprovalTask,
   Client,
+  DationFee,
   DationRequest,
+  GedDocument,
   Guarantee,
   Paginated,
 } from "@/api/types";
@@ -46,7 +50,20 @@ function hasPerm(
   return (user.permissions ?? []).includes(perm);
 }
 
-type ExtraAsset = { key: string; description: string; value: string };
+type ExtraAsset = {
+  key: string;
+  description: string;
+  value: string;
+  asset_type: string;
+};
+
+type DraftFee = {
+  key: string;
+  fee_type: string;
+  label: string;
+  amount: string;
+  payer: string;
+};
 
 type CbsPreview = {
   cbs_client_id: string;
@@ -54,6 +71,33 @@ type CbsPreview = {
   currency: string;
   breakdown: unknown[];
 };
+
+const ASSET_TYPES = [
+  { value: "REAL_ESTATE", label: "Immobilier" },
+  { value: "VEHICLE", label: "Véhicule" },
+  { value: "EQUIPMENT", label: "Matériel" },
+  { value: "JEWELRY", label: "Bijoux / valeur" },
+  { value: "FINANCIAL", label: "Actif financier" },
+  { value: "OTHER", label: "Autre" },
+];
+
+const FEE_TYPES = [
+  { value: "NOTARY", label: "Notaire / acte" },
+  { value: "APPRAISAL", label: "Expertise" },
+  { value: "REGISTRATION", label: "Enregistrement" },
+  { value: "BAILIFF", label: "Huissier" },
+  { value: "TRANSFER_TAX", label: "Droits de mutation" },
+  { value: "OTHER", label: "Divers" },
+];
+
+const DOC_CATS = [
+  { value: "DAT_ACTE", label: "Acte de dation" },
+  { value: "DAT_PHOTO", label: "Photo du bien" },
+  { value: "DAT_EXPERTISE", label: "Expertise" },
+  { value: "DAT_TITRE", label: "Titre / carte grise" },
+  { value: "DAT_FACTURE", label: "Facture / frais" },
+  { value: "DAT_OTHER", label: "Autre" },
+];
 
 export function DationsPage() {
   const { user } = useAuth();
@@ -75,7 +119,7 @@ export function DationsPage() {
       <PageHeader
         icon={HandCoins}
         title="Dations en paiement"
-        subtitle="Processus dédié avec contrôle CBS (créance client) et circuit paramétrable"
+        subtitle="Biens, frais, pièces jointes, couverture CBS et circuit paramétrable"
         actions={
           canInitiate ? (
             <Link className="btn btn-primary" to="/dations/nouvelle">
@@ -154,13 +198,17 @@ export function DationsPage() {
 
 export function DationNewPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
+  const applicationId = searchParams.get("application") || "";
   const [clientId, setClientId] = useState("");
   const [cbsClientId, setCbsClientId] = useState("");
   const [selectedGuaranteeIds, setSelectedGuaranteeIds] = useState<string[]>(
     [],
   );
   const [extraAssets, setExtraAssets] = useState<ExtraAsset[]>([]);
+  const [fees, setFees] = useState<DraftFee[]>([]);
+  const [requireFullCoverage, setRequireFullCoverage] = useState(false);
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
 
@@ -208,10 +256,22 @@ export function DationNewPage() {
     return fromGuarantees + fromExtra;
   }, [guarantees.data, selectedGuaranteeIds, extraAssets]);
 
+  const clientFeesTotal = useMemo(
+    () =>
+      fees
+        .filter((f) => f.payer === "CLIENT")
+        .reduce((sum, f) => sum + Number(f.amount || 0), 0),
+    [fees],
+  );
+  const claimToCover = claim + clientFeesTotal;
   const covers =
-    cbsPreview.data != null ? selectedTotal >= claim && claim > 0 : null;
+    cbsPreview.data != null
+      ? selectedTotal >= claimToCover && claimToCover > 0
+      : null;
   const coverageRatio =
-    claim > 0 ? Math.min(100, (selectedTotal / claim) * 100) : 0;
+    claimToCover > 0
+      ? Math.min(100, (selectedTotal / claimToCover) * 100)
+      : 0;
   const selectedCount =
     selectedGuaranteeIds.length +
     extraAssets.filter((a) => a.description.trim()).length;
@@ -226,13 +286,25 @@ export function DationNewPage() {
       (
         await api.post<DationRequest>("/dation-requests/", {
           client: clientId,
+          application: applicationId || null,
           cbs_client_id: cbsClientId,
+          as_draft: true,
+          require_full_coverage: requireFullCoverage,
           guarantee_ids: selectedGuaranteeIds,
           additional_assets: extraAssets
             .filter((a) => a.description.trim())
             .map((a) => ({
               description: a.description.trim(),
               value: a.value || null,
+              asset_type: a.asset_type || "OTHER",
+            })),
+          fees: fees
+            .filter((f) => Number(f.amount || 0) > 0)
+            .map((f) => ({
+              fee_type: f.fee_type,
+              label: f.label.trim(),
+              amount: f.amount,
+              payer: f.payer,
             })),
           comment,
         })
@@ -249,7 +321,7 @@ export function DationNewPage() {
           ? raw
           : Array.isArray(raw)
             ? raw.map(String).join(" · ")
-            : "Initiation impossible (contrôle CBS, biens ou circuit manquant).",
+            : "Création impossible (contrôle CBS, biens ou circuit manquant).",
       );
     },
   });
@@ -476,6 +548,7 @@ export function DationNewPage() {
                               key: `${Date.now()}-${prev.length}`,
                               description: "",
                               value: "",
+                              asset_type: "OTHER",
                             },
                           ])
                         }
@@ -512,7 +585,27 @@ export function DationNewPage() {
                             />
                           </label>
                           <label className="field">
-                            <span>Valeur</span>
+                            <span>Type</span>
+                            <select
+                              value={asset.asset_type}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setExtraAssets((prev) =>
+                                  prev.map((a, i) =>
+                                    i === idx ? { ...a, asset_type: v } : a,
+                                  ),
+                                );
+                              }}
+                            >
+                              {ASSET_TYPES.map((t) => (
+                                <option key={t.value} value={t.value}>
+                                  {t.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field">
+                            <span>Valeur retenue</span>
                             <input
                               type="number"
                               min={0}
@@ -549,12 +642,144 @@ export function DationNewPage() {
                 <section className="card form-section">
                   <div className="card-title form-section-head">
                     <span className="form-section-icon">
+                      <Receipt size={18} />
+                    </span>
+                    <div className="form-section-heading">
+                      <span className="form-section-title">4. Frais</span>
+                      <span className="form-section-desc">
+                        Notaire, expertise, enregistrement… Les frais client
+                        s’ajoutent à la créance à couvrir.
+                      </span>
+                    </div>
+                    <div className="form-section-action">
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() =>
+                          setFees((prev) => [
+                            ...prev,
+                            {
+                              key: `${Date.now()}-${prev.length}`,
+                              fee_type: "NOTARY",
+                              label: "",
+                              amount: "",
+                              payer: "CLIENT",
+                            },
+                          ])
+                        }
+                      >
+                        <Plus size={14} />
+                        Ajouter
+                      </button>
+                    </div>
+                  </div>
+                  {fees.length === 0 ? (
+                    <p className="muted small dation-compose-hint">
+                      Optionnel — vous pourrez aussi en ajouter sur la fiche
+                      brouillon.
+                    </p>
+                  ) : (
+                    <div className="dation-extra-list">
+                      {fees.map((fee, idx) => (
+                        <div key={fee.key} className="dation-extra-row">
+                          <label className="field">
+                            <span>Type</span>
+                            <select
+                              value={fee.fee_type}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setFees((prev) =>
+                                  prev.map((f, i) =>
+                                    i === idx ? { ...f, fee_type: v } : f,
+                                  ),
+                                );
+                              }}
+                            >
+                              {FEE_TYPES.map((t) => (
+                                <option key={t.value} value={t.value}>
+                                  {t.label}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field">
+                            <span>Libellé</span>
+                            <input
+                              value={fee.label}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setFees((prev) =>
+                                  prev.map((f, i) =>
+                                    i === idx ? { ...f, label: v } : f,
+                                  ),
+                                );
+                              }}
+                              placeholder="Optionnel"
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Montant</span>
+                            <input
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={fee.amount}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setFees((prev) =>
+                                  prev.map((f, i) =>
+                                    i === idx ? { ...f, amount: v } : f,
+                                  ),
+                                );
+                              }}
+                              required
+                            />
+                          </label>
+                          <label className="field">
+                            <span>Payeur</span>
+                            <select
+                              value={fee.payer}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setFees((prev) =>
+                                  prev.map((f, i) =>
+                                    i === idx ? { ...f, payer: v } : f,
+                                  ),
+                                );
+                              }}
+                            >
+                              <option value="CLIENT">Client</option>
+                              <option value="INSTITUTION">Institution</option>
+                            </select>
+                          </label>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm dation-extra-remove"
+                            onClick={() =>
+                              setFees((prev) =>
+                                prev.filter((_, i) => i !== idx),
+                              )
+                            }
+                            aria-label="Retirer ce frais"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </section>
+
+                <section className="card form-section">
+                  <div className="card-title form-section-head">
+                    <span className="form-section-icon">
                       <MessageSquareText size={18} />
                     </span>
                     <div className="form-section-heading">
-                      <span className="form-section-title">4. Commentaire</span>
+                      <span className="form-section-title">5. Commentaire</span>
                       <span className="form-section-desc">
-                        Contexte libre pour le circuit de validation.
+                        Contexte libre. Les documents/photos s’ajoutent ensuite
+                        sur la fiche brouillon.
                       </span>
                     </div>
                   </div>
@@ -567,6 +792,32 @@ export function DationNewPage() {
                       placeholder="Motif, précisions sur les biens, observations…"
                     />
                   </label>
+                  <label
+                    className="field"
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 8,
+                      marginTop: 12,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={requireFullCoverage}
+                      onChange={(e) =>
+                        setRequireFullCoverage(e.target.checked)
+                      }
+                    />
+                    <span>
+                      Exiger la couverture intégrale à la soumission du
+                      circuit
+                    </span>
+                  </label>
+                  {applicationId && (
+                    <p className="muted small" style={{ marginTop: 8 }}>
+                      Dossier crédit lié : <code>{applicationId.slice(0, 8)}…</code>
+                    </p>
+                  )}
                 </section>
               </>
             )}
@@ -610,7 +861,17 @@ export function DationNewPage() {
                       </strong>
                     </div>
                     <div>
-                      <span className="label">Biens retenus (Fin Flow)</span>
+                      <span className="label">Frais client</span>
+                      <strong>
+                        {formatMoney(clientFeesTotal, currency)}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="label">Créance à couvrir</span>
+                      <strong>{formatMoney(claimToCover, currency)}</strong>
+                    </div>
+                    <div>
+                      <span className="label">Biens retenus</span>
                       <strong>{formatMoney(selectedTotal, currency)}</strong>
                     </div>
                   </div>
@@ -633,12 +894,12 @@ export function DationNewPage() {
                     {covers == null
                       ? "—"
                       : covers
-                        ? "Les biens couvrent la créance."
-                        : `Manque ${formatMoney(claim - selectedTotal, currency)}.`}
+                        ? "Les biens couvrent la créance à couvrir."
+                        : `Manque ${formatMoney(claimToCover - selectedTotal, currency)}.`}
                   </p>
                   <p className="muted small">
-                    {selectedCount} bien{selectedCount > 1 ? "s" : ""} dans le
-                    dossier
+                    {selectedCount} bien{selectedCount > 1 ? "s" : ""} — puis
+                    pièces jointes sur la fiche.
                   </p>
                 </>
               ) : null}
@@ -654,7 +915,7 @@ export function DationNewPage() {
               >
                 {create.isPending
                   ? "Vérification CBS…"
-                  : "Vérifier CBS et démarrer le circuit"}
+                  : "Créer le brouillon"}
               </button>
               <Link className="btn btn-ghost" to="/dations">
                 Annuler
@@ -670,11 +931,30 @@ export function DationNewPage() {
 export function DationDetailPage() {
   const { id } = useParams<{ id: string }>();
   const qc = useQueryClient();
+  const { user } = useAuth();
+  const canInitiate = hasPerm(user, "guarantees.initiate_dationrequest");
+
+  const [feeType, setFeeType] = useState("NOTARY");
+  const [feeAmount, setFeeAmount] = useState("");
+  const [feePayer, setFeePayer] = useState("CLIENT");
+  const [feeLabel, setFeeLabel] = useState("");
+  const [docFile, setDocFile] = useState<File | null>(null);
+  const [docName, setDocName] = useState("");
+  const [docCat, setDocCat] = useState("DAT_PHOTO");
+  const [docAsset, setDocAsset] = useState("");
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const detail = useQuery({
     queryKey: ["dation-request", id],
     queryFn: async () =>
       (await api.get<DationRequest>(`/dation-requests/${id}/`)).data,
+    enabled: !!id,
+  });
+
+  const docs = useQuery({
+    queryKey: ["dation-docs", id],
+    queryFn: async () =>
+      (await api.get<GedDocument[]>(`/dation-requests/${id}/documents/`)).data,
     enabled: !!id,
   });
 
@@ -696,22 +976,118 @@ export function DationDetailPage() {
         .data,
   });
 
+  function invalidateAll() {
+    qc.invalidateQueries({ queryKey: ["dation-request", id] });
+    qc.invalidateQueries({ queryKey: ["dation-docs", id] });
+    qc.invalidateQueries({ queryKey: ["dation-workflow", id] });
+    qc.invalidateQueries({ queryKey: ["dation-requests"] });
+    qc.invalidateQueries({ queryKey: ["guarantees"] });
+  }
+
+  function errMsg(err: unknown, fallback: string) {
+    const data = (err as { response?: { data?: unknown } })?.response?.data;
+    const raw =
+      data && typeof data === "object" && "errors" in data
+        ? (data as { errors: unknown }).errors
+        : data;
+    if (typeof raw === "string") return raw;
+    if (Array.isArray(raw)) return raw.map(String).join(" · ");
+    return fallback;
+  }
+
   const retry = useMutation({
     mutationFn: async () =>
       (await api.post(`/dation-requests/${id}/retry_cbs/`)).data,
+    onSuccess: () => invalidateAll(),
+    onError: (e) => setActionError(errMsg(e, "Échec retry CBS.")),
+  });
+
+  const submit = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/dation-requests/${id}/submit/`)).data,
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["dation-request", id] });
-      qc.invalidateQueries({ queryKey: ["guarantees"] });
+      setActionError(null);
+      invalidateAll();
     },
+    onError: (e) => setActionError(errMsg(e, "Soumission impossible.")),
+  });
+
+  const cancel = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/dation-requests/${id}/cancel/`, { comment: "Annulé" }))
+        .data,
+    onSuccess: () => invalidateAll(),
+    onError: (e) => setActionError(errMsg(e, "Annulation impossible.")),
+  });
+
+  const refreshCbs = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/dation-requests/${id}/refresh-cbs/`)).data,
+    onSuccess: () => invalidateAll(),
+    onError: (e) => setActionError(errMsg(e, "Rafraîchissement CBS impossible.")),
+  });
+
+  const addFee = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post(`/dation-requests/${id}/add-fee/`, {
+          fee_type: feeType,
+          label: feeLabel,
+          amount: feeAmount,
+          payer: feePayer,
+        })
+      ).data,
+    onSuccess: () => {
+      setFeeAmount("");
+      setFeeLabel("");
+      invalidateAll();
+    },
+    onError: (e) => setActionError(errMsg(e, "Ajout de frais impossible.")),
+  });
+
+  const removeFee = useMutation({
+    mutationFn: async (feeId: string) =>
+      (await api.post(`/dation-requests/${id}/remove-fee/${feeId}/`)).data,
+    onSuccess: () => invalidateAll(),
+  });
+
+  const removeAsset = useMutation({
+    mutationFn: async (assetId: string) =>
+      (await api.post(`/dation-requests/${id}/remove-asset/${assetId}/`)).data,
+    onSuccess: () => invalidateAll(),
+  });
+
+  const uploadDoc = useMutation({
+    mutationFn: async () => {
+      const fd = new FormData();
+      if (docFile) fd.append("file", docFile);
+      fd.append("name", docName || docFile?.name || "Document");
+      fd.append("category", docCat);
+      if (docAsset) fd.append("asset", docAsset);
+      return (
+        await api.post(`/dation-requests/${id}/documents/`, fd, {
+          headers: { "Content-Type": "multipart/form-data" },
+        })
+      ).data;
+    },
+    onSuccess: () => {
+      setDocFile(null);
+      setDocName("");
+      setDocAsset("");
+      invalidateAll();
+    },
+    onError: (e) => setActionError(errMsg(e, "Upload impossible.")),
   });
 
   if (detail.isLoading || !detail.data) return <Spinner />;
   const r = detail.data;
   const cur = r.cbs_currency || "XAF";
+  const editable = r.status === "DRAFT" || r.status === "RETURNED";
   const myTask =
     myTasks?.results.find(
       (t) => t.target_meta?.kind === "DATION" && t.target_meta.id === r.id,
     ) ?? null;
+  const fees: DationFee[] = r.fees ?? [];
 
   return (
     <div>
@@ -725,6 +1101,34 @@ export function DationDetailPage() {
               <ArrowLeft />
               Retour
             </Link>
+            {canInitiate && editable && (
+              <button
+                className="btn btn-primary"
+                onClick={() => submit.mutate()}
+                disabled={submit.isPending}
+              >
+                Soumettre au circuit
+              </button>
+            )}
+            {canInitiate && editable && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => cancel.mutate()}
+                disabled={cancel.isPending}
+              >
+                Annuler
+              </button>
+            )}
+            {canInitiate && r.status !== "COMPLETED" && r.status !== "CANCELLED" && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => refreshCbs.mutate()}
+                disabled={refreshCbs.isPending}
+              >
+                <RefreshCw size={16} />
+                Rafraîchir CBS
+              </button>
+            )}
             {r.status === "BLOCKED" && (
               <button
                 className="btn btn-primary"
@@ -739,8 +1143,10 @@ export function DationDetailPage() {
         }
       />
 
+      {actionError && <div className="form-error">{actionError}</div>}
+
       <div className="detail-grid">
-        <Card title="Demande">
+        <Card title="Règlement">
           <dl className="def-list two">
             <div>
               <dt>Statut</dt>
@@ -755,20 +1161,30 @@ export function DationDetailPage() {
               </dd>
             </div>
             <div>
-              <dt>ID client CBS</dt>
-              <dd>
-                <code>{r.cbs_client_id || "—"}</code>
-              </dd>
-            </div>
-            <div>
               <dt>Créance CBS</dt>
               <dd>{formatMoney(r.cbs_total_outstanding, cur)}</dd>
             </div>
             <div>
-              <dt>Valeur totale des biens</dt>
+              <dt>Frais client</dt>
+              <dd>{formatMoney(r.fees_client_total ?? null, cur)}</dd>
+            </div>
+            <div>
+              <dt>Créance à couvrir</dt>
+              <dd>{formatMoney(r.claim_to_cover ?? null, cur)}</dd>
+            </div>
+            <div>
+              <dt>Total biens</dt>
               <dd>
-                {formatMoney(r.assets_total_value ?? r.asset_value, cur)}
+                {formatMoney(r.assets_total_value ?? r.asset_value ?? null, cur)}
               </dd>
+            </div>
+            <div>
+              <dt>Solde résiduel</dt>
+              <dd>{formatMoney(r.residual_balance ?? null, cur)}</dd>
+            </div>
+            <div>
+              <dt>Trop-value</dt>
+              <dd>{formatMoney(r.surplus_amount ?? null, cur)}</dd>
             </div>
             <div>
               <dt>Couverture</dt>
@@ -776,12 +1192,9 @@ export function DationDetailPage() {
                 {r.covers_claim == null ? (
                   "—"
                 ) : r.covers_claim ? (
-                  <Badge value="OK" label="Couvre la créance" />
+                  <Badge value="OK" label="Couvre" />
                 ) : (
-                  <Badge
-                    value="WARN"
-                    label={`Écart ${formatMoney(r.coverage_gap ?? null, cur)}`}
-                  />
+                  <Badge value="WARN" label="Insuffisant" />
                 )}
               </dd>
             </div>
@@ -800,6 +1213,11 @@ export function DationDetailPage() {
               </div>
             )}
           </dl>
+          {r.comment && (
+            <p className="muted small" style={{ marginTop: 12 }}>
+              {r.comment}
+            </p>
+          )}
         </Card>
 
         <Card title="Biens du dossier">
@@ -810,23 +1228,189 @@ export function DationDetailPage() {
               {r.assets!.map((a) => (
                 <li key={a.id}>
                   <span>
-                    <ShieldCheck size={14} />{" "}
-                    {a.source_display}
-                    {a.guarantee_reference && (
-                      <code className="muted">
+                    <ShieldCheck size={14} /> {a.source_display}
+                    {a.asset_type_display && (
+                      <em className="muted small">
                         {" "}
-                        {a.guarantee_reference}
-                      </code>
+                        · {a.asset_type_display}
+                      </em>
+                    )}
+                    {a.guarantee_reference && (
+                      <code className="muted"> {a.guarantee_reference}</code>
                     )}
                     <em className="muted small"> — {a.description}</em>
                   </span>
-                  <span className="num">
-                    {formatMoney(a.value, cur)}
+                  <span className="row-actions">
+                    <span className="num">{formatMoney(a.value, cur)}</span>
+                    {editable && canInitiate && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => removeAsset.mutate(a.id)}
+                        aria-label="Retirer"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
                   </span>
                 </li>
               ))}
             </ul>
           )}
+        </Card>
+
+        <Card title="Frais">
+          {fees.length === 0 ? (
+            <p className="muted small">Aucun frais enregistré.</p>
+          ) : (
+            <ul className="link-list">
+              {fees.map((f) => (
+                <li key={f.id}>
+                  <span>
+                    <Receipt size={14} /> {f.fee_type_display}
+                    {f.label ? ` — ${f.label}` : ""}
+                    <em className="muted small"> · {f.payer_display}</em>
+                  </span>
+                  <span className="row-actions">
+                    <span className="num">{formatMoney(f.amount, cur)}</span>
+                    {editable && canInitiate && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => removeFee.mutate(f.id)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {editable && canInitiate && (
+            <div className="form-grid" style={{ marginTop: 12 }}>
+              <label className="field">
+                <span>Type</span>
+                <select value={feeType} onChange={(e) => setFeeType(e.target.value)}>
+                  {FEE_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Montant</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={feeAmount}
+                  onChange={(e) => setFeeAmount(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Payeur</span>
+                <select value={feePayer} onChange={(e) => setFeePayer(e.target.value)}>
+                  <option value="CLIENT">Client</option>
+                  <option value="INSTITUTION">Institution</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Libellé</span>
+                <input
+                  value={feeLabel}
+                  onChange={(e) => setFeeLabel(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!feeAmount || addFee.isPending}
+                onClick={() => addFee.mutate()}
+              >
+                <Plus size={14} />
+                Ajouter frais
+              </button>
+            </div>
+          )}
+        </Card>
+
+        <Card title="Pièces jointes (documents / photos)">
+          {(docs.data ?? []).length === 0 ? (
+            <p className="muted small">Aucune pièce jointe.</p>
+          ) : (
+            <ul className="link-list">
+              {(docs.data ?? []).map((d) => (
+                <li key={d.id}>
+                  <span>
+                    <FileUp size={14} /> {d.name}
+                    <em className="muted small"> · {d.category_label}</em>
+                  </span>
+                  <a className="btn btn-ghost btn-sm" href={d.file} target="_blank" rel="noreferrer">
+                    Ouvrir
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )}
+          {canInitiate &&
+            !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) && (
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span>Fichier</span>
+                  <input
+                    type="file"
+                    accept=".pdf,.jpg,.jpeg,.png,.tiff,.docx"
+                    onChange={(e) => setDocFile(e.target.files?.[0] ?? null)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Nom</span>
+                  <input
+                    value={docName}
+                    onChange={(e) => setDocName(e.target.value)}
+                    placeholder="Optionnel"
+                  />
+                </label>
+                <label className="field">
+                  <span>Catégorie</span>
+                  <select value={docCat} onChange={(e) => setDocCat(e.target.value)}>
+                    {DOC_CATS.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Bien (optionnel)</span>
+                  <select
+                    value={docAsset}
+                    onChange={(e) => setDocAsset(e.target.value)}
+                  >
+                    <option value="">Dossier entier</option>
+                    {(r.assets ?? []).map((a) => (
+                      <option key={a.id} value={a.id}>
+                        {(a.description || a.guarantee_reference || a.id).slice(
+                          0,
+                          60,
+                        )}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={!docFile || uploadDoc.isPending}
+                  onClick={() => uploadDoc.mutate()}
+                >
+                  <FileUp size={14} />
+                  Joindre
+                </button>
+              </div>
+            )}
         </Card>
 
         {myTask && (
@@ -840,7 +1424,13 @@ export function DationDetailPage() {
 
         <Card title="Circuit">
           {!workflow.data?.instance ? (
-            <EmptyState message="Aucun circuit associé." />
+            <EmptyState
+              message={
+                editable
+                  ? "Circuit non démarré — soumettez le brouillon."
+                  : "Aucun circuit associé."
+              }
+            />
           ) : (
             <dl className="def-list two">
               <div>

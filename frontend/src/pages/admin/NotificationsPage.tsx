@@ -26,6 +26,8 @@ const EMPTY: NotificationSettings = {
   notify_on_completion: true,
   notify_on_rejection: true,
   notify_on_return: true,
+  notify_collection_email: false,
+  notify_collection_sms: false,
   from_email: "",
   reply_to: "",
   cc_tenant_email: false,
@@ -99,6 +101,8 @@ export function AdminNotificationsPage() {
         notify_on_completion: form.notify_on_completion,
         notify_on_rejection: form.notify_on_rejection,
         notify_on_return: form.notify_on_return,
+        notify_collection_email: form.notify_collection_email,
+        notify_collection_sms: form.notify_collection_sms,
         from_email: form.from_email,
         reply_to: form.reply_to,
         cc_tenant_email: form.cc_tenant_email,
@@ -462,6 +466,38 @@ export function AdminNotificationsPage() {
               <span>
                 Informer l’initiateur (et les intervenants) en cas de renvoi
                 pour correction
+              </span>
+            </label>
+            <label className="field checkbox-field">
+              <input
+                type="checkbox"
+                checked={form.notify_collection_email}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    notify_collection_email: e.target.checked,
+                  })
+                }
+                disabled={!form.enabled}
+              />
+              <span>
+                Relances recouvrement automatiques par e-mail (actions dues)
+              </span>
+            </label>
+            <label className="field checkbox-field">
+              <input
+                type="checkbox"
+                checked={form.notify_collection_sms}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    notify_collection_sms: e.target.checked,
+                  })
+                }
+                disabled={!form.enabled}
+              />
+              <span>
+                Relances recouvrement SMS (stub — journalisé, non envoyé)
               </span>
             </label>
             <label className="field checkbox-field">

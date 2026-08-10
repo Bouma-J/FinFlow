@@ -10,9 +10,15 @@ class TenantNotificationSettingsAdmin(admin.ModelAdmin):
         "enabled",
         "notify_on_step",
         "notify_on_completion",
+        "notify_collection_email",
         "from_email",
     ]
-    list_filter = ["enabled", "notify_on_step", "notify_on_completion"]
+    list_filter = [
+        "enabled",
+        "notify_on_step",
+        "notify_on_completion",
+        "notify_collection_email",
+    ]
 
 
 @admin.register(NotificationLog)

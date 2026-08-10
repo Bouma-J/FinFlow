@@ -53,6 +53,21 @@ class TenantNotificationSettings(BaseModel):
             "lorsque le dossier est renvoyé pour correction."
         ),
     )
+    notify_collection_email = models.BooleanField(
+        "relances recouvrement par e-mail",
+        default=False,
+        help_text=(
+            "Envoie un e-mail de relance au client lorsque la prochaine "
+            "action du dossier est un courriel dû."
+        ),
+    )
+    notify_collection_sms = models.BooleanField(
+        "relances recouvrement par SMS (stub)",
+        default=False,
+        help_text=(
+            "Journalise une tentative SMS (provider non branché : statut SKIPPED)."
+        ),
+    )
     from_email = models.CharField(
         "expéditeur (From)",
         max_length=255,
@@ -117,6 +132,7 @@ class NotificationLog(TenantScopedModel):
         COMPLETION = "COMPLETION", "Fin de circuit"
         REJECTION = "REJECTION", "Rejet"
         RETURN = "RETURN", "Renvoi"
+        COLLECTION_REMINDER = "COLLECTION_REMINDER", "Relance recouvrement"
 
     class Status(models.TextChoices):
         PENDING = "PENDING", "En attente"

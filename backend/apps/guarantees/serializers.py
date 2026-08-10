@@ -9,7 +9,9 @@ from .models import (
     GuaranteeMovement,
     GuaranteePhoto,
     GuaranteeReleaseRequest,
+    ReleaseFee,
     DationAsset,
+    DationFee,
     DationRequest,
 )
 
@@ -298,14 +300,60 @@ class GuaranteeSerializer(serializers.ModelSerializer):
         return guarantee
 
 
+class ReleaseFeeSerializer(serializers.ModelSerializer):
+    fee_type_display = serializers.CharField(
+        source="get_fee_type_display", read_only=True
+    )
+    payer_display = serializers.CharField(
+        source="get_payer_display", read_only=True
+    )
+
+    class Meta:
+        model = ReleaseFee
+        fields = [
+            "id",
+            "fee_type",
+            "fee_type_display",
+            "label",
+            "amount",
+            "payer",
+            "payer_display",
+            "fee_date",
+            "recoverable",
+            "notes",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class ReleaseDocumentUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    category = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=50,
+        help_text="Code GED (ex. ML_DEMANDE). Défaut : ML_OTHER.",
+    )
+
+
 class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(
         source="get_status_display", read_only=True
+    )
+    acte_status_display = serializers.CharField(
+        source="get_acte_status_display", read_only=True
     )
     guarantee_reference = serializers.CharField(
         source="guarantee.reference", read_only=True
     )
     client_display = serializers.SerializerMethodField()
+    fees = ReleaseFeeSerializer(many=True, read_only=True)
+    has_client_demande = serializers.SerializerMethodField()
+    has_generated_acte = serializers.SerializerMethodField()
+    has_signed_acte = serializers.SerializerMethodField()
+    acte_generated_url = serializers.SerializerMethodField()
+    acte_signed_url = serializers.SerializerMethodField()
 
     class Meta:
         model = GuaranteeReleaseRequest
@@ -326,6 +374,18 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
             "cbs_raw",
             "request_date",
             "release_fees",
+            "fees",
+            "fees_client_total",
+            "fees_institution_total",
+            "acte_status",
+            "acte_status_display",
+            "acte_generated_at",
+            "acte_signed_at",
+            "acte_generated_url",
+            "acte_signed_url",
+            "has_client_demande",
+            "has_generated_acte",
+            "has_signed_acte",
             "status",
             "status_display",
             "comment",
@@ -342,6 +402,18 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
             "cbs_currency",
             "cbs_checked_at",
             "cbs_raw",
+            "fees",
+            "fees_client_total",
+            "fees_institution_total",
+            "acte_status",
+            "acte_status_display",
+            "acte_generated_at",
+            "acte_signed_at",
+            "acte_generated_url",
+            "acte_signed_url",
+            "has_client_demande",
+            "has_generated_acte",
+            "has_signed_acte",
             "status",
             "completed_at",
             "created_at",
@@ -352,10 +424,38 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
         client = obj.guarantee.client if obj.guarantee_id else None
         return getattr(client, "display_name", str(client)) if client else ""
 
+    def get_has_client_demande(self, obj):
+        from apps.guarantees.process_services import has_client_demande
+
+        return has_client_demande(obj)
+
+    def get_has_generated_acte(self, obj):
+        return obj.has_generated_acte()
+
+    def get_has_signed_acte(self, obj):
+        return obj.has_signed_acte()
+
+    def get_acte_generated_url(self, obj):
+        if not obj.acte_generated:
+            return None
+        from apps.common.storage_urls import file_download_url
+
+        return file_download_url(obj.acte_generated)
+
+    def get_acte_signed_url(self, obj):
+        if not obj.acte_signed:
+            return None
+        from apps.common.storage_urls import file_download_url
+
+        return file_download_url(obj.acte_signed)
+
 
 class DationAssetSerializer(serializers.ModelSerializer):
     source_display = serializers.CharField(
         source="get_source_display", read_only=True
+    )
+    asset_type_display = serializers.CharField(
+        source="get_asset_type_display", read_only=True
     )
     guarantee_reference = serializers.CharField(
         source="guarantee.reference", read_only=True, default=None
@@ -372,14 +472,60 @@ class DationAssetSerializer(serializers.ModelSerializer):
             "id",
             "source",
             "source_display",
+            "asset_type",
+            "asset_type_display",
             "guarantee",
             "guarantee_reference",
             "guarantee_type_display",
             "description",
             "value",
+            "notes",
             "created_at",
         ]
         read_only_fields = fields
+
+
+class DationFeeSerializer(serializers.ModelSerializer):
+    fee_type_display = serializers.CharField(
+        source="get_fee_type_display", read_only=True
+    )
+    payer_display = serializers.CharField(
+        source="get_payer_display", read_only=True
+    )
+
+    class Meta:
+        model = DationFee
+        fields = [
+            "id",
+            "asset",
+            "fee_type",
+            "fee_type_display",
+            "label",
+            "amount",
+            "payer",
+            "payer_display",
+            "fee_date",
+            "recoverable",
+            "notes",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class DationDocumentUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    category = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=50,
+        help_text="Code catégorie GED (ex. DAT_PHOTO). Défaut : DAT_OTHER.",
+    )
+    asset = serializers.UUIDField(
+        required=False,
+        allow_null=True,
+        help_text="Optionnel : rattacher la pièce à un bien du dossier.",
+    )
 
 
 class DationRequestSerializer(serializers.ModelSerializer):
@@ -388,9 +534,11 @@ class DationRequestSerializer(serializers.ModelSerializer):
     )
     client_display = serializers.SerializerMethodField()
     assets = DationAssetSerializer(many=True, read_only=True)
+    fees = DationFeeSerializer(many=True, read_only=True)
     assets_total_value = serializers.SerializerMethodField()
     covers_claim = serializers.SerializerMethodField()
     coverage_gap = serializers.SerializerMethodField()
+    settlement = serializers.SerializerMethodField()
 
     class Meta:
         model = DationRequest
@@ -409,9 +557,18 @@ class DationRequestSerializer(serializers.ModelSerializer):
             "asset_description",
             "asset_value",
             "assets",
+            "fees",
             "assets_total_value",
+            "fees_client_total",
+            "fees_institution_total",
+            "claim_to_cover",
+            "residual_balance",
+            "surplus_amount",
+            "require_full_coverage",
+            "settlement_notes",
             "covers_claim",
             "coverage_gap",
+            "settlement",
             "status",
             "status_display",
             "comment",
@@ -433,9 +590,16 @@ class DationRequestSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
             "assets",
+            "fees",
             "assets_total_value",
+            "fees_client_total",
+            "fees_institution_total",
+            "claim_to_cover",
+            "residual_balance",
+            "surplus_amount",
             "covers_claim",
             "coverage_gap",
+            "settlement",
         ]
 
     def get_client_display(self, obj):
@@ -449,7 +613,11 @@ class DationRequestSerializer(serializers.ModelSerializer):
         return obj.covers_claim()
 
     def get_coverage_gap(self, obj):
-        claim = obj.cbs_total_outstanding
-        if claim is None:
+        data = obj.compute_settlement()
+        if obj.cbs_total_outstanding is None:
             return None
-        return obj.assets_total_value() - claim
+        return data["coverage_gap"]
+
+    def get_settlement(self, obj):
+        data = obj.compute_settlement()
+        return {k: (str(v) if hasattr(v, "quantize") else v) for k, v in data.items()}

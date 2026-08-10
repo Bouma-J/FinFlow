@@ -29,6 +29,8 @@ import {
 } from "@/pages/DationsPage";
 import { CollectionsPage } from "@/pages/CollectionsPage";
 import { CollectionCaseDetailPage } from "@/pages/CollectionCaseDetailPage";
+import { LegalPartiesPage } from "@/pages/LegalPartiesPage";
+import { LitigationDetailPage } from "@/pages/LitigationDetailPage";
 import { SuretyEngagementAddPage } from "@/pages/SuretyEngagementAddPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ForceChangePasswordPage } from "@/pages/ForceChangePasswordPage";
@@ -129,6 +131,11 @@ export default function App() {
         <Route path="/dations/:id" element={<DationDetailPage />} />
         <Route path="/recouvrement" element={<CollectionsPage />} />
         <Route path="/recouvrement/:id" element={<CollectionCaseDetailPage />} />
+        <Route
+          path="/recouvrement/:caseId/contentieux/:litId"
+          element={<LitigationDetailPage />}
+        />
+        <Route path="/intervenants-juridiques" element={<LegalPartiesPage />} />
         <Route path="/simulateur" element={<SimulatorPage />} />
         <Route path="/audit" element={<Navigate to="/admin/audit" replace />} />
         <Route

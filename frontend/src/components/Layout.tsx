@@ -21,6 +21,7 @@ import {
   Package,
   PanelLeftClose,
   PanelLeftOpen,
+  Scale,
   ScrollText,
   ShieldCheck,
   ShieldOff,
@@ -56,6 +57,7 @@ const NAV_ITEMS: NavItem[] = [
   { to: "/mains-levees", label: "Mains levées", icon: ShieldOff },
   { to: "/dations", label: "Dations", icon: Unlock },
   { to: "/recouvrement", label: "Recouvrement", icon: CircleDollarSign },
+  { to: "/intervenants-juridiques", label: "Intervenants juridiques", icon: Scale },
   { to: "/simulateur", label: "Simulateur", icon: Calculator },
 ];
 

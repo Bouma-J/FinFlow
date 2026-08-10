@@ -1429,7 +1429,7 @@ class Loan(TenantScopedModel):
     class Status(models.TextChoices):
         ACTIVE = "ACTIVE", "En cours"
         CLOSED = "CLOSED", "Soldé"
-        DEFAULTED = "DEFAULTED", "En défaut"
+        DEFAULTED = "DEFAULTED", "Passé en perte / défaut"
 
     application = models.OneToOneField(
         CreditApplication,

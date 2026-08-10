@@ -8,7 +8,10 @@ from apps.common.viewsets import AgencyScopedViewSet, TenantScopedViewSet
 from apps.workflow.models import WorkflowInstance
 from django.contrib.contenttypes.models import ContentType
 
+from apps.common.tenancy import get_current_tenant_id
+
 from .models import (
+    DationAsset,
     DationRequest,
     Guarantee,
     GuaranteeMovement,
@@ -17,19 +20,44 @@ from .models import (
 
 from .process_services import (
     ProcessError,
+    add_dation_asset,
+    add_dation_fee,
+    add_release_fee,
+    cancel_dation_request,
+    cancel_release_request,
     complete_dation_request,
     complete_release_request,
+    dation_documents,
+    ensure_dation_document_categories,
+    ensure_release_document_categories,
+    generate_release_acte,
     initiate_dation_request,
     initiate_release_request,
     preview_dation_cbs,
+    refresh_dation_cbs,
+    refresh_release_cbs,
     release_client_context,
+    release_documents,
+    remove_dation_asset,
+    remove_dation_fee,
+    remove_release_fee,
+    submit_dation_request,
+    submit_release_request,
+    update_dation_request,
+    update_release_request,
+    upload_release_acte_signed,
 )
 from .serializers import (
+    DationAssetSerializer,
+    DationDocumentUploadSerializer,
+    DationFeeSerializer,
     DationRequestSerializer,
     GuaranteeListSerializer,
     GuaranteeMovementSerializer,
     GuaranteeReleaseRequestSerializer,
     GuaranteeSerializer,
+    ReleaseDocumentUploadSerializer,
+    ReleaseFeeSerializer,
 )
 
 # Correspondance entre le type de mouvement et le nouveau statut de la garantie
@@ -128,6 +156,7 @@ class GuaranteeViewSet(AgencyScopedViewSet):
                 user=request.user,
                 comment=request.data.get("comment", ""),
                 cbs_loan_reference=request.data.get("cbs_loan_reference", ""),
+                as_draft=True,
             )
         except ProcessError as exc:
             raise ValidationError(str(exc)) from exc
@@ -143,12 +172,21 @@ class GuaranteeMovementViewSet(TenantScopedViewSet):
 class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
     queryset = GuaranteeReleaseRequest.objects.select_related(
         "guarantee", "guarantee__client", "application", "loan", "agency"
-    ).all()
+    ).prefetch_related("fees").all()
     serializer_class = GuaranteeReleaseRequestSerializer
     action_perms = {
         "create": ["guarantees.initiate_guaranteereleaserequest"],
         "client_context": ["guarantees.initiate_guaranteereleaserequest"],
         "retry_cbs": ["guarantees.initiate_guaranteereleaserequest"],
+        "submit": ["guarantees.initiate_guaranteereleaserequest"],
+        "cancel": ["guarantees.initiate_guaranteereleaserequest"],
+        "refresh_cbs": ["guarantees.initiate_guaranteereleaserequest"],
+        "add_fee": ["guarantees.initiate_guaranteereleaserequest"],
+        "remove_fee": ["guarantees.initiate_guaranteereleaserequest"],
+        "update_draft": ["guarantees.initiate_guaranteereleaserequest"],
+        "generate_acte": ["guarantees.initiate_guaranteereleaserequest"],
+        "upload_acte_signe": ["guarantees.initiate_guaranteereleaserequest"],
+        "documents": ["guarantees.view_guaranteereleaserequest"],
         "workflow": ["guarantees.view_guaranteereleaserequest"],
     }
     filterset_fields = ["status", "guarantee", "application", "agency"]
@@ -157,18 +195,14 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
     ]
     http_method_names = ["get", "head", "options", "post"]
 
+    def _can_initiate(self, user):
+        return user.is_superuser or user.has_perm(
+            "guarantees.initiate_guaranteereleaserequest"
+        )
+
     @action(detail=False, methods=["get"], url_path="client-context")
     def client_context(self, request):
-        """
-        Garanties Fin Flow + crédits du client avec statut CBS.
-        Matricule CBS = fiche client (cbs_client_id).
-        """
-        if not (
-            request.user.is_superuser
-            or request.user.has_perm(
-                "guarantees.initiate_guaranteereleaserequest"
-            )
-        ):
+        if not self._can_initiate(request.user):
             raise PermissionDenied(
                 "Vous n'avez pas le droit d'initier une main levée."
             )
@@ -182,7 +216,8 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
         try:
             data = release_client_context(
                 client=client,
-                tenant_id=getattr(request.user, "tenant_id", None)
+                tenant_id=get_current_tenant_id()
+                or getattr(request.user, "tenant_id", None)
                 or client.tenant_id,
             )
         except ProcessError as exc:
@@ -190,12 +225,7 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
         return Response(data)
 
     def create(self, request, *args, **kwargs):
-        if not (
-            request.user.is_superuser
-            or request.user.has_perm(
-                "guarantees.initiate_guaranteereleaserequest"
-            )
-        ):
+        if not self._can_initiate(request.user):
             raise PermissionDenied(
                 "Vous n'avez pas le droit d'initier une main levée."
             )
@@ -217,7 +247,16 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
             except Loan.DoesNotExist as exc:
                 raise ValidationError({"loan": "Prêt introuvable."}) from exc
 
-        request_date = request.data.get("request_date") or None
+        fees = request.data.get("fees") or []
+        if fees and not isinstance(fees, list):
+            raise ValidationError({"fees": "Liste attendue."})
+
+        as_draft_raw = request.data.get("as_draft", True)
+        if isinstance(as_draft_raw, str):
+            as_draft = as_draft_raw.strip().lower() not in {"0", "false", "no"}
+        else:
+            as_draft = bool(as_draft_raw)
+
         try:
             req = initiate_release_request(
                 guarantee=guarantee,
@@ -225,23 +264,214 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
                 comment=request.data.get("comment", ""),
                 cbs_loan_reference=request.data.get("cbs_loan_reference", ""),
                 loan=loan,
-                request_date=request_date,
+                request_date=request.data.get("request_date") or None,
                 release_fees=request.data.get("release_fees"),
                 cbs_client_id=request.data.get("cbs_client_id", ""),
+                fees=fees,
+                as_draft=as_draft,
             )
         except ProcessError as exc:
             raise ValidationError(str(exc)) from exc
         return Response(GuaranteeReleaseRequestSerializer(req).data, status=201)
 
+    @action(detail=True, methods=["post"], url_path="update-draft")
+    def update_draft(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        loan = None
+        kwargs = {
+            "user": request.user,
+            "comment": request.data.get("comment"),
+            "request_date": request.data.get("request_date"),
+            "cbs_loan_reference": request.data.get("cbs_loan_reference"),
+        }
+        if "loan" in request.data:
+            loan_id = request.data.get("loan")
+            if loan_id:
+                from apps.credits.models import Loan
+
+                try:
+                    loan = Loan.objects.get(pk=loan_id)
+                except Loan.DoesNotExist as exc:
+                    raise ValidationError({"loan": "Prêt introuvable."}) from exc
+            kwargs["loan"] = loan
+        try:
+            updated = update_release_request(req, **kwargs)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="add-fee")
+    def add_fee(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        try:
+            fee = add_release_fee(req, request.data, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(
+            {
+                "fee": ReleaseFeeSerializer(fee).data,
+                "release": GuaranteeReleaseRequestSerializer(req).data,
+            },
+            status=201,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"remove-fee/(?P<fee_id>[^/.]+)",
+    )
+    def remove_fee(self, request, pk=None, fee_id=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        try:
+            updated = remove_release_fee(req, fee_id, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def submit(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        try:
+            updated = submit_release_request(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        try:
+            updated = cancel_release_request(
+                req,
+                user=request.user,
+                comment=request.data.get("comment", ""),
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="refresh-cbs")
+    def refresh_cbs(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        try:
+            updated = refresh_release_cbs(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="generate-acte")
+    def generate_acte(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        try:
+            updated = generate_release_acte(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="upload-acte-signe")
+    def upload_acte_signe(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        req = self.get_object()
+        upload = request.FILES.get("file")
+        if not upload:
+            raise ValidationError({"file": "Fichier obligatoire."})
+        try:
+            updated = upload_release_acte_signed(
+                req, upload, user=request.user
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["get", "post"])
+    def documents(self, request, pk=None):
+        req = self.get_object()
+        if request.method == "GET":
+            from apps.documents.serializers import DocumentSerializer
+
+            return Response(
+                DocumentSerializer(release_documents(req), many=True).data
+            )
+        if not self._can_initiate(request.user):
+            raise PermissionDenied()
+        if req.status in (
+            GuaranteeReleaseRequest.Status.COMPLETED,
+            GuaranteeReleaseRequest.Status.CANCELLED,
+            GuaranteeReleaseRequest.Status.REJECTED,
+        ):
+            raise ValidationError(
+                "Impossible d'ajouter des pièces sur ce statut."
+            )
+
+        from django.contrib.contenttypes.models import ContentType
+
+        from apps.documents.models import Document, DocumentCategory
+        from apps.documents.serializers import DocumentSerializer
+
+        ensure_release_document_categories(req.tenant)
+        serializer = ReleaseDocumentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        upload = serializer.validated_data["file"]
+        name = (serializer.validated_data.get("name") or "").strip() or upload.name
+        category_code = (
+            serializer.validated_data.get("category") or ""
+        ).strip() or "ML_OTHER"
+        category = DocumentCategory.objects.filter(
+            tenant_id=req.tenant_id, code=category_code, is_active=True
+        ).first()
+        if category is None:
+            category = DocumentCategory.objects.filter(
+                tenant_id=req.tenant_id, code="ML_OTHER"
+            ).first()
+        if category is None:
+            raise ValidationError(
+                {"category": "Catégorie documentaire introuvable."}
+            )
+        ct = ContentType.objects.get_for_model(GuaranteeReleaseRequest)
+        doc = Document(
+            tenant_id=req.tenant_id,
+            category=category,
+            name=name,
+            file=upload,
+            content_type=ct,
+            object_id=req.id,
+            uploaded_by=request.user,
+        )
+        doc.mime_type = getattr(upload, "content_type", "") or ""
+        doc.save()
+        doc.compute_hash()
+        doc.save(update_fields=["mime_type", "sha256", "size_bytes"])
+        from apps.documents.quotas import bump_ged_usage
+
+        bump_ged_usage(doc.tenant_id, doc.size_bytes)
+        return Response(DocumentSerializer(doc).data, status=201)
+
     @action(detail=True, methods=["post"])
     def retry_cbs(self, request, pk=None):
-        """Retente la finalisation CBS si la demande est bloquée."""
         req = self.get_object()
         if req.status != GuaranteeReleaseRequest.Status.BLOCKED:
             raise ValidationError(
                 "Seule une demande bloquée par le CBS peut être relancée."
             )
-        updated = complete_release_request(req)
+        try:
+            updated = complete_release_request(req)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
         return Response(GuaranteeReleaseRequestSerializer(updated).data)
 
     @action(detail=True, methods=["get"])
@@ -265,17 +495,32 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
 class DationRequestViewSet(TenantScopedViewSet):
     queryset = DationRequest.objects.select_related(
         "client", "application", "agency", "resulting_guarantee"
-    ).prefetch_related("assets", "assets__guarantee").all()
+    ).prefetch_related("assets", "assets__guarantee", "fees", "fees__asset").all()
     serializer_class = DationRequestSerializer
     action_perms = {
         "create": ["guarantees.initiate_dationrequest"],
         "preview_cbs": ["guarantees.initiate_dationrequest"],
         "retry_cbs": ["guarantees.initiate_dationrequest"],
+        "submit": ["guarantees.initiate_dationrequest"],
+        "cancel": ["guarantees.initiate_dationrequest"],
+        "refresh_cbs": ["guarantees.initiate_dationrequest"],
+        "add_asset": ["guarantees.initiate_dationrequest"],
+        "remove_asset": ["guarantees.initiate_dationrequest"],
+        "add_fee": ["guarantees.initiate_dationrequest"],
+        "remove_fee": ["guarantees.initiate_dationrequest"],
+        "update_draft": ["guarantees.initiate_dationrequest"],
+        "documents": ["guarantees.view_dationrequest"],
+        "ensure_categories": ["guarantees.initiate_dationrequest"],
         "workflow": ["guarantees.view_dationrequest"],
     }
     filterset_fields = ["status", "client", "application", "agency"]
     search_fields = ["reference", "cbs_client_id", "asset_description", "comment"]
-    http_method_names = ["get", "head", "options", "post"]
+    http_method_names = ["get", "head", "options", "post", "patch"]
+
+    def _can_initiate(self, user):
+        return user.is_superuser or user.has_perm(
+            "guarantees.initiate_dationrequest"
+        )
 
     @action(detail=False, methods=["get"], url_path="preview-cbs")
     def preview_cbs(self, request):
@@ -283,10 +528,7 @@ class DationRequestViewSet(TenantScopedViewSet):
         Interroge le CBS pour le montant de créance (encours client)
         sans créer de demande — utilisé à la sélection du client.
         """
-        if not (
-            request.user.is_superuser
-            or request.user.has_perm("guarantees.initiate_dationrequest")
-        ):
+        if not self._can_initiate(request.user):
             raise PermissionDenied(
                 "Vous n'avez pas le droit d'initier une dation en paiement."
             )
@@ -296,7 +538,9 @@ class DationRequestViewSet(TenantScopedViewSet):
             or ""
         ).strip()
         currency = (request.query_params.get("currency") or "XAF").strip() or "XAF"
-        tenant_id = getattr(request.user, "tenant_id", None)
+        tenant_id = get_current_tenant_id() or getattr(
+            request.user, "tenant_id", None
+        )
         if not tenant_id:
             raise ValidationError("Contexte filiale manquant.")
         try:
@@ -318,10 +562,7 @@ class DationRequestViewSet(TenantScopedViewSet):
         )
 
     def create(self, request, *args, **kwargs):
-        if not (
-            request.user.is_superuser
-            or request.user.has_perm("guarantees.initiate_dationrequest")
-        ):
+        if not self._can_initiate(request.user):
             raise PermissionDenied(
                 "Vous n'avez pas le droit d'initier une dation en paiement."
             )
@@ -353,6 +594,17 @@ class DationRequestViewSet(TenantScopedViewSet):
         if not isinstance(additional_assets, list):
             raise ValidationError({"additional_assets": "Liste attendue."})
 
+        fees = request.data.get("fees") or []
+        if fees and not isinstance(fees, list):
+            raise ValidationError({"fees": "Liste attendue."})
+
+        # as_draft=True par défaut (pièces / frais avant circuit).
+        as_draft_raw = request.data.get("as_draft", True)
+        if isinstance(as_draft_raw, str):
+            as_draft = as_draft_raw.strip().lower() not in {"0", "false", "no"}
+        else:
+            as_draft = bool(as_draft_raw)
+
         asset_value = request.data.get("asset_value")
         try:
             req = initiate_dation_request(
@@ -365,10 +617,244 @@ class DationRequestViewSet(TenantScopedViewSet):
                 cbs_client_id=request.data.get("cbs_client_id", ""),
                 guarantee_ids=guarantee_ids,
                 additional_assets=additional_assets,
+                fees=fees,
+                as_draft=as_draft,
+                require_full_coverage=bool(
+                    request.data.get("require_full_coverage", False)
+                ),
+                settlement_notes=request.data.get("settlement_notes", "") or "",
             )
         except ProcessError as exc:
             raise ValidationError(str(exc)) from exc
         return Response(DationRequestSerializer(req).data, status=201)
+
+    @action(detail=True, methods=["post"], url_path="update-draft")
+    def update_draft(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        application = None
+        if "application" in request.data:
+            app_id = request.data.get("application")
+            if app_id:
+                from apps.credits.models import CreditApplication
+
+                try:
+                    application = CreditApplication.objects.get(pk=app_id)
+                except CreditApplication.DoesNotExist as exc:
+                    raise ValidationError(
+                        {"application": "Dossier introuvable."}
+                    ) from exc
+        kwargs = {
+            "user": request.user,
+            "comment": request.data.get("comment"),
+            "settlement_notes": request.data.get("settlement_notes"),
+            "require_full_coverage": request.data.get("require_full_coverage"),
+        }
+        if "application" in request.data:
+            kwargs["application"] = application
+        try:
+            updated = update_dation_request(req, **kwargs)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(DationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="add-asset")
+    def add_asset(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        try:
+            asset = add_dation_asset(
+                req,
+                guarantee_id=request.data.get("guarantee")
+                or request.data.get("guarantee_id"),
+                description=request.data.get("description", ""),
+                value=request.data.get("value"),
+                asset_type=request.data.get("asset_type"),
+                notes=request.data.get("notes", ""),
+                user=request.user,
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(
+            {
+                "asset": DationAssetSerializer(asset).data,
+                "dation": DationRequestSerializer(req).data,
+            },
+            status=201,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"remove-asset/(?P<asset_id>[^/.]+)",
+    )
+    def remove_asset(self, request, pk=None, asset_id=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        try:
+            updated = remove_dation_asset(req, asset_id, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(DationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="add-fee")
+    def add_fee(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        try:
+            fee = add_dation_fee(req, request.data, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(
+            {
+                "fee": DationFeeSerializer(fee).data,
+                "dation": DationRequestSerializer(req).data,
+            },
+            status=201,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"remove-fee/(?P<fee_id>[^/.]+)",
+    )
+    def remove_fee(self, request, pk=None, fee_id=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        try:
+            updated = remove_dation_fee(req, fee_id, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(DationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def submit(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        try:
+            updated = submit_dation_request(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(DationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        try:
+            updated = cancel_dation_request(
+                req,
+                user=request.user,
+                comment=request.data.get("comment", ""),
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(DationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="refresh-cbs")
+    def refresh_cbs(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        req = self.get_object()
+        try:
+            updated = refresh_dation_cbs(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(DationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["get", "post"])
+    def documents(self, request, pk=None):
+        """Pièces GED (documents / photos) liées au dossier ou à un bien."""
+        req = self.get_object()
+        if request.method == "GET":
+            if not (
+                request.user.is_superuser
+                or request.user.has_perm("guarantees.view_dationrequest")
+            ):
+                raise PermissionDenied()
+            from apps.documents.serializers import DocumentSerializer
+
+            docs = dation_documents(req)
+            return Response(DocumentSerializer(docs, many=True).data)
+
+        if not self._can_initiate(request.user):
+            raise PermissionDenied("Droit initiate_dationrequest requis.")
+        if req.status in (
+            DationRequest.Status.COMPLETED,
+            DationRequest.Status.CANCELLED,
+            DationRequest.Status.REJECTED,
+        ):
+            raise ValidationError(
+                "Impossible d'ajouter des pièces sur ce statut."
+            )
+
+        from django.contrib.contenttypes.models import ContentType
+
+        from apps.documents.models import Document, DocumentCategory
+        from apps.documents.serializers import DocumentSerializer
+
+        ensure_dation_document_categories(req.tenant)
+        serializer = DationDocumentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        upload = serializer.validated_data["file"]
+        name = (serializer.validated_data.get("name") or "").strip() or upload.name
+        category_code = (
+            serializer.validated_data.get("category") or ""
+        ).strip() or "DAT_OTHER"
+        asset_id = serializer.validated_data.get("asset")
+        target = req
+        ct = ContentType.objects.get_for_model(DationRequest)
+        if asset_id:
+            try:
+                target = req.assets.get(pk=asset_id)
+            except DationAsset.DoesNotExist as exc:
+                raise ValidationError(
+                    {"asset": "Bien introuvable sur ce dossier."}
+                ) from exc
+            ct = ContentType.objects.get_for_model(DationAsset)
+
+        category = DocumentCategory.objects.filter(
+            tenant_id=req.tenant_id, code=category_code, is_active=True
+        ).first()
+        if category is None:
+            category = DocumentCategory.objects.filter(
+                tenant_id=req.tenant_id, code="DAT_OTHER"
+            ).first()
+        if category is None:
+            raise ValidationError(
+                {"category": "Catégorie documentaire introuvable."}
+            )
+
+        doc = Document(
+            tenant_id=req.tenant_id,
+            category=category,
+            name=name,
+            file=upload,
+            content_type=ct,
+            object_id=target.id,
+            uploaded_by=request.user,
+        )
+        doc.mime_type = getattr(upload, "content_type", "") or ""
+        doc.save()
+        doc.compute_hash()
+        doc.save(update_fields=["mime_type", "sha256", "size_bytes"])
+        from apps.documents.quotas import bump_ged_usage
+
+        bump_ged_usage(doc.tenant_id, doc.size_bytes)
+        return Response(DocumentSerializer(doc).data, status=201)
+
+    @action(detail=True, methods=["post"], url_path="ensure-categories")
+    def ensure_categories(self, request, pk=None):
+        req = self.get_object()
+        created = ensure_dation_document_categories(req.tenant)
+        return Response({"created": created})
 
     @action(detail=True, methods=["post"])
     def retry_cbs(self, request, pk=None):

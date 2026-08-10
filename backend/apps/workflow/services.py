@@ -233,7 +233,14 @@ def _sync_target_status(instance):
         if instance.status == WorkflowInstance.Status.APPROVED:
             target.status = GuaranteeReleaseRequest.Status.APPROVED
             target.save(update_fields=["status", "updated_at"])
-            complete_release_request(target)
+            # Clôture uniquement si l'acte signé est déjà déposé (règle A).
+            if target.has_signed_acte():
+                from apps.guarantees.process_services import ProcessError
+
+                try:
+                    complete_release_request(target)
+                except ProcessError:
+                    pass
             return
         new_status = mapping.get(instance.status)
         if new_status:

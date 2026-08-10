@@ -125,6 +125,15 @@ _VIEW_COLLECTIONS = (
     ("collections", "view_collectioncase"),
     ("collections", "view_collectionaction"),
     ("collections", "view_paymentpromise"),
+    ("collections", "view_collectionstagehistory"),
+    ("collections", "view_collectionescalationrule"),
+    ("collections", "view_litigationfile"),
+    ("collections", "view_litigationevent"),
+    ("collections", "view_legalparty"),
+    ("collections", "view_litigationseizure"),
+    ("collections", "view_litigationcost"),
+    ("collections", "view_loanrestructure"),
+    ("collections", "view_writeoff"),
 )
 
 _VIEW_TRANSVERSE = (
@@ -245,6 +254,23 @@ _WRITE_COLLECTIONS_MGR = (
     ("collections", "add_paymentpromise"),
     ("collections", "change_paymentpromise"),
     ("collections", "delete_paymentpromise"),
+    ("collections", "add_collectionescalationrule"),
+    ("collections", "change_collectionescalationrule"),
+    ("collections", "delete_collectionescalationrule"),
+    ("collections", "add_litigationfile"),
+    ("collections", "change_litigationfile"),
+    ("collections", "add_litigationevent"),
+    ("collections", "change_litigationevent"),
+    ("collections", "add_legalparty"),
+    ("collections", "change_legalparty"),
+    ("collections", "add_litigationseizure"),
+    ("collections", "change_litigationseizure"),
+    ("collections", "add_litigationcost"),
+    ("collections", "change_litigationcost"),
+    ("collections", "add_loanrestructure"),
+    ("collections", "change_loanrestructure"),
+    ("collections", "add_writeoff"),
+    ("collections", "change_writeoff"),
 )
 
 _WRITE_COLLECTIONS_ASSIST = (
@@ -254,6 +280,15 @@ _WRITE_COLLECTIONS_ASSIST = (
     ("collections", "add_collectionaction"),
     ("collections", "add_paymentpromise"),
     ("collections", "change_paymentpromise"),
+    ("collections", "add_litigationfile"),
+    ("collections", "change_litigationfile"),
+    ("collections", "add_litigationevent"),
+    ("collections", "add_legalparty"),
+    ("collections", "change_legalparty"),
+    ("collections", "add_litigationseizure"),
+    ("collections", "change_litigationseizure"),
+    ("collections", "add_litigationcost"),
+    ("collections", "change_litigationcost"),
 )
 
 _READ_METIER = (
@@ -653,6 +688,13 @@ def ensure_default_role_packs(tenant):
     for role_name, spec in DEFAULT_ROLE_PACKS.items():
         ensure_role_pack(tenant, role_name, spec)
     retire_legacy_bootstrap_roles(tenant)
+    from apps.collections.services import (
+        ensure_default_escalation_rules,
+        ensure_litigation_document_categories,
+    )
+
+    ensure_default_escalation_rules(tenant)
+    ensure_litigation_document_categories(tenant)
 
 
 @transaction.atomic

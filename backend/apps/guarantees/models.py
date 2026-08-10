@@ -431,6 +431,12 @@ class GuaranteeMovement(TenantScopedModel):
         return f"{self.get_movement_type_display()} — {self.guarantee}"
 
 
+def release_acte_upload_path(instance, filename):
+    return (
+        f"releases/{instance.tenant_id}/{instance.id}/{safe_filename(filename)}"
+    )
+
+
 class GuaranteeReleaseRequest(TenantScopedModel, AuthoredModel):
     """Demande de main levée — processus dédié avec circuit paramétrable."""
 
@@ -443,6 +449,11 @@ class GuaranteeReleaseRequest(TenantScopedModel, AuthoredModel):
         COMPLETED = "COMPLETED", "Clôturée"
         CANCELLED = "CANCELLED", "Annulée"
         BLOCKED = "BLOCKED", "Bloquée (CBS)"
+
+    class ActeStatus(models.TextChoices):
+        NONE = "NONE", "Non généré"
+        GENERATED = "GENERATED", "Généré"
+        SIGNED = "SIGNED", "Signé déposé"
 
     reference = models.CharField("référence", max_length=30, blank=True, db_index=True)
     guarantee = models.ForeignKey(
@@ -498,6 +509,44 @@ class GuaranteeReleaseRequest(TenantScopedModel, AuthoredModel):
         null=True,
         blank=True,
     )
+    fees_client_total = models.DecimalField(
+        "frais à charge client",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    fees_institution_total = models.DecimalField(
+        "frais à charge institution",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    acte_status = models.CharField(
+        max_length=20,
+        choices=ActeStatus.choices,
+        default=ActeStatus.NONE,
+        db_index=True,
+    )
+    acte_generated = models.FileField(
+        "acte généré",
+        upload_to=release_acte_upload_path,
+        blank=True,
+        null=True,
+    )
+    acte_generated_at = models.DateTimeField(
+        "acte généré le", null=True, blank=True
+    )
+    acte_signed = models.FileField(
+        "acte signé",
+        upload_to=release_acte_upload_path,
+        blank=True,
+        null=True,
+    )
+    acte_signed_at = models.DateTimeField(
+        "acte signé déposé le", null=True, blank=True
+    )
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True
     )
@@ -517,6 +566,86 @@ class GuaranteeReleaseRequest(TenantScopedModel, AuthoredModel):
 
     def __str__(self):
         return self.reference or f"Main levée {self.pk}"
+
+    def fees_total(self, payer=None):
+        qs = self.fees.all()
+        if payer is not None:
+            qs = qs.filter(payer=payer)
+        total = Decimal("0")
+        for fee in qs:
+            total += fee.amount or Decimal("0")
+        return total
+
+    def apply_fees_snapshot(self, *, persist=True):
+        self.fees_client_total = self.fees_total("CLIENT")
+        self.fees_institution_total = self.fees_total("INSTITUTION")
+        legacy = self.fees_client_total + self.fees_institution_total
+        if legacy and (self.release_fees is None or self.release_fees == 0):
+            self.release_fees = legacy
+        if persist and self.pk:
+            self.save(
+                update_fields=[
+                    "fees_client_total",
+                    "fees_institution_total",
+                    "release_fees",
+                    "updated_at",
+                ]
+            )
+        return {
+            "fees_client_total": self.fees_client_total,
+            "fees_institution_total": self.fees_institution_total,
+            "release_fees": self.release_fees,
+        }
+
+    def has_generated_acte(self) -> bool:
+        return bool(self.acte_generated) and self.acte_status in (
+            self.ActeStatus.GENERATED,
+            self.ActeStatus.SIGNED,
+        )
+
+    def has_signed_acte(self) -> bool:
+        return bool(self.acte_signed) and self.acte_status == self.ActeStatus.SIGNED
+
+
+class ReleaseFee(TenantScopedModel):
+    """Frais associés à une main levée."""
+
+    class FeeType(models.TextChoices):
+        NOTARY = "NOTARY", "Notaire / acte"
+        REGISTRATION = "REGISTRATION", "Radiation / publicité"
+        BAILIFF = "BAILIFF", "Huissier"
+        ADMIN = "ADMIN", "Frais administratifs"
+        OTHER = "OTHER", "Divers"
+
+    class Payer(models.TextChoices):
+        CLIENT = "CLIENT", "Client"
+        INSTITUTION = "INSTITUTION", "Institution"
+
+    release = models.ForeignKey(
+        GuaranteeReleaseRequest,
+        on_delete=models.CASCADE,
+        related_name="fees",
+        verbose_name="demande de main levée",
+    )
+    fee_type = models.CharField(
+        max_length=30, choices=FeeType.choices, default=FeeType.OTHER
+    )
+    label = models.CharField("libellé", max_length=255, blank=True)
+    amount = models.DecimalField("montant", max_digits=18, decimal_places=2)
+    payer = models.CharField(
+        max_length=20, choices=Payer.choices, default=Payer.CLIENT
+    )
+    fee_date = models.DateField("date", null=True, blank=True)
+    recoverable = models.BooleanField("récupérable", default=True)
+    notes = models.TextField("notes", blank=True)
+
+    class Meta:
+        verbose_name = "frais de main levée"
+        verbose_name_plural = "frais de main levée"
+        ordering = ["fee_date", "created_at"]
+
+    def __str__(self):
+        return self.label or self.get_fee_type_display()
 
 
 class DationRequest(TenantScopedModel, AuthoredModel):
@@ -566,6 +695,51 @@ class DationRequest(TenantScopedModel, AuthoredModel):
     asset_value = models.DecimalField(
         "valeur du bien", max_digits=18, decimal_places=2, null=True, blank=True
     )
+    # Snapshots de règlement (recalculés à la soumission / clôture).
+    fees_client_total = models.DecimalField(
+        "frais à charge client",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    fees_institution_total = models.DecimalField(
+        "frais à charge institution",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    claim_to_cover = models.DecimalField(
+        "créance à couvrir",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Créance CBS + frais client.",
+    )
+    residual_balance = models.DecimalField(
+        "solde résiduel",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Max(0, créance à couvrir − total biens).",
+    )
+    surplus_amount = models.DecimalField(
+        "trop-perçu / trop-value",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Max(0, total biens − créance à couvrir).",
+    )
+    require_full_coverage = models.BooleanField(
+        "exiger la couverture intégrale",
+        default=False,
+        help_text="Si vrai, la soumission est refusée en sous-couverture.",
+    )
+    settlement_notes = models.TextField("notes de règlement", blank=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True
     )
@@ -606,12 +780,64 @@ class DationRequest(TenantScopedModel, AuthoredModel):
             return total
         return self.asset_value or Decimal("0")
 
+    def fees_total(self, payer=None):
+        qs = self.fees.all()
+        if payer is not None:
+            qs = qs.filter(payer=payer)
+        total = Decimal("0")
+        for fee in qs:
+            total += fee.amount or Decimal("0")
+        return total
+
+    def compute_settlement(self) -> dict:
+        """Calcule le récapitulatif de couverture / frais (sans persister)."""
+        claim = self.cbs_total_outstanding or Decimal("0")
+        assets = self.assets_total_value()
+        fees_client = self.fees_total(DationFee.Payer.CLIENT)
+        fees_institution = self.fees_total(DationFee.Payer.INSTITUTION)
+        claim_to_cover = claim + fees_client
+        gap = assets - claim_to_cover
+        residual = max(Decimal("0"), -gap)
+        surplus = max(Decimal("0"), gap)
+        return {
+            "assets_total": assets,
+            "claim": claim,
+            "fees_client_total": fees_client,
+            "fees_institution_total": fees_institution,
+            "claim_to_cover": claim_to_cover,
+            "coverage_gap": gap,
+            "residual_balance": residual,
+            "surplus_amount": surplus,
+            "covers_claim": assets >= claim_to_cover if self.cbs_total_outstanding is not None else None,
+        }
+
+    def apply_settlement_snapshot(self, *, persist=True):
+        data = self.compute_settlement()
+        self.asset_value = data["assets_total"]
+        self.fees_client_total = data["fees_client_total"]
+        self.fees_institution_total = data["fees_institution_total"]
+        self.claim_to_cover = data["claim_to_cover"]
+        self.residual_balance = data["residual_balance"]
+        self.surplus_amount = data["surplus_amount"]
+        if persist and self.pk:
+            self.save(
+                update_fields=[
+                    "asset_value",
+                    "fees_client_total",
+                    "fees_institution_total",
+                    "claim_to_cover",
+                    "residual_balance",
+                    "surplus_amount",
+                    "updated_at",
+                ]
+            )
+        return data
+
     def covers_claim(self):
-        """True si la valeur totale des biens couvre (ou dépasse) la créance CBS."""
-        claim = self.cbs_total_outstanding
-        if claim is None:
+        """True si les biens couvrent la créance à couvrir (CBS + frais client)."""
+        if self.cbs_total_outstanding is None:
             return None
-        return self.assets_total_value() >= claim
+        return self.compute_settlement()["covers_claim"]
 
 
 class DationAsset(TenantScopedModel):
@@ -621,6 +847,14 @@ class DationAsset(TenantScopedModel):
         EXISTING_GUARANTEE = "EXISTING_GUARANTEE", "Garantie existante"
         ADDITIONAL = "ADDITIONAL", "Bien additionnel"
 
+    class AssetType(models.TextChoices):
+        REAL_ESTATE = "REAL_ESTATE", "Immobilier"
+        VEHICLE = "VEHICLE", "Véhicule"
+        EQUIPMENT = "EQUIPMENT", "Matériel / équipement"
+        JEWELRY = "JEWELRY", "Bijoux / objets de valeur"
+        FINANCIAL = "FINANCIAL", "Actif financier"
+        OTHER = "OTHER", "Autre"
+
     dation = models.ForeignKey(
         DationRequest,
         on_delete=models.CASCADE,
@@ -629,6 +863,13 @@ class DationAsset(TenantScopedModel):
     )
     source = models.CharField(
         max_length=30, choices=Source.choices, default=Source.ADDITIONAL
+    )
+    asset_type = models.CharField(
+        "type de bien",
+        max_length=30,
+        choices=AssetType.choices,
+        default=AssetType.OTHER,
+        blank=True,
     )
     guarantee = models.ForeignKey(
         Guarantee,
@@ -640,8 +881,9 @@ class DationAsset(TenantScopedModel):
     )
     description = models.TextField("description", blank=True)
     value = models.DecimalField(
-        "valeur", max_digits=18, decimal_places=2, null=True, blank=True
+        "valeur retenue", max_digits=18, decimal_places=2, null=True, blank=True
     )
+    notes = models.TextField("notes", blank=True)
 
     class Meta:
         verbose_name = "bien de dation"
@@ -657,3 +899,53 @@ class DationAsset(TenantScopedModel):
 
     def __str__(self):
         return self.description or f"Bien dation {self.pk}"
+
+
+class DationFee(TenantScopedModel):
+    """Frais associés à une dation en paiement."""
+
+    class FeeType(models.TextChoices):
+        NOTARY = "NOTARY", "Notaire / acte"
+        APPRAISAL = "APPRAISAL", "Expertise"
+        REGISTRATION = "REGISTRATION", "Enregistrement / publicité"
+        BAILIFF = "BAILIFF", "Huissier"
+        TRANSFER_TAX = "TRANSFER_TAX", "Droits de mutation"
+        OTHER = "OTHER", "Divers"
+
+    class Payer(models.TextChoices):
+        CLIENT = "CLIENT", "Client"
+        INSTITUTION = "INSTITUTION", "Institution"
+
+    dation = models.ForeignKey(
+        DationRequest,
+        on_delete=models.CASCADE,
+        related_name="fees",
+        verbose_name="demande de dation",
+    )
+    asset = models.ForeignKey(
+        DationAsset,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="fees",
+        verbose_name="bien concerné",
+    )
+    fee_type = models.CharField(
+        max_length=30, choices=FeeType.choices, default=FeeType.OTHER
+    )
+    label = models.CharField("libellé", max_length=255, blank=True)
+    amount = models.DecimalField("montant", max_digits=18, decimal_places=2)
+    payer = models.CharField(
+        max_length=20, choices=Payer.choices, default=Payer.CLIENT
+    )
+    fee_date = models.DateField("date", null=True, blank=True)
+    recoverable = models.BooleanField("récupérable", default=True)
+    notes = models.TextField("notes", blank=True)
+
+    class Meta:
+        verbose_name = "frais de dation"
+        verbose_name_plural = "frais de dation"
+        ordering = ["fee_date", "created_at"]
+
+    def __str__(self):
+        return self.label or self.get_fee_type_display()

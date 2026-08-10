@@ -19,6 +19,14 @@ app.conf.beat_schedule = {
         "task": "apps.collections.tasks.refresh_all_overdue_loans",
         "schedule": crontab(hour=2, minute=15),
     },
+    "send-collection-reminders": {
+        "task": "apps.collections.tasks.send_collection_reminders",
+        "schedule": crontab(hour=8, minute=0),
+    },
+    "notify-hearing-reminders": {
+        "task": "apps.collections.tasks.notify_hearing_reminders",
+        "schedule": crontab(hour=7, minute=30),
+    },
     "retry-cbs-integrations": {
         "task": "apps.corebanking.tasks.retry_cbs_integrations",
         "schedule": crontab(minute="*/10"),
