@@ -2,11 +2,12 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 import type { SimulationResult } from "@/api/types";
+import { PDF_BRAND_FILL, pdfMoney, pdfText } from "@/utils/pdfHelpers";
 
 function hexToRgb(hex: string | null | undefined): [number, number, number] {
   const raw = (hex || "#0f9488").replace("#", "").trim();
   if (raw.length !== 6 || Number.isNaN(Number.parseInt(raw, 16))) {
-    return [15, 148, 136];
+    return PDF_BRAND_FILL;
   }
   return [
     Number.parseInt(raw.slice(0, 2), 16),
@@ -29,16 +30,7 @@ function mixRgb(
   ];
 }
 
-/** Formate un montant sans espaces fins (jsPDF les place mal). */
-function money(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "-";
-  const n = typeof value === "number" ? value : Number(value);
-  if (Number.isNaN(n)) return "-";
-  const formatted = Math.round(n)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-  return formatted;
-}
+const money = pdfMoney;
 
 function num(value: string | number | null | undefined): number {
   if (value === null || value === undefined || value === "") return 0;
@@ -49,15 +41,6 @@ function formatDueDate(value: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(value);
   if (m) return `${m[3]}/${m[2]}/${m[1]}`;
   return value || "-";
-}
-
-/** Retire les caractères hors Latin-1 pour Helvetica. */
-function pdfText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
-    .replace(/[\u00A0\u202F\u2009]/g, " ");
 }
 
 export type SimulationPdfParams = {

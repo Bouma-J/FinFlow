@@ -47,6 +47,11 @@ export function CollectionCaseDetailPage() {
   const canRestructure = hasPerm(user, "collections.add_loanrestructure");
   const canWriteOff = hasPerm(user, "collections.add_writeoff");
   const canLitigation = hasPerm(user, "collections.change_litigationfile");
+  const canRepay = hasPerm(user, "collections.add_repayment");
+  const canManageCase = hasPerm(user, "collections.change_collectioncase");
+  const canAddAction = hasPerm(user, "collections.add_collectionaction");
+  const canAddPromise = hasPerm(user, "collections.add_paymentpromise");
+  const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
 
   const [payAmount, setPayAmount] = useState("");
   const [payDate, setPayDate] = useState(
@@ -387,19 +392,23 @@ export function CollectionCaseDetailPage() {
             <div>
               <dt>Stade</dt>
               <dd>
-                <select
-                  value={c.stage}
-                  onChange={(e) =>
-                    stageMutation.mutate(e.target.value as CollectionStage)
-                  }
-                  disabled={stageMutation.isPending}
-                >
-                  {STAGES.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
+                {canManageCase ? (
+                  <select
+                    value={c.stage}
+                    onChange={(e) =>
+                      stageMutation.mutate(e.target.value as CollectionStage)
+                    }
+                    disabled={stageMutation.isPending}
+                  >
+                    {STAGES.map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <Badge value={c.stage_display || c.stage} />
+                )}
               </dd>
             </div>
             <div>
@@ -420,6 +429,7 @@ export function CollectionCaseDetailPage() {
           </dl>
         </Card>
 
+        {canRepay && (
         <Card title="Nouvel encaissement">
           <form
             className="inline-form"
@@ -468,9 +478,11 @@ export function CollectionCaseDetailPage() {
             </button>
           </form>
         </Card>
+        )}
       </div>
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
+        {canManageCase && (
         <Card title="Planifier la prochaine action">
           <form
             className="inline-form"
@@ -519,6 +531,7 @@ export function CollectionCaseDetailPage() {
             </button>
           </form>
         </Card>
+        )}
 
         <Card title="Garanties & dations">
           {!c.guarantees?.length && !c.dation_requests?.length ? (
@@ -564,12 +577,14 @@ export function CollectionCaseDetailPage() {
                   >
                     Voir garanties
                   </Link>
-                  <Link
-                    className="btn btn-ghost btn-sm"
-                    to={`/dations/nouvelle?application=${c.application_id}`}
-                  >
-                    Nouvelle dation
-                  </Link>
+                  {canInitiateDation && (
+                    <Link
+                      className="btn btn-ghost btn-sm"
+                      to={`/dations/nouvelle?application=${c.application_id}`}
+                    >
+                      Nouvelle dation
+                    </Link>
+                  )}
                 </div>
               )}
             </>
@@ -612,6 +627,7 @@ export function CollectionCaseDetailPage() {
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
         <Card title="Actions de relance">
+          {canAddAction && (
           <form
             className="inline-form"
             style={{
@@ -678,6 +694,7 @@ export function CollectionCaseDetailPage() {
               Ajouter l&apos;action
             </button>
           </form>
+          )}
           {!c.actions?.length ? (
             <p className="muted small">Aucune action.</p>
           ) : (
@@ -702,6 +719,7 @@ export function CollectionCaseDetailPage() {
         </Card>
 
         <Card title="Promesses de paiement">
+          {canAddPromise && (
           <form
             className="inline-form"
             style={{
@@ -741,6 +759,7 @@ export function CollectionCaseDetailPage() {
               Enregistrer la promesse
             </button>
           </form>
+          )}
           {!c.promises?.length ? (
             <p className="muted small">Aucune promesse.</p>
           ) : (
@@ -769,6 +788,7 @@ export function CollectionCaseDetailPage() {
       </div>
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
+        {canManageCase && (
         <Card title="Relances">
           <p className="muted small" style={{ marginBottom: 10 }}>
             Envoi immédiat (force les préférences filiale). SMS = stub
@@ -793,6 +813,7 @@ export function CollectionCaseDetailPage() {
             </button>
           </div>
         </Card>
+        )}
 
         {canRestructure && c.stage !== "CLOSED" && c.loan_status === "ACTIVE" && (
           <Card title="Restructuration">

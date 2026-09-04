@@ -496,7 +496,7 @@ class GuaranteeReleaseRequest(TenantScopedModel, AuthoredModel):
     cbs_outstanding = models.DecimalField(
         "encours CBS", max_digits=18, decimal_places=2, null=True, blank=True
     )
-    cbs_currency = models.CharField(max_length=3, blank=True, default="XAF")
+    cbs_currency = models.CharField(max_length=3, blank=True, default="XOF")
     cbs_checked_at = models.DateTimeField("vérifié CBS le", null=True, blank=True)
     cbs_raw = models.JSONField("réponse CBS", default=dict, blank=True)
     request_date = models.DateField(
@@ -688,7 +688,7 @@ class DationRequest(TenantScopedModel, AuthoredModel):
     cbs_total_outstanding = models.DecimalField(
         "encours total CBS", max_digits=18, decimal_places=2, null=True, blank=True
     )
-    cbs_currency = models.CharField(max_length=3, blank=True, default="XAF")
+    cbs_currency = models.CharField(max_length=3, blank=True, default="XOF")
     cbs_checked_at = models.DateTimeField("vérifié CBS le", null=True, blank=True)
     cbs_raw = models.JSONField("réponse CBS", default=dict, blank=True)
     asset_description = models.TextField("description du bien cédé", blank=True)

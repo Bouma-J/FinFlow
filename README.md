@@ -1,7 +1,8 @@
 # FIN_FLOW
-sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
 
-Plateforme **SaaS multi-tenants** de gestion du cycle de vie complet des dossiers de crédit, avec intégration multi-Core Banking. Ce dépôt contient le **backend** (API REST Django) et le **frontend** (SPA React) conformes au cahier des charges `charge.txt`, ainsi qu'une **orchestration Docker** complète.
+Plateforme **SaaS multi-tenants** de gestion du cycle de vie complet des dossiers de crédit, avec consolidation Groupe et intégration multi-Core Banking. Ce dépôt contient le **backend** (API REST Django) et le **frontend** (SPA React), conformes au cahier des charges `charge.txt`, ainsi qu'une **orchestration Docker** complète.
+
+**Dépôt :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)
 
 ## Sommaire
 - [Architecture](#architecture)
@@ -9,8 +10,9 @@ Plateforme **SaaS multi-tenants** de gestion du cycle de vie complet des dossier
 - [Modules métier](#modules-métier)
 - [Documentation complète](#documentation-complète)
 - [Démarrage rapide avec Docker](#démarrage-rapide-avec-docker)
+- [Déploiement Ubuntu](#déploiement-ubuntu)
 - [Prérequis](#prérequis)
-- [Installation et démarrage](#installation-et-démarrage)
+- [Installation locale](#installation-locale)
 - [Frontend (React)](#frontend-react)
 - [Données de démonstration](#données-de-démonstration)
 - [Documentation de l'API](#documentation-de-lapi)
@@ -27,7 +29,7 @@ La documentation produit (fonctionnelle, technique, déploiement, API, exploitat
 - **Backend** : Python 3.12 / Django 5.1 / Django REST Framework
 - **Frontend** : React 18 + TypeScript + Vite, TanStack Query, React Router (SPA)
 - **Base de données** : PostgreSQL (production) — repli SQLite en développement
-- **Authentification** : JWT (SimpleJWT) + RBAC (rôles = groupes, permissions Django)
+- **Authentification** : JWT (SimpleJWT) + RBAC (rôles = groupes, permissions Django) + MFA TOTP
 - **Asynchrone** : Celery + Redis (notifications, connecteurs CBS, batchs)
 - **Stockage documentaire (GED)** : compatible S3 (MinIO ou équivalent)
 - **Documentation API** : OpenAPI 3 (drf-spectacular) + Swagger UI
@@ -55,17 +57,19 @@ Approche **base de données partagée + colonne discriminante** (`tenant`) avec 
 | Module | Rôle |
 |--------|------|
 | `common` | Socle : modèles de base, multi-tenancy, mixins, pagination, exceptions |
-| `tenants` | Filiales et agences |
-| `accounts` | Utilisateurs, rôles (RBAC), délégations de pouvoirs |
+| `tenants` | Filiales, agences, branding (logo et couleurs) |
+| `accounts` | Utilisateurs, rôles (RBAC), délégations de pouvoirs, MFA |
 | `catalog` | Produits de crédit, familles, motifs de rejet, check-lists |
 | `clients` | Clients particuliers / professionnels / entreprises + KYC |
 | `credits` | Dossiers de crédit, analyse financière, visites, prêt et échéancier |
-| `workflow` | Moteur d'approbation paramétrable (étapes, seuils, SLA) |
+| `workflow` | Moteur d'approbation paramétrable (étapes, seuils, SLA, conditions suspensives) |
 | `documents` | GED (catégories, versionning, intégrité, alertes d'expiration) |
-| `guarantees` | Garanties et mouvements (réévaluation, mainlevée, réalisation, transfert) |
+| `guarantees` | Garanties et mouvements (réévaluation, mainlevée, dation, réalisation, transfert) |
 | `sureties` | Cautions et engagements (plafonds) |
+| `contracts` | Modèles de contrats, génération DOCX/XLSX, condition de décaissement |
 | `corebanking` | Connecteurs Core Banking par filiale (idempotence, journalisation, rejeu) |
-| `collections` | Recouvrement (PAR, promesses, actions, contentieux) |
+| `collections` | Recouvrement (PAR, encaissements FIFO, promesses, contentieux) |
+| `notifications` | SMTP par filiale, alertes workflow / SLA |
 | `audit` | Piste d'audit inaltérable |
 | `reporting` | Tableaux de bord filiale + consolidation Groupe multi-axes |
 
@@ -74,9 +78,14 @@ Approche **base de données partagée + colonne discriminante** (`tenant`) avec 
 La méthode recommandée : tout tourne en conteneurs, aucune installation locale de Python/Node requise (seulement Docker Desktop).
 
 ```powershell
-# Depuis la racine du projet
+# Depuis la racine du projet — stack seule (sans comptes de démo)
 docker compose up --build
+
+# Avec le jeu de données de démonstration
+$env:SEED_DEMO = "1"; docker compose up --build
 ```
+
+Par défaut Compose fixe `SEED_DEMO=0` (base propre). Le seed n'est **pas** lancé au premier démarrage sauf si vous passez `SEED_DEMO=1`.
 
 Une fois les services démarrés :
 
@@ -88,9 +97,9 @@ Une fois les services démarrés :
 | Back-office Django | http://localhost:8080/django-admin/ |
 | Console MinIO | http://localhost:9001 (`minioadmin` / `minioadmin`) |
 
-Au premier lancement, le backend applique les migrations, collecte les fichiers statiques puis charge les [données de démonstration](#données-de-démonstration). Connectez-vous ensuite avec l'un des comptes de démo.
+Le frontend Compose est publié sur le **port 8080** (le port 80 de l'hôte reste libre pour Nginx/Certbot en production Ubuntu). MinIO est lié à `127.0.0.1`.
 
-> Pour la production, définissez au minimum `DJANGO_SECRET_KEY` (variable d'environnement) et adaptez `DJANGO_ALLOWED_HOSTS`, la terminaison TLS et les identifiants PostgreSQL/MinIO.
+> Pour la production, définissez au minimum `DJANGO_SECRET_KEY` et adaptez `DJANGO_ALLOWED_HOSTS`, `FRONTEND_BASE_URL` (liens e-mail), la terminaison TLS et les identifiants PostgreSQL/MinIO. Voir `docker-compose.prod.yml` et [13 — Déploiement Ubuntu](documentation/13-guide-deploiement-ubuntu.md).
 
 ### Réseau d'entreprise avec inspection TLS (proxy)
 
@@ -109,32 +118,45 @@ Hors proxy d'entreprise, cette étape est inutile : créez simplement les fichie
 
 > Note : `npm install` en local sur cette machine nécessite aussi `--use-system-ca` (Node 20+) ; définissez `NODE_OPTIONS=--use-system-ca` avant de lancer npm.
 
+## Déploiement Ubuntu
+
+Installation serveur (Docker, TLS, backups) :
+
+```bash
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
+```
+
+Détail : [`documentation/13-guide-deploiement-ubuntu.md`](documentation/13-guide-deploiement-ubuntu.md), scripts `deploy/ubuntu-install.sh` et `deploy/ubuntu-install-ip.sh`.
+
 ## Prérequis
 - Docker Desktop (voie recommandée), **ou**
-- Python 3.12 (environnement virtuel fourni dans `env_virtuel/`) et Node.js 20+ pour un développement local hors conteneurs.
+- Python 3.12 et Node.js 20+ pour un développement local hors conteneurs.
 
-## Installation et démarrage
+## Installation locale
 
 Sous Windows (PowerShell), depuis la racine du projet :
 
 ```powershell
-# 1. Dépendances
-.\env_virtuel\Scripts\python.exe -m pip install -r backend\requirements\dev.txt
+# 1. Environnement virtuel
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements\dev.txt
 
 # 2. Configuration
 Copy-Item backend\.env.example backend\.env   # puis adapter si besoin
 
 # 3. Migrations
-.\env_virtuel\Scripts\python.exe backend\manage.py migrate
+.\.venv\Scripts\python.exe backend\manage.py migrate
 
-# 4. Données de démonstration
-.\env_virtuel\Scripts\python.exe backend\manage.py seed_demo
+# 4. Données de démonstration (optionnel)
+.\.venv\Scripts\python.exe backend\manage.py seed_demo
 
 # 5. Serveur de développement
-.\env_virtuel\Scripts\python.exe backend\manage.py runserver
+.\.venv\Scripts\python.exe backend\manage.py runserver
 ```
 
 L'API est disponible sur `http://127.0.0.1:8000/api/v1/`.
+
+Variables utiles (détail : [`documentation/05-configuration.md`](documentation/05-configuration.md) et `backend/.env.example`) : `DJANGO_SECRET_KEY`, `DATABASE_URL`, `SEED_DEMO`, stockage S3/MinIO, Celery/Redis, bloc e-mail, `FRONTEND_BASE_URL` (en Docker démo : `http://localhost:8080`).
 
 ## Frontend (React)
 
@@ -147,10 +169,12 @@ npm run dev
 ```
 
 L'interface est servie sur `http://localhost:5173`. Fonctionnalités couvertes :
-- Authentification JWT (avec rafraîchissement automatique du jeton).
-- Tableau de bord filiale / consolidé Groupe (avec sélecteur de filiale pour les utilisateurs Groupe).
-- Gestion des clients, dossiers de crédit (création, soumission, décaissement), file de validations (approuver / retourner / rejeter).
-- Catalogue produits, garanties, simulateur d'échéancier et piste d'audit.
+- Authentification JWT (rafraîchissement automatique), MFA TOTP, changement de mot de passe forcé.
+- Branding filiale (logo et couleurs) ; tableau de bord filiale / consolidé Groupe.
+- Clients, dossiers de crédit (création, soumission, décaissement), analyses, file de validations.
+- Catalogue produits, cautions, garanties, mains-levées, dations.
+- Génération de contrats, recouvrement / contentieux, simulateur d'échéancier.
+- Administration : filiales, agences, utilisateurs, rôles, circuits, connecteurs CBS, SMTP, audit.
 
 Build de production : `npm run build` (sortie dans `frontend/dist/`, servie par Nginx dans l'image Docker).
 
@@ -160,33 +184,41 @@ La commande `seed_demo` crée :
 - Administrateur **Filiale** : `fil01_admin` / `FinFlow2026!`
 - Une filiale, une agence, un produit, un circuit d'approbation à 2 niveaux, un connecteur CBS et un client.
 
+Ces identifiants sont **uniquement destinés à la démo / UAT**, jamais à la production.
+
 ## Documentation de l'API
-- Schéma OpenAPI : `http://127.0.0.1:8000/api/schema/`
-- Swagger UI : `http://127.0.0.1:8000/api/docs/`
+- Schéma OpenAPI : `http://127.0.0.1:8000/api/schema/` (Docker : `http://localhost:8080/api/schema/`)
+- Swagger UI : `http://127.0.0.1:8000/api/docs/` (Docker : `http://localhost:8080/api/docs/`)
 - Authentification : `POST /api/v1/auth/token/` (username / password) → jeton `access` à placer dans l'en-tête `Authorization: Bearer <token>`.
 - Un utilisateur Groupe peut cibler une filiale via l'en-tête `X-Tenant-Id: <uuid>`.
 
 Scripts de vérification manuelle (serveur démarré) :
 ```powershell
-.\env_virtuel\Scripts\python.exe backend\scripts\smoke_test.py   # isolation, permissions, dashboard
-.\env_virtuel\Scripts\python.exe backend\scripts\e2e_credit.py   # cycle de vie complet d'un dossier
+.\.venv\Scripts\python.exe backend\scripts\smoke_test.py   # isolation, permissions, dashboard
+.\.venv\Scripts\python.exe backend\scripts\e2e_credit.py   # cycle de vie complet d'un dossier
 ```
 
 ## Tests
 ```powershell
 cd backend
-..\env_virtuel\Scripts\python.exe -m pytest
+..\.venv\Scripts\python.exe -m pytest
 ```
+
+Depuis la racine : `.\.venv\Scripts\python.exe -m pytest backend`
+
+La CI GitHub Actions exécute les checks Django, **pytest**, le build frontend et (sur `push`) la construction des images Docker.
 
 ## Structure du projet
 ```
 fin flow/
 ├── charge.txt                 # Cahier des charges
 ├── documentation/             # Documentation complète (voir documentation/README.md)
-├── docker-compose.yml         # Orchestration complète (db, redis, minio, backend, celery, frontend)
-├── deploy/                    # Kubernetes + lifecycle S3
+├── docker-compose.yml         # Orchestration démo (db, redis, minio, backend, celery, frontend)
+├── docker-compose.prod.yml    # Variante production
+├── docker-compose.ip.yml      # Accès par IP
+├── deploy/                    # Ubuntu, Kubernetes, lifecycle S3
 ├── docs/                      # Notes techniques ciblées (ex. isolation tenant)
-├── env_virtuel/               # Environnement virtuel Python
+├── .github/workflows/         # CI
 ├── backend/
 │   ├── manage.py
 │   ├── pytest.ini
@@ -204,6 +236,7 @@ fin flow/
     ├── nginx.conf             # SPA + proxy /api /django-admin /static /media
     ├── package.json
     ├── vite.config.ts
+    ├── public/                # Favicon / assets statiques
     └── src/
         ├── api/               # Client axios (JWT + refresh) et types
         ├── auth/              # Contexte d'authentification
@@ -218,7 +251,8 @@ fin flow/
 - [x] Cache Redis, pagination, S3/MinIO, throttle, MFA TOTP.
 - [x] Reporting matérialisé (snapshots) + quotas GED + health/metrics.
 - [x] CI/CD (GitHub Actions) + manifests Kubernetes (HPA).
-- [ ] Génération automatique des contrats (PDF) et signature électronique.
+- [x] Génération de contrats (DOCX/XLSX) et circuit de décaissement associé.
+- [ ] Signature électronique des contrats.
 - [ ] Adaptateurs Core Banking réels (REST/SOAP/SFTP/BATCH) + réconciliation.
 - [ ] Exports reporting avancés (Excel/PDF/Power BI).
 - [ ] Isolation schema-per-tenant (option réglementaire — voir `docs/TENANT_ISOLATION.md`).

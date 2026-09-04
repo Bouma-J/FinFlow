@@ -14,6 +14,8 @@ import type {
   LitigationStatus,
   Paginated,
 } from "@/api/types";
+import { useAuth } from "@/auth/AuthContext";
+import { hasPerm } from "@/auth/permissions";
 import {
   Badge,
   Card,
@@ -71,6 +73,12 @@ const DOC_CATS = [
 
 export function LitigationDetailPage() {
   const { caseId, litId } = useParams<{ caseId: string; litId: string }>();
+  const { user } = useAuth();
+  const canChange = hasPerm(user, "collections.change_litigationfile");
+  const canAddEvent = hasPerm(user, "collections.add_litigationevent");
+  const canAddSeizure = hasPerm(user, "collections.add_litigationseizure");
+  const canAddCost = hasPerm(user, "collections.add_litigationcost");
+  const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
   const qc = useQueryClient();
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -574,17 +582,21 @@ export function LitigationDetailPage() {
             />
           </label>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button className="btn btn-primary" disabled={save.isPending}>
-              Enregistrer
-            </button>
+            {canChange && (
+              <button className="btn btn-primary" disabled={save.isPending}>
+                Enregistrer
+              </button>
+            )}
             <Link className="btn btn-ghost btn-sm" to="/intervenants-juridiques">
               Gérer les cabinets
             </Link>
             {caseId && (
               <>
-                <Link className="btn btn-ghost btn-sm" to={`/dations/nouvelle`}>
-                  Proposer dation
-                </Link>
+                {canInitiateDation && (
+                  <Link className="btn btn-ghost btn-sm" to={`/dations/nouvelle`}>
+                    Proposer dation
+                  </Link>
+                )}
                 <Link
                   className="btn btn-ghost btn-sm"
                   to={`/recouvrement/${caseId}`}
@@ -599,6 +611,7 @@ export function LitigationDetailPage() {
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
         <Card title="Agenda & événements">
+          {canAddEvent && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -658,6 +671,7 @@ export function LitigationDetailPage() {
               Ajouter
             </button>
           </form>
+          )}
           <ul className="timeline-list">
             {(lit.events || []).map((ev) => (
               <li key={ev.id}>
@@ -675,6 +689,7 @@ export function LitigationDetailPage() {
         </Card>
 
         <Card title={`Frais (total ${formatMoney(String(costsTotal))})`}>
+          {canAddCost && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -727,6 +742,7 @@ export function LitigationDetailPage() {
               Ajouter
             </button>
           </form>
+          )}
           <table className="table">
             <thead>
               <tr>
@@ -752,6 +768,7 @@ export function LitigationDetailPage() {
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
         <Card title="Saisies / exécution">
+          {canAddSeizure && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -805,6 +822,7 @@ export function LitigationDetailPage() {
               Ajouter la saisie
             </button>
           </form>
+          )}
           <ul className="timeline-list">
             {(lit.seizures || []).map((s) => (
               <li key={s.id}>
@@ -824,6 +842,7 @@ export function LitigationDetailPage() {
         </Card>
 
         <Card title="Pièces (GED)">
+          {canChange && (
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -872,6 +891,7 @@ export function LitigationDetailPage() {
               Déposer
             </button>
           </form>
+          )}
           <ul className="timeline-list">
             {(docs.data || []).map((d) => (
               <li key={d.id}>

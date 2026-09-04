@@ -2,23 +2,12 @@ import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
 
 import type { LitigationFile } from "@/api/types";
-
-function pdfText(value: string): string {
-  return value
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
-    .replace(/[\u00A0\u202F\u2009]/g, " ");
-}
-
-function money(value: string | number | null | undefined): string {
-  if (value === null || value === undefined || value === "") return "-";
-  const n = typeof value === "number" ? value : Number(value);
-  if (Number.isNaN(n)) return "-";
-  return Math.round(n)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, " ");
-}
+import {
+  lastAutoTableY,
+  PDF_BRAND_FILL,
+  pdfMoney,
+  pdfText,
+} from "@/utils/pdfHelpers";
 
 export function exportLitigationPdf(lit: LitigationFile): void {
   const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
@@ -49,7 +38,7 @@ export function exportLitigationPdf(lit: LitigationFile): void {
   );
   doc.text(
     pdfText(
-      `Total reclame: ${money(lit.claimed_total)} · Jugement: ${lit.judgment_outcome_display || "-"} ${money(lit.judgment_amount)}`,
+      `Total reclame: ${pdfMoney(lit.claimed_total)} · Jugement: ${lit.judgment_outcome_display || "-"} ${pdfMoney(lit.judgment_amount)}`,
     ),
     14,
     40,
@@ -64,23 +53,21 @@ export function exportLitigationPdf(lit: LitigationFile): void {
       pdfText(e.location || e.outcome || e.comment || "-"),
     ]),
     styles: { fontSize: 8 },
-    headStyles: { fillColor: [15, 148, 136] },
+    headStyles: { fillColor: PDF_BRAND_FILL },
   });
 
-  const y =
-    (doc as jsPDF & { lastAutoTable?: { finalY: number } }).lastAutoTable
-      ?.finalY || 50;
+  const y = lastAutoTableY(doc, 50);
   autoTable(doc, {
     startY: y + 6,
     head: [["Date", "Frais", "Montant", "Paye"]],
     body: (lit.costs || []).map((c) => [
       c.cost_date,
       pdfText(c.cost_type_display),
-      money(c.amount),
+      pdfMoney(c.amount),
       c.is_paid ? "Oui" : "Non",
     ]),
     styles: { fontSize: 8 },
-    headStyles: { fillColor: [15, 148, 136] },
+    headStyles: { fillColor: PDF_BRAND_FILL },
   });
 
   const ref = (lit.case_reference || lit.id).replace(/[^\w-]+/g, "_");

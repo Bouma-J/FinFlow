@@ -46,6 +46,7 @@ from .process_services import (
     update_dation_request,
     update_release_request,
     upload_release_acte_signed,
+    user_can_deposit_release_acte,
 )
 from .serializers import (
     DationAssetSerializer,
@@ -185,7 +186,8 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
         "remove_fee": ["guarantees.initiate_guaranteereleaserequest"],
         "update_draft": ["guarantees.initiate_guaranteereleaserequest"],
         "generate_acte": ["guarantees.initiate_guaranteereleaserequest"],
-        "upload_acte_signe": ["guarantees.initiate_guaranteereleaserequest"],
+        # Initiateur ou approbateur du circuit — contrôle dans la méthode.
+        "upload_acte_signe": [],
         "documents": ["guarantees.view_guaranteereleaserequest"],
         "workflow": ["guarantees.view_guaranteereleaserequest"],
     }
@@ -199,6 +201,9 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
         return user.is_superuser or user.has_perm(
             "guarantees.initiate_guaranteereleaserequest"
         )
+
+    def _can_deposit_acte(self, user, req):
+        return user_can_deposit_release_acte(user, req)
 
     @action(detail=False, methods=["get"], url_path="client-context")
     def client_context(self, request):
@@ -384,9 +389,12 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
 
     @action(detail=True, methods=["post"], url_path="upload-acte-signe")
     def upload_acte_signe(self, request, pk=None):
-        if not self._can_initiate(request.user):
-            raise PermissionDenied()
         req = self.get_object()
+        if not self._can_deposit_acte(request.user, req):
+            raise PermissionDenied(
+                "Seul l'initiateur ou un validateur du circuit peut "
+                "déposer l'acte signé."
+            )
         upload = request.FILES.get("file")
         if not upload:
             raise ValidationError({"file": "Fichier obligatoire."})
@@ -396,7 +404,11 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
             )
         except ProcessError as exc:
             raise ValidationError(str(exc)) from exc
-        return Response(GuaranteeReleaseRequestSerializer(updated).data)
+        return Response(
+            GuaranteeReleaseRequestSerializer(
+                updated, context={"request": request}
+            ).data
+        )
 
     @action(detail=True, methods=["get", "post"])
     def documents(self, request, pk=None):
@@ -537,12 +549,16 @@ class DationRequestViewSet(TenantScopedViewSet):
             or request.query_params.get("cbs_client")
             or ""
         ).strip()
-        currency = (request.query_params.get("currency") or "XAF").strip() or "XAF"
         tenant_id = get_current_tenant_id() or getattr(
             request.user, "tenant_id", None
         )
         if not tenant_id:
             raise ValidationError("Contexte filiale manquant.")
+        from apps.tenants.currency import tenant_currency
+
+        currency = (
+            request.query_params.get("currency") or ""
+        ).strip().upper() or tenant_currency(tenant_id)
         try:
             cbs = preview_dation_cbs(
                 tenant_id=tenant_id,

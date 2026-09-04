@@ -78,7 +78,7 @@ class SimulatedAdapter(BaseAdapter):
                 "status": "ACK",
                 "settled": settled,
                 "outstanding": str(outstanding),
-                "currency": payload.get("currency") or "XAF",
+                "currency": payload.get("currency") or "XOF",
                 "external_reference": f"CBS-LOAN-{loan_ref or 'NA'}",
                 "raw": {"simulated": True, "loan_ref": loan_ref},
             }
@@ -95,7 +95,7 @@ class SimulatedAdapter(BaseAdapter):
             return {
                 "status": "ACK",
                 "total_outstanding": str(total),
-                "currency": payload.get("currency") or "XAF",
+                "currency": payload.get("currency") or "XOF",
                 "breakdown": [],
                 "external_reference": f"CBS-CLIENT-{client_id or 'NA'}",
                 "raw": {"simulated": True, "cbs_client_id": client_id},
@@ -196,18 +196,21 @@ def _require_success(log: IntegrationLog, operation: str) -> dict:
     return log.response_payload or {}
 
 
-def get_loan_status(tenant_id, loan_ref, *, currency="XAF") -> dict:
+def get_loan_status(tenant_id, loan_ref, *, currency=None) -> dict:
     """
     Vérifie dans le CBS si un prêt est soldé.
 
     Retour normalisé :
     {settled: bool, outstanding: Decimal, currency: str, raw: dict, log_id}
     """
+    from apps.tenants.currency import tenant_currency
+
     loan_ref = (loan_ref or "").strip()
     if not loan_ref:
         raise CoreBankingError(
             "Référence prêt CBS manquante : impossible de vérifier le solde."
         )
+    currency = (currency or "").strip().upper() or tenant_currency(tenant_id)
     connector = resolve_active_connector(tenant_id)
     log = send_operation(
         connector,
@@ -227,18 +230,21 @@ def get_loan_status(tenant_id, loan_ref, *, currency="XAF") -> dict:
     }
 
 
-def get_client_outstanding(tenant_id, cbs_client_id, *, currency="XAF") -> dict:
+def get_client_outstanding(tenant_id, cbs_client_id, *, currency=None) -> dict:
     """
     Récupère l'encours total client dans le CBS.
 
     Retour normalisé :
     {total_outstanding: Decimal, currency: str, breakdown: list, raw: dict, log_id}
     """
+    from apps.tenants.currency import tenant_currency
+
     cbs_client_id = (cbs_client_id or "").strip()
     if not cbs_client_id:
         raise CoreBankingError(
             "Identifiant client CBS manquant : impossible de récupérer l'encours."
         )
+    currency = (currency or "").strip().upper() or tenant_currency(tenant_id)
     connector = resolve_active_connector(tenant_id)
     log = send_operation(
         connector,
@@ -259,7 +265,7 @@ def get_client_outstanding(tenant_id, cbs_client_id, *, currency="XAF") -> dict:
     }
 
 
-def assert_loan_settled(tenant_id, loan_ref, *, currency="XAF") -> dict:
+def assert_loan_settled(tenant_id, loan_ref, *, currency=None) -> dict:
     """Blocage strict : lève CoreBankingError si le prêt n'est pas soldé."""
     result = get_loan_status(tenant_id, loan_ref, currency=currency)
     if not result["settled"]:
@@ -271,7 +277,7 @@ def assert_loan_settled(tenant_id, loan_ref, *, currency="XAF") -> dict:
 
 
 def assert_client_outstanding_for_dation(
-    tenant_id, cbs_client_id, *, currency="XAF", min_outstanding=None
+    tenant_id, cbs_client_id, *, currency=None, min_outstanding=None
 ) -> dict:
     """
     Blocage strict pour l'initiation d'une dation :

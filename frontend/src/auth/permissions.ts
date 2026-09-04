@@ -12,7 +12,7 @@ export function hasPerm(
 
 export function hasAnyPerm(
   user: CurrentUser | null | undefined,
-  codenames: string[],
+  codenames: readonly string[],
 ): boolean {
   return codenames.some((c) => hasPerm(user, c));
 }

@@ -32,10 +32,10 @@ Plateforme SaaS multi-tenants de gestion du cycle de vie des dossiers de crédit
 
 | Service | URL |
 |---------|-----|
-| Application | http://localhost |
-| API | http://localhost/api/v1/ |
-| Swagger | http://localhost/api/docs/ |
-| Admin Django | http://localhost/django-admin/ |
+| Application | http://localhost:8080 |
+| API | http://localhost:8080/api/v1/ |
+| Swagger | http://localhost:8080/api/docs/ |
+| Admin Django | http://localhost:8080/django-admin/ |
 | MinIO console | http://localhost:9001 |
 
 ## Comptes de démonstration

@@ -1,7 +1,23 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
+import {
+  PERM_CLIENTS,
+  PERM_COLLECTIONS,
+  PERM_CREDIT_CREATE,
+  PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_GUARANTEES,
+  PERM_LEGAL_PARTIES,
+  PERM_LITIGATION,
+  PERM_PRODUCTS,
+  PERM_RELEASES,
+  PERM_SIMULATOR,
+  PERM_SURETIES,
+  PERM_TASKS,
+} from "@/auth/routePerms";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AdminRoute } from "@/components/AdminRoute";
+import { PermissionRoute } from "@/components/PermissionRoute";
 import { Layout } from "@/components/Layout";
 import { AuditPage } from "@/pages/AuditPage";
 import { ClientDetailPage } from "@/pages/ClientDetailPage";
@@ -72,71 +88,264 @@ export default function App() {
       >
         <Route path="/" element={<DashboardPage />} />
         <Route path="/profil" element={<ProfilePage />} />
-        <Route path="/clients" element={<ClientsPage />} />
-        <Route path="/clients/:id" element={<ClientDetailPage />} />
-        <Route path="/clients/:id/modifier" element={<ClientEditPage />} />
-        <Route path="/dossiers" element={<CreditApplicationsPage />} />
-        <Route path="/dossiers/nouveau" element={<CreditApplicationNewPage />} />
-        <Route path="/dossiers/:id" element={<CreditApplicationDetailPage />} />
+        <Route
+          path="/clients"
+          element={
+            <PermissionRoute anyOf={PERM_CLIENTS}>
+              <ClientsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/clients/:id"
+          element={
+            <PermissionRoute anyOf={PERM_CLIENTS}>
+              <ClientDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/clients/:id/modifier"
+          element={
+            <PermissionRoute anyOf={PERM_CLIENTS}>
+              <ClientEditPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/dossiers"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <CreditApplicationsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/dossiers/nouveau"
+          element={
+            <PermissionRoute anyOf={PERM_CREDIT_CREATE}>
+              <CreditApplicationNewPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/dossiers/:id"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <CreditApplicationDetailPage />
+            </PermissionRoute>
+          }
+        />
         <Route
           path="/dossiers/:id/modifier"
-          element={<CreditApplicationEditPage />}
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <CreditApplicationEditPage />
+            </PermissionRoute>
+          }
         />
         <Route
           path="/dossiers/:id/analyse-financiere"
-          element={<FinancialAnalysisPage />}
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <FinancialAnalysisPage />
+            </PermissionRoute>
+          }
         />
         <Route
           path="/dossiers/:id/analyse-financiere/:analysisId"
-          element={<FinancialAnalysisPage />}
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <FinancialAnalysisPage />
+            </PermissionRoute>
+          }
         />
         <Route
           path="/dossiers/:id/garanties/nouvelle"
-          element={<GuaranteeAddPage />}
+          element={
+            <PermissionRoute anyOf={PERM_GUARANTEES}>
+              <GuaranteeAddPage />
+            </PermissionRoute>
+          }
         />
         <Route
           path="/dossiers/:appId/garanties/:id"
-          element={<GuaranteeDetailPage />}
+          element={
+            <PermissionRoute anyOf={PERM_GUARANTEES}>
+              <GuaranteeDetailPage />
+            </PermissionRoute>
+          }
         />
         <Route
           path="/dossiers/:appId/cautions/:id"
-          element={<SuretyDetailPage />}
+          element={
+            <PermissionRoute anyOf={PERM_SURETIES}>
+              <SuretyDetailPage />
+            </PermissionRoute>
+          }
         />
         <Route
           path="/dossiers/:id/cautions/nouvelle"
-          element={<SuretyEngagementAddPage />}
+          element={
+            <PermissionRoute anyOf={PERM_SURETIES}>
+              <SuretyEngagementAddPage />
+            </PermissionRoute>
+          }
         />
-        <Route path="/taches" element={<TasksPage />} />
-        <Route path="/produits" element={<ProductsPage />} />
-        <Route path="/cautions" element={<SuretiesPage />} />
-        <Route path="/cautions/:id" element={<SuretyDetailPage manageable />} />
-        <Route path="/cautions/:id/modifier" element={<SuretyEditPage />} />
-        <Route path="/garanties" element={<GuaranteesPage />} />
+        <Route
+          path="/taches"
+          element={
+            <PermissionRoute anyOf={PERM_TASKS}>
+              <TasksPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/produits"
+          element={
+            <PermissionRoute anyOf={PERM_PRODUCTS}>
+              <ProductsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/cautions"
+          element={
+            <PermissionRoute anyOf={PERM_SURETIES}>
+              <SuretiesPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/cautions/:id"
+          element={
+            <PermissionRoute anyOf={PERM_SURETIES}>
+              <SuretyDetailPage manageable />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/cautions/:id/modifier"
+          element={
+            <PermissionRoute anyOf={PERM_SURETIES}>
+              <SuretyEditPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/garanties"
+          element={
+            <PermissionRoute anyOf={PERM_GUARANTEES}>
+              <GuaranteesPage />
+            </PermissionRoute>
+          }
+        />
         <Route
           path="/garanties/:id"
-          element={<GuaranteeDetailPage manageable />}
+          element={
+            <PermissionRoute anyOf={PERM_GUARANTEES}>
+              <GuaranteeDetailPage manageable />
+            </PermissionRoute>
+          }
         />
-        <Route path="/garanties/:id/modifier" element={<GuaranteeEditPage />} />
-        <Route path="/mains-levees" element={<GuaranteeReleasesPage />} />
+        <Route
+          path="/garanties/:id/modifier"
+          element={
+            <PermissionRoute anyOf={PERM_GUARANTEES}>
+              <GuaranteeEditPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/mains-levees"
+          element={
+            <PermissionRoute anyOf={PERM_RELEASES}>
+              <GuaranteeReleasesPage />
+            </PermissionRoute>
+          }
+        />
         <Route
           path="/mains-levees/nouvelle"
-          element={<GuaranteeReleaseNewPage />}
+          element={
+            <PermissionRoute
+              anyOf={["guarantees.initiate_guaranteereleaserequest"]}
+            >
+              <GuaranteeReleaseNewPage />
+            </PermissionRoute>
+          }
         />
         <Route
           path="/mains-levees/:id"
-          element={<GuaranteeReleaseDetailPage />}
+          element={
+            <PermissionRoute anyOf={PERM_RELEASES}>
+              <GuaranteeReleaseDetailPage />
+            </PermissionRoute>
+          }
         />
-        <Route path="/dations" element={<DationsPage />} />
-        <Route path="/dations/nouvelle" element={<DationNewPage />} />
-        <Route path="/dations/:id" element={<DationDetailPage />} />
-        <Route path="/recouvrement" element={<CollectionsPage />} />
-        <Route path="/recouvrement/:id" element={<CollectionCaseDetailPage />} />
+        <Route
+          path="/dations"
+          element={
+            <PermissionRoute anyOf={PERM_DATIONS}>
+              <DationsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/dations/nouvelle"
+          element={
+            <PermissionRoute anyOf={["guarantees.initiate_dationrequest"]}>
+              <DationNewPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/dations/:id"
+          element={
+            <PermissionRoute anyOf={PERM_DATIONS}>
+              <DationDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/recouvrement"
+          element={
+            <PermissionRoute anyOf={PERM_COLLECTIONS}>
+              <CollectionsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/recouvrement/:id"
+          element={
+            <PermissionRoute anyOf={PERM_COLLECTIONS}>
+              <CollectionCaseDetailPage />
+            </PermissionRoute>
+          }
+        />
         <Route
           path="/recouvrement/:caseId/contentieux/:litId"
-          element={<LitigationDetailPage />}
+          element={
+            <PermissionRoute anyOf={PERM_LITIGATION}>
+              <LitigationDetailPage />
+            </PermissionRoute>
+          }
         />
-        <Route path="/intervenants-juridiques" element={<LegalPartiesPage />} />
-        <Route path="/simulateur" element={<SimulatorPage />} />
+        <Route
+          path="/intervenants-juridiques"
+          element={
+            <PermissionRoute anyOf={PERM_LEGAL_PARTIES}>
+              <LegalPartiesPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/simulateur"
+          element={
+            <PermissionRoute anyOf={PERM_SIMULATOR}>
+              <SimulatorPage />
+            </PermissionRoute>
+          }
+        />
         <Route path="/audit" element={<Navigate to="/admin/audit" replace />} />
         <Route
           path="/admin/filiales"

@@ -25,6 +25,7 @@ import type {
   ReleaseClientCredit,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { hasPerm } from "@/auth/permissions";
 import { ClientAutocomplete } from "@/components/ClientAutocomplete";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import {
@@ -37,15 +38,6 @@ import {
   formatDate,
   formatMoney,
 } from "@/components/ui";
-
-function hasPerm(
-  user: { permissions?: string[]; is_superuser?: boolean } | null,
-  perm: string,
-) {
-  if (!user) return false;
-  if (user.is_superuser) return true;
-  return (user.permissions ?? []).includes(perm);
-}
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -231,7 +223,7 @@ export function GuaranteeReleaseNewPage() {
 
   const guarantees = context.data?.guarantees ?? [];
   const credits = context.data?.credits ?? [];
-  const currency = selectedCredit?.cbs_currency || "XAF";
+  const currency = selectedCredit?.cbs_currency || "XOF";
 
   return (
     <div className="release-compose">
@@ -766,7 +758,7 @@ export function GuaranteeReleaseDetailPage() {
 
   if (detail.isLoading || !detail.data) return <Spinner />;
   const r = detail.data;
-  const cur = r.cbs_currency || "XAF";
+  const cur = r.cbs_currency || "XOF";
   const editable = r.status === "DRAFT" || r.status === "RETURNED";
   const canUploadDocs = !["COMPLETED", "CANCELLED", "REJECTED"].includes(
     r.status,
@@ -776,6 +768,8 @@ export function GuaranteeReleaseDetailPage() {
       (t) =>
         t.target_meta?.kind === "MAIN_LEVEE" && t.target_meta.id === r.id,
     ) ?? null;
+  const canDepositSigned =
+    Boolean(r.can_deposit_signed_acte) || canInitiate || Boolean(myTask);
   return (
     <div>
       <PageHeader
@@ -980,7 +974,7 @@ export function GuaranteeReleaseDetailPage() {
               </button>
             </div>
           )}
-          {canInitiate &&
+          {canDepositSigned &&
             r.has_generated_acte &&
             !r.has_signed_acte &&
             canUploadDocs && (

@@ -7,7 +7,7 @@ from django.db.models import Count, Q
 from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from apps.common.access import DataScope, get_user_agency_ids
@@ -124,6 +124,23 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         "loan__application__guarantees",
         "loan__application__dation_requests",
     ).all()
+    # Actions sensibles : pas le fallback HTTP→add_collectioncase.
+    # Pilotage opérationnel (stade / prochaine action / relance) → change_collectioncase.
+    action_perms = {
+        "agent_dashboard_view": ["collections.view_collectioncase"],
+        "hearings_agenda": ["collections.view_collectioncase"],
+        "export_csv": ["collections.view_collectioncase"],
+        "add_repayment": ["collections.add_repayment"],
+        "assign": ["collections.change_collectioncase"],
+        "set_stage": ["collections.change_collectioncase"],
+        "set_next_action_view": ["collections.change_collectioncase"],
+        "send_reminder": ["collections.change_collectioncase"],
+        "restructure": ["collections.add_loanrestructure"],
+        "write_off": ["collections.add_writeoff"],
+        # create/update contrôlés finement dans la méthode.
+        "litigation": [],
+        "litigation_events": ["collections.add_litigationevent"],
+    }
     filterset_fields = ["stage", "par_class", "assigned_to"]
     ordering_fields = [
         "days_overdue", "overdue_amount", "created_at", "next_action_date",
@@ -353,10 +370,34 @@ class CollectionCaseViewSet(TenantScopedViewSet):
     @action(detail=True, methods=["post", "put", "patch"], url_path="litigation")
     def litigation(self, request, pk=None):
         """Crée / met à jour une procédure contentieuse (optionnel : litigation_id)."""
+        user = request.user
+        if not user.is_superuser:
+            has_add = user.has_perm("collections.add_litigationfile")
+            has_change = user.has_perm("collections.change_litigationfile")
+            if not (has_add or has_change):
+                raise PermissionDenied(
+                    "Droit insuffisant pour gérer le contentieux."
+                )
         case = self.get_object()
         serializer = LitigationUpsertSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         litigation_id = serializer.validated_data.get("litigation_id")
+        if (
+            not user.is_superuser
+            and litigation_id
+            and not user.has_perm("collections.change_litigationfile")
+        ):
+            raise PermissionDenied(
+                "Droit insuffisant pour modifier une procédure contentieuse."
+            )
+        if (
+            not user.is_superuser
+            and not litigation_id
+            and not user.has_perm("collections.add_litigationfile")
+        ):
+            raise PermissionDenied(
+                "Droit insuffisant pour ouvrir une procédure contentieuse."
+            )
         payload = _litigation_write_payload(serializer.validated_data)
         try:
             upsert_litigation(
@@ -508,9 +549,23 @@ class LitigationFileViewSet(TenantScopedViewSet):
         "related_guarantees",
     ).all()
     serializer_class = LitigationFileSerializer
+    # GET+POST partagés : entrée lecture, écriture vérifiée dans la méthode.
+    action_perms = {
+        "events": ["collections.view_litigationfile"],
+        "seizures": ["collections.view_litigationfile"],
+        "costs": ["collections.view_litigationfile"],
+        "documents": ["collections.view_litigationfile"],
+        "ensure_categories": ["collections.change_litigationfile"],
+    }
     filterset_fields = ["case", "status", "action_type", "law_firm"]
     search_fields = ["title", "case_reference", "court_name", "lawyer", "bailiff"]
     ordering_fields = ["hearing_date", "filing_date", "created_at", "status"]
+
+    @staticmethod
+    def _require_perm(user, codename, message):
+        if user.is_superuser or user.has_perm(codename):
+            return
+        raise PermissionDenied(message)
 
     def get_serializer_class(self):
         if self.action in {"create", "update", "partial_update"}:
@@ -558,6 +613,11 @@ class LitigationFileViewSet(TenantScopedViewSet):
         if request.method == "GET":
             qs = lit.events.select_related("performed_by").all()
             return Response(LitigationEventSerializer(qs, many=True).data)
+        self._require_perm(
+            request.user,
+            "collections.add_litigationevent",
+            "Droit insuffisant pour ajouter un événement contentieux.",
+        )
         serializer = LitigationEventCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
@@ -580,6 +640,11 @@ class LitigationFileViewSet(TenantScopedViewSet):
         if request.method == "GET":
             qs = lit.seizures.select_related("bailiff", "guarantee").all()
             return Response(LitigationSeizureSerializer(qs, many=True).data)
+        self._require_perm(
+            request.user,
+            "collections.add_litigationseizure",
+            "Droit insuffisant pour enregistrer une saisie.",
+        )
         serializer = LitigationSeizureCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         seizure = LitigationSeizure.objects.create(
@@ -598,6 +663,11 @@ class LitigationFileViewSet(TenantScopedViewSet):
         if request.method == "GET":
             qs = lit.costs.select_related("party").all()
             return Response(LitigationCostSerializer(qs, many=True).data)
+        self._require_perm(
+            request.user,
+            "collections.add_litigationcost",
+            "Droit insuffisant pour enregistrer un frais contentieux.",
+        )
         serializer = LitigationCostCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         cost = LitigationCost.objects.create(
@@ -619,6 +689,11 @@ class LitigationFileViewSet(TenantScopedViewSet):
             )
             return Response(DocumentSerializer(docs, many=True).data)
 
+        self._require_perm(
+            request.user,
+            "collections.change_litigationfile",
+            "Droit insuffisant pour joindre une pièce au contentieux.",
+        )
         ensure_litigation_document_categories(lit.tenant)
         serializer = LitigationDocumentUploadSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)

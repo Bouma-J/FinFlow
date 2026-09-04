@@ -1,6 +1,6 @@
 # 07 — Guide utilisateur
 
-Guide orienté **opérateurs** de la SPA (http://localhost en Docker).
+Guide orienté **opérateurs** de la SPA (http://localhost:8080 en Docker Compose démo).
 
 ## 1. Connexion
 

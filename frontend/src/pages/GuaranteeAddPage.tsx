@@ -40,7 +40,7 @@ export function GuaranteeAddPage() {
       />
       <RenewGuaranteesPanel
         applicationId={app.id}
-        currency={app.currency || "XAF"}
+        currency={app.currency || "XOF"}
       />
       <GuaranteeForm
         mode="create"

@@ -352,6 +352,7 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
     has_client_demande = serializers.SerializerMethodField()
     has_generated_acte = serializers.SerializerMethodField()
     has_signed_acte = serializers.SerializerMethodField()
+    can_deposit_signed_acte = serializers.SerializerMethodField()
     acte_generated_url = serializers.SerializerMethodField()
     acte_signed_url = serializers.SerializerMethodField()
 
@@ -386,6 +387,7 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
             "has_client_demande",
             "has_generated_acte",
             "has_signed_acte",
+            "can_deposit_signed_acte",
             "status",
             "status_display",
             "comment",
@@ -414,6 +416,7 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
             "has_client_demande",
             "has_generated_acte",
             "has_signed_acte",
+            "can_deposit_signed_acte",
             "status",
             "completed_at",
             "created_at",
@@ -434,6 +437,13 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
 
     def get_has_signed_acte(self, obj):
         return obj.has_signed_acte()
+
+    def get_can_deposit_signed_acte(self, obj):
+        request = self.context.get("request")
+        user = getattr(request, "user", None) if request else None
+        from apps.guarantees.process_services import user_can_deposit_release_acte
+
+        return user_can_deposit_release_acte(user, obj)
 
     def get_acte_generated_url(self, obj):
         if not obj.acte_generated:

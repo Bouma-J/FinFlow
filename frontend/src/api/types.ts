@@ -232,6 +232,7 @@ export interface GuaranteeReleaseRequest {
   has_client_demande?: boolean;
   has_generated_acte?: boolean;
   has_signed_acte?: boolean;
+  can_deposit_signed_acte?: boolean;
   status: string;
   status_display: string;
   comment: string;

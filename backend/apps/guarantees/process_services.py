@@ -15,6 +15,7 @@ from apps.corebanking.services import (
     get_loan_status,
 )
 from apps.credits.amounts import reference_amount
+from apps.tenants.currency import tenant_currency
 from apps.workflow.models import WorkflowDefinition
 from apps.workflow.services import WorkflowError, start_workflow
 
@@ -130,25 +131,18 @@ def _create_release_fee_lines(request: GuaranteeReleaseRequest, fees):
 
 
 def ensure_release_document_categories(tenant) -> int:
-    from apps.documents.models import DocumentCategory
+    from apps.documents.category_seed import ensure_document_categories
 
-    codes = (
-        ("ML_DEMANDE", "Demande de main levée (client)"),
-        ("ML_ACTE_SIGNE", "Acte de main levée signé"),
-        ("ML_QUITTANCE", "Quittance / preuve de solde"),
-        ("ML_RADIATION", "Preuve de radiation"),
-        ("ML_OTHER", "Autre pièce main levée"),
+    return ensure_document_categories(
+        tenant,
+        (
+            ("ML_DEMANDE", "Demande de main levée (client)"),
+            ("ML_ACTE_SIGNE", "Acte de main levée signé"),
+            ("ML_QUITTANCE", "Quittance / preuve de solde"),
+            ("ML_RADIATION", "Preuve de radiation"),
+            ("ML_OTHER", "Autre pièce main levée"),
+        ),
     )
-    created = 0
-    for code, label in codes:
-        _, was = DocumentCategory.objects.get_or_create(
-            tenant=tenant,
-            code=code,
-            defaults={"label": label, "is_active": True},
-        )
-        if was:
-            created += 1
-    return created
 
 
 def release_documents(request: GuaranteeReleaseRequest):
@@ -204,7 +198,7 @@ def initiate_release_request(
             "Référence prêt CBS manquante : sélectionnez un crédit soldé "
             "ou renseignez la référence CBS."
         )
-    currency = "XAF"
+    currency = tenant_currency(guarantee.tenant_id)
     if guarantee.application_id and getattr(guarantee.application, "currency", None):
         currency = guarantee.application.currency
 
@@ -311,7 +305,7 @@ def refresh_release_cbs(request: GuaranteeReleaseRequest, *, user=None):
         GuaranteeReleaseRequest.Status.REJECTED,
     ):
         raise ProcessError("Impossible de rafraîchir le CBS sur ce statut.")
-    currency = request.cbs_currency or "XAF"
+    currency = request.cbs_currency or tenant_currency(request.tenant_id)
     try:
         cbs = assert_loan_settled(
             request.tenant_id,
@@ -425,7 +419,7 @@ def _build_release_acte_docx(request: GuaranteeReleaseRequest) -> bytes:
     doc.add_paragraph(f"Description : {guarantee.description or '—'}")
     value = guarantee.current_value or guarantee.expertise_value
     doc.add_paragraph(
-        f"Valeur : {value} {request.cbs_currency or 'XAF'}"
+        f"Valeur : {value} {request.cbs_currency or tenant_currency(request.tenant_id)}"
         if value is not None
         else "Valeur : —"
     )
@@ -483,6 +477,40 @@ def generate_release_acte(request: GuaranteeReleaseRequest, *, user=None):
         request.updated_by = user
     request.save()
     return request
+
+
+def user_can_deposit_release_acte(user, request: GuaranteeReleaseRequest) -> bool:
+    """
+    Initiateur (droit Django) ou membre d'un groupe d'étape du circuit
+    de la demande peut déposer l'acte signé / clôturer.
+    """
+    if not (user and user.is_authenticated):
+        return False
+    if user.is_superuser or getattr(user, "is_group_level", False):
+        return True
+    if user.has_perm("guarantees.initiate_guaranteereleaserequest"):
+        return True
+    from django.contrib.contenttypes.models import ContentType
+
+    from apps.workflow.models import ApprovalTask, WorkflowInstance
+
+    ct = ContentType.objects.get_for_model(GuaranteeReleaseRequest)
+    inst = (
+        WorkflowInstance.objects.filter(content_type=ct, object_id=request.pk)
+        .order_by("-created_at")
+        .first()
+    )
+    if inst is None:
+        return False
+    user_group_ids = set(user.groups.values_list("id", flat=True))
+    if not user_group_ids:
+        return False
+    step_group_ids = set(
+        ApprovalTask.objects.filter(instance=inst).values_list(
+            "step__required_group_id", flat=True
+        )
+    )
+    return bool(user_group_ids.intersection(step_group_ids))
 
 
 @transaction.atomic
@@ -585,7 +613,7 @@ def release_client_context(*, client, tenant_id=None) -> dict:
     credits = []
     for app in apps:
         loan = loans_by_app.get(app.pk)
-        currency = getattr(app, "currency", None) or "XAF"
+        currency = getattr(app, "currency", None) or tenant_currency(tid)
         loan_ref = ""
         if loan and loan.core_banking_reference:
             loan_ref = loan.core_banking_reference.strip()
@@ -680,7 +708,7 @@ def complete_release_request(request: GuaranteeReleaseRequest):
         )
 
     guarantee = request.guarantee
-    currency = request.cbs_currency or "XAF"
+    currency = request.cbs_currency or tenant_currency(request.tenant_id)
     try:
         cbs = assert_loan_settled(
             request.tenant_id,
@@ -945,7 +973,7 @@ def initiate_dation_request(
     démarre immédiatement le circuit DATION.
     """
     cbs_id = (cbs_client_id or getattr(client, "cbs_client_id", "") or "").strip()
-    currency = "XAF"
+    currency = tenant_currency(client.tenant_id)
     if application is not None and getattr(application, "currency", None):
         currency = application.currency
 
@@ -1137,7 +1165,7 @@ def refresh_dation_cbs(request: DationRequest, *, user=None):
         DationRequest.Status.REJECTED,
     ):
         raise ProcessError("Impossible de rafraîchir le CBS sur ce statut.")
-    currency = request.cbs_currency or "XAF"
+    currency = request.cbs_currency or tenant_currency(request.tenant_id)
     try:
         cbs = assert_client_outstanding_for_dation(
             request.tenant_id,
@@ -1216,8 +1244,9 @@ def cancel_dation_request(request: DationRequest, *, user=None, comment=""):
     return request
 
 
-def preview_dation_cbs(*, tenant_id, cbs_client_id, currency="XAF") -> dict:
+def preview_dation_cbs(*, tenant_id, cbs_client_id, currency=None) -> dict:
     """Lecture encours CBS (créance) sans créer de demande."""
+    currency = (currency or "").strip().upper() or tenant_currency(tenant_id)
     try:
         return get_client_outstanding(
             tenant_id, cbs_client_id, currency=currency
@@ -1228,26 +1257,19 @@ def preview_dation_cbs(*, tenant_id, cbs_client_id, currency="XAF") -> dict:
 
 def ensure_dation_document_categories(tenant) -> int:
     """Crée les catégories GED dation si absentes."""
-    from apps.documents.models import DocumentCategory
+    from apps.documents.category_seed import ensure_document_categories
 
-    codes = (
-        ("DAT_ACTE", "Acte de dation"),
-        ("DAT_PHOTO", "Photo du bien"),
-        ("DAT_EXPERTISE", "Rapport d'expertise"),
-        ("DAT_TITRE", "Titre / carte grise / justificatif"),
-        ("DAT_FACTURE", "Facture / quittance de frais"),
-        ("DAT_OTHER", "Autre pièce dation"),
+    return ensure_document_categories(
+        tenant,
+        (
+            ("DAT_ACTE", "Acte de dation"),
+            ("DAT_PHOTO", "Photo du bien"),
+            ("DAT_EXPERTISE", "Rapport d'expertise"),
+            ("DAT_TITRE", "Titre / carte grise / justificatif"),
+            ("DAT_FACTURE", "Facture / quittance de frais"),
+            ("DAT_OTHER", "Autre pièce dation"),
+        ),
     )
-    created = 0
-    for code, label in codes:
-        _, was = DocumentCategory.objects.get_or_create(
-            tenant=tenant,
-            code=code,
-            defaults={"label": label, "is_active": True},
-        )
-        if was:
-            created += 1
-    return created
 
 
 def dation_documents(request: DationRequest):
@@ -1307,7 +1329,7 @@ def complete_dation_request(request: DationRequest):
     Re-vérifie l'encours CBS, réalise les garanties sources, puis enregistre
     la garantie type DATION résultante.
     """
-    currency = request.cbs_currency or "XAF"
+    currency = request.cbs_currency or tenant_currency(request.tenant_id)
     try:
         cbs = assert_client_outstanding_for_dation(
             request.tenant_id,

@@ -4,6 +4,8 @@ import { useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
 import type { LegalParty, LegalPartyType, Paginated } from "@/api/types";
+import { useAuth } from "@/auth/AuthContext";
+import { hasPerm } from "@/auth/permissions";
 import {
   Badge,
   EmptyState,
@@ -21,6 +23,8 @@ const TYPES: { value: LegalPartyType; label: string }[] = [
 ];
 
 export function LegalPartiesPage() {
+  const { user } = useAuth();
+  const canAdd = hasPerm(user, "collections.add_legalparty");
   const qc = useQueryClient();
   const [typeFilter, setTypeFilter] = useState("");
   const [name, setName] = useState("");
@@ -87,6 +91,7 @@ export function LegalPartiesPage() {
         subtitle="Cabinets, avocats, huissiers et autres conseils"
       />
 
+      {canAdd && (
       <div className="card" style={{ padding: 14, marginBottom: 16 }}>
         <form onSubmit={submit}>
           <div className="form-grid">
@@ -141,6 +146,7 @@ export function LegalPartiesPage() {
           </button>
         </form>
       </div>
+      )}
 
       <div className="filters-bar card">
         <select

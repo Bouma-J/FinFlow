@@ -41,8 +41,8 @@ l’action est refusée (403), pas seulement masquée dans l’UI.
 | **Lecteur** | Consultation seule (clients, dossiers, garanties, contrats, circuit, recouvrement) — **aucune** écriture ni décision |
 | **Responsable des opérations** | Contrats générés, main levée / dation, **validation du décaissement**, CBS |
 | **Assistant des opérations** | Contrats générés + **initiation** du décaissement (à valider par le responsable) |
-| **Responsable Juridique** / **Assistant juridique** | Garanties, cautions (y compris après approbation), contrats générés — **aucun** paramétrage catalogue / modèles ni édition dossier |
-| **Responsable / Assistant recouvrement** | Module recouvrement (+ lecture clients / dossiers) |
+| **Responsable Juridique** / **Assistant juridique** | Lecture transverse (exploitation + recouvrement) + contentieux / intervenants ; Resp. : main levée / dation ; Assist. : contentieux sans initiation ML/dation |
+| **Responsable / Assistant recouvrement** | Module recouvrement + initiation dation (+ lecture clients / dossiers / circuit) |
 | **Responsable administratif et financier** | Lecture transverse + pilotage encaissements / recouvrement financier + audit |
 | **Chef comptable** | Lecture prêts / clients / CBS + gestion des remboursements (y compris suppression) |
 | **Comptable** | Lecture prêts / clients + saisie / modification des remboursements |
@@ -88,6 +88,12 @@ Permissions métier notables :
 - `credits.initiate_disburse_creditapplication`
 - `guarantees.initiate_dationrequest`
 - `guarantees.initiate_guaranteereleaserequest`
+
+Alignement des nouvelles actions recouvrement / ML :
+- Stade, prochaine action, relance → `collections.change_collectioncase`
+- Restructuration / radiation → `collections.add_loanrestructure` / `add_writeoff`
+- Encaissement sur dossier → `collections.add_repayment`
+- Dépôt acte signé (main levée) → initiateur **ou** validateur du circuit
 
 Superutilisateur / staff : accès admin Django (`/django-admin/`).
 

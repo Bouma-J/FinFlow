@@ -28,6 +28,7 @@ import type {
   Paginated,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { hasPerm } from "@/auth/permissions";
 import { ClientAutocomplete } from "@/components/ClientAutocomplete";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import {
@@ -40,15 +41,6 @@ import {
   formatDate,
   formatMoney,
 } from "@/components/ui";
-
-function hasPerm(
-  user: { permissions?: string[]; is_superuser?: boolean } | null,
-  perm: string,
-) {
-  if (!user) return false;
-  if (user.is_superuser) return true;
-  return (user.permissions ?? []).includes(perm);
-}
 
 type ExtraAsset = {
   key: string;
@@ -156,12 +148,12 @@ export function DationsPage() {
                 </td>
                 <td>{r.client_display}</td>
                 <td className="num">
-                  {formatMoney(r.cbs_total_outstanding, r.cbs_currency || "XAF")}
+                  {formatMoney(r.cbs_total_outstanding, r.cbs_currency || "XOF")}
                 </td>
                 <td className="num">
                   {formatMoney(
                     r.assets_total_value ?? r.asset_value,
-                    r.cbs_currency || "XAF",
+                    r.cbs_currency || "XOF",
                   )}
                 </td>
                 <td>
@@ -235,7 +227,7 @@ export function DationNewPage() {
     retry: false,
   });
 
-  const currency = cbsPreview.data?.currency || "XAF";
+  const currency = cbsPreview.data?.currency || "XOF";
   const claim = Number(cbsPreview.data?.total_outstanding || 0);
 
   const selectedTotal = useMemo(() => {
@@ -1081,7 +1073,7 @@ export function DationDetailPage() {
 
   if (detail.isLoading || !detail.data) return <Spinner />;
   const r = detail.data;
-  const cur = r.cbs_currency || "XAF";
+  const cur = r.cbs_currency || "XOF";
   const editable = r.status === "DRAFT" || r.status === "RETURNED";
   const myTask =
     myTasks?.results.find(

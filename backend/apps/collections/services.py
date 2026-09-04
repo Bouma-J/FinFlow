@@ -56,8 +56,9 @@ def _loan_fully_settled(loan: Loan) -> bool:
 def ensure_default_escalation_rules(tenant) -> int:
     """Crée les règles d'escalade par défaut si absentes."""
     created = 0
+    # all_tenants : hors ContextVar tenant (ex. sync_role_packs).
     for days, stage, label in DEFAULT_ESCALATION_RULES:
-        _, was_created = CollectionEscalationRule.objects.get_or_create(
+        _, was_created = CollectionEscalationRule.all_tenants.get_or_create(
             tenant=tenant,
             min_days_overdue=days,
             defaults={
@@ -750,28 +751,21 @@ def upsert_litigation(
 
 def ensure_litigation_document_categories(tenant) -> int:
     """Crée les catégories GED contentieux si absentes."""
-    from apps.documents.models import DocumentCategory
+    from apps.documents.category_seed import ensure_document_categories
 
-    codes = (
-        ("LIT_ASSIGNATION", "Assignation / requête"),
-        ("LIT_CONCLUSIONS", "Conclusions / mémoire"),
-        ("LIT_JUDGMENT", "Jugement / ordonnance"),
-        ("LIT_PV_HUISSIER", "PV huissier / saisie"),
-        ("LIT_MISE_EN_DEMEURE", "Mise en demeure"),
-        ("LIT_PIECE_ADVERSE", "Pièce adverse"),
-        ("LIT_FACTURE", "Facture honoraires / frais"),
-        ("LIT_OTHER", "Autre pièce contentieux"),
+    return ensure_document_categories(
+        tenant,
+        (
+            ("LIT_ASSIGNATION", "Assignation / requête"),
+            ("LIT_CONCLUSIONS", "Conclusions / mémoire"),
+            ("LIT_JUDGMENT", "Jugement / ordonnance"),
+            ("LIT_PV_HUISSIER", "PV huissier / saisie"),
+            ("LIT_MISE_EN_DEMEURE", "Mise en demeure"),
+            ("LIT_PIECE_ADVERSE", "Pièce adverse"),
+            ("LIT_FACTURE", "Facture honoraires / frais"),
+            ("LIT_OTHER", "Autre pièce contentieux"),
+        ),
     )
-    created = 0
-    for code, label in codes:
-        _, was = DocumentCategory.objects.get_or_create(
-            tenant=tenant,
-            code=code,
-            defaults={"label": label, "is_active": True},
-        )
-        if was:
-            created += 1
-    return created
 
 
 def litigation_documents(litigation: LitigationFile):

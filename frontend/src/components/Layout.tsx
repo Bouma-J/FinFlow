@@ -37,6 +37,20 @@ import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "@/api/client";
 import type { Paginated, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { hasAnyPerm } from "@/auth/permissions";
+import {
+  PERM_CLIENTS,
+  PERM_COLLECTIONS,
+  PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_GUARANTEES,
+  PERM_LEGAL_PARTIES,
+  PERM_PRODUCTS,
+  PERM_RELEASES,
+  PERM_SIMULATOR,
+  PERM_SURETIES,
+  PERM_TASKS,
+} from "@/auth/routePerms";
 import { isAdmin } from "@/components/AdminRoute";
 import { useTenantBranding } from "@/hooks/useTenantBranding";
 
@@ -44,21 +58,68 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
+  /** Si défini, le lien n'apparaît que si l'utilisateur a au moins une permission. */
+  anyOf?: readonly string[];
 }
 
 const NAV_ITEMS: NavItem[] = [
   { to: "/", label: "Tableau de bord", icon: LayoutDashboard },
-  { to: "/dossiers", label: "Dossiers de crédit", icon: FileText },
-  { to: "/taches", label: "Mes validations", icon: ClipboardCheck },
-  { to: "/clients", label: "Clients", icon: UserRound },
-  { to: "/cautions", label: "Cautions", icon: HandCoins },
-  { to: "/produits", label: "Produits", icon: Boxes },
-  { to: "/garanties", label: "Garanties", icon: ShieldCheck },
-  { to: "/mains-levees", label: "Mains levées", icon: ShieldOff },
-  { to: "/dations", label: "Dations", icon: Unlock },
-  { to: "/recouvrement", label: "Recouvrement", icon: CircleDollarSign },
-  { to: "/intervenants-juridiques", label: "Intervenants juridiques", icon: Scale },
-  { to: "/simulateur", label: "Simulateur", icon: Calculator },
+  {
+    to: "/dossiers",
+    label: "Dossiers de crédit",
+    icon: FileText,
+    anyOf: PERM_CREDITS,
+  },
+  {
+    to: "/taches",
+    label: "Mes validations",
+    icon: ClipboardCheck,
+    anyOf: PERM_TASKS,
+  },
+  { to: "/clients", label: "Clients", icon: UserRound, anyOf: PERM_CLIENTS },
+  {
+    to: "/cautions",
+    label: "Cautions",
+    icon: HandCoins,
+    anyOf: PERM_SURETIES,
+  },
+  { to: "/produits", label: "Produits", icon: Boxes, anyOf: PERM_PRODUCTS },
+  {
+    to: "/garanties",
+    label: "Garanties",
+    icon: ShieldCheck,
+    anyOf: PERM_GUARANTEES,
+  },
+  {
+    to: "/mains-levees",
+    label: "Mains levées",
+    icon: ShieldOff,
+    anyOf: PERM_RELEASES,
+  },
+  {
+    to: "/dations",
+    label: "Dations",
+    icon: Unlock,
+    anyOf: PERM_DATIONS,
+  },
+  {
+    to: "/recouvrement",
+    label: "Recouvrement",
+    icon: CircleDollarSign,
+    anyOf: PERM_COLLECTIONS,
+  },
+  {
+    to: "/intervenants-juridiques",
+    label: "Intervenants juridiques",
+    icon: Scale,
+    anyOf: PERM_LEGAL_PARTIES,
+  },
+  {
+    to: "/simulateur",
+    label: "Simulateur",
+    icon: Calculator,
+    anyOf: PERM_SIMULATOR,
+  },
 ];
 
 const ADMIN_ITEMS: NavItem[] = [
@@ -289,6 +350,9 @@ export function Layout() {
   const adminItems = ADMIN_ITEMS.filter(
     (item) => item.to !== "/admin/filiales" || user?.is_group_level,
   );
+  const navItems = NAV_ITEMS.filter(
+    (item) => !item.anyOf || hasAnyPerm(user, item.anyOf),
+  );
 
   const closeMobileNav = () => setMobileNavOpen(false);
 
@@ -326,7 +390,7 @@ export function Layout() {
           </button>
         </div>
         <nav className="nav">
-          <NavItems items={NAV_ITEMS} onNavigate={closeMobileNav} />
+          <NavItems items={navItems} onNavigate={closeMobileNav} />
           {isAdmin(user) && (
             <>
               <div className="nav-section">Administration</div>

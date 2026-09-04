@@ -243,6 +243,30 @@ _WRITE_LEGAL_ASSIST = (
     ("documents", "change_document"),
 )
 
+# Contentieux : pilotage juridique (dossiers, intervenants, saisies, frais).
+_WRITE_LEGAL_CONTENTIEUX = (
+    ("collections", "add_litigationfile"),
+    ("collections", "change_litigationfile"),
+    ("collections", "add_litigationevent"),
+    ("collections", "change_litigationevent"),
+    ("collections", "add_legalparty"),
+    ("collections", "change_legalparty"),
+    ("collections", "add_litigationseizure"),
+    ("collections", "change_litigationseizure"),
+    ("collections", "add_litigationcost"),
+    ("collections", "change_litigationcost"),
+)
+
+_WRITE_LEGAL_CONTENTIEUX_ASSIST = (
+    ("collections", "add_litigationfile"),
+    ("collections", "change_litigationfile"),
+    ("collections", "add_litigationevent"),
+    ("collections", "add_legalparty"),
+    ("collections", "change_legalparty"),
+    ("collections", "add_litigationseizure"),
+    ("collections", "add_litigationcost"),
+)
+
 _WRITE_COLLECTIONS_MGR = (
     ("collections", "add_repayment"),
     ("collections", "change_repayment"),
@@ -271,6 +295,8 @@ _WRITE_COLLECTIONS_MGR = (
     ("collections", "change_loanrestructure"),
     ("collections", "add_writeoff"),
     ("collections", "change_writeoff"),
+    # Issue fréquente d'un dossier de recouvrement ; suivi possible par juridique / exploitation.
+    ("guarantees", "initiate_dationrequest"),
 )
 
 _WRITE_COLLECTIONS_ASSIST = (
@@ -289,6 +315,7 @@ _WRITE_COLLECTIONS_ASSIST = (
     ("collections", "change_litigationseizure"),
     ("collections", "add_litigationcost"),
     ("collections", "change_litigationcost"),
+    ("guarantees", "initiate_dationrequest"),
 )
 
 _READ_METIER = (
@@ -392,27 +419,16 @@ _ASSISTANT_OPERATIONS_PERMS = (
 )
 
 _RESP_JURIDIQUE_PERMS = (
-    *_VIEW_CLIENTS,
-    *_VIEW_CREDIT,
-    *_VIEW_GUARANTEES,
-    *_VIEW_CATALOG,
-    *_VIEW_DOCS,
-    *_VIEW_CONTRACTS,
-    *_VIEW_WORKFLOW,
-    *_VIEW_TRANSVERSE,
+    # Vue transverse type exploitation + recouvrement, écriture juridique / contentieux.
+    *_READ_METIER,
     *_WRITE_LEGAL,
+    *_WRITE_LEGAL_CONTENTIEUX,
 )
 
 _ASSISTANT_JURIDIQUE_PERMS = (
-    *_VIEW_CLIENTS,
-    *_VIEW_CREDIT,
-    *_VIEW_GUARANTEES,
-    *_VIEW_CATALOG,
-    *_VIEW_DOCS,
-    *_VIEW_CONTRACTS,
-    *_VIEW_WORKFLOW,
-    *_VIEW_TRANSVERSE,
+    *_READ_METIER,
     *_WRITE_LEGAL_ASSIST,
+    *_WRITE_LEGAL_CONTENTIEUX_ASSIST,
 )
 
 _RESP_RECOUVREMENT_PERMS = (
@@ -421,6 +437,7 @@ _RESP_RECOUVREMENT_PERMS = (
     *_VIEW_COLLECTIONS,
     *_VIEW_GUARANTEES,
     *_VIEW_DOCS,
+    *_VIEW_WORKFLOW,
     *_VIEW_TRANSVERSE,
     *_WRITE_COLLECTIONS_MGR,
 )
@@ -431,6 +448,7 @@ _ASSISTANT_RECOUVREMENT_PERMS = (
     *_VIEW_COLLECTIONS,
     *_VIEW_GUARANTEES,
     *_VIEW_DOCS,
+    *_VIEW_WORKFLOW,
     *_VIEW_TRANSVERSE,
     *_WRITE_COLLECTIONS_ASSIST,
 )

@@ -14,7 +14,7 @@
 | Docker Engine + Compose v2 | Recommandé |
 | RAM hôte | ≥ 8 Go pour la stack complète |
 | Disque | ≥ 20 Go (images + volumes + GED) |
-| Ports libres | 80, 9000, 9001 (et 5432/6379 si exposés) |
+| Ports libres | 8080 (SPA Docker démo), 9000, 9001 (et 5432/6379 si exposés). Port 80 en production Ubuntu derrière Nginx. |
 
 Pour un déploiement « bare metal » hors Docker : Python 3.12, Node 20, PostgreSQL 16, Redis 7, bucket S3.
 
@@ -51,14 +51,14 @@ SEED_DEMO=1 docker compose up -d --build backend
 
 ```bash
 docker compose ps
-curl http://localhost/api/v1/health/
+curl http://localhost:8080/api/v1/health/
 # → {"status":"ok","ready":true,...}
 ```
 
 | URL | Attendu |
 |-----|---------|
-| http://localhost | SPA |
-| http://localhost/api/docs/ | Swagger |
+| http://localhost:8080 | SPA |
+| http://localhost:8080/api/docs/ | Swagger |
 | http://localhost:9001 | MinIO (`minioadmin` / `minioadmin`) |
 
 ### 2.4 Comptes après seed
