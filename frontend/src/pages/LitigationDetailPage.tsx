@@ -281,7 +281,7 @@ export function LitigationDetailPage() {
   }
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={Scale}
         title={lit.title || lit.case_reference || "Contentieux"}

@@ -190,7 +190,7 @@ export function CollectionsPage() {
   const dash = dashboard.data;
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={CircleDollarSign}
         title="Recouvrement"

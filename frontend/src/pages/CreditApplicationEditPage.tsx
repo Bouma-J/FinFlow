@@ -25,7 +25,7 @@ export function CreditApplicationEditPage() {
   const editable = EDITABLE_STATUSES.includes(app.status);
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={FilePenLine}
         title={`Modifier le dossier ${app.reference || app.id.slice(0, 8)}`}

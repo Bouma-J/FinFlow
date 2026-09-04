@@ -10,8 +10,10 @@ import {
   Landmark,
   Leaf,
   ReceiptText,
+  Shield,
   Store,
   UploadCloud,
+  Users,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
@@ -31,6 +33,7 @@ import {
   type FinancialAnalysis,
 } from "@/api/types";
 import { formatMoney } from "@/components/ui";
+import { CollateralSummaryCard } from "@/components/CollateralSummaryCard";
 
 const toOptions = (m: Record<string, string>) =>
   Object.entries(m).map(([value, label]) => ({ value, label }));
@@ -65,6 +68,12 @@ const NUMERIC_KEYS = [
   // E&S — emplois
   "jobs_created", "jobs_maintained", "jobs_women", "jobs_youth",
   "workforce_count",
+  // Activité annexe / groupement
+  "activity_turnover", "activity_expenses",
+  "members_count", "active_contributing_members",
+  "collective_contributions", "collective_savings",
+  "collective_other_income", "collective_operating_expenses",
+  "group_activity_turnover", "group_activity_expenses",
 ] as const;
 
 const ES_STR_KEYS = [
@@ -149,8 +158,13 @@ export function FinancialAnalysisForm({
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const cur = application.currency || "XOF";
-  const isCorporate =
-    (initial?.client_type || application.client_type) === "CORPORATE";
+  const clientType =
+    (initial?.client_type ||
+      application.client_type ||
+      "INDIVIDUAL") as string;
+  const isCorporate = clientType === "CORPORATE";
+  const isGroupement = clientType === "PROFESSIONAL";
+  const isIndividual = !isCorporate && !isGroupement;
 
   const [numbers, setNumbers] = useState<NumericState>(() =>
     buildInitialNumeric(initial),
@@ -160,9 +174,7 @@ export function FinancialAnalysisForm({
   );
   const [period, setPeriod] = useState(
     initial?.reference_period ||
-      ((initial?.client_type || application.client_type) === "CORPORATE"
-        ? "ANNUAL"
-        : "MONTHLY"),
+      (clientType === "CORPORATE" ? "ANNUAL" : "MONTHLY"),
   );
   const [isReference, setIsReference] = useState(
     initial?.is_reference ?? mode === "create",
@@ -214,6 +226,23 @@ export function FinancialAnalysisForm({
   const [docs, setDocs] = useState<File[]>([]);
   const dependents = application.dependents_count;
 
+  const [hasSideActivity, setHasSideActivity] = useState(
+    Boolean((initial as { has_side_activity?: boolean } | undefined)?.has_side_activity),
+  );
+  const [solidarity, setSolidarity] = useState(
+    Boolean(
+      (initial as { solidarity_commitment?: boolean } | undefined)
+        ?.solidarity_commitment,
+    ),
+  );
+  const [activityComment, setActivityComment] = useState(
+    (initial as { activity_comment?: string } | undefined)?.activity_comment ||
+      "",
+  );
+  const [groupComment, setGroupComment] = useState(
+    (initial as { group_comment?: string } | undefined)?.group_comment || "",
+  );
+
   const navSections = useMemo(
     () =>
       [
@@ -221,16 +250,19 @@ export function FinancialAnalysisForm({
         { id: "fa-exploitation", icon: ReceiptText, label: "Compte d'exploitation", show: isCorporate },
         { id: "fa-balance", icon: Building2, label: "Bilan simplifié", show: isCorporate },
         { id: "fa-trend", icon: Gauge, label: "Tendance (N-1)", show: isCorporate },
-        { id: "fa-income", icon: Wallet, label: "Revenus du ménage", show: !isCorporate },
-        { id: "fa-charges", icon: ReceiptText, label: "Charges du ménage", show: !isCorporate },
-        { id: "fa-stability", icon: Landmark, label: "Stabilité & quotité", show: !isCorporate },
+        { id: "fa-income", icon: Wallet, label: "Revenus du ménage", show: isIndividual },
+        { id: "fa-activity", icon: Store, label: "Activité annexe", show: isIndividual },
+        { id: "fa-charges", icon: ReceiptText, label: "Charges du ménage", show: isIndividual },
+        { id: "fa-stability", icon: Landmark, label: "Stabilité & quotité", show: isIndividual },
+        { id: "fa-group", icon: Users, label: "Groupement", show: isGroupement },
+        { id: "fa-collateral", icon: Shield, label: "Garanties & cautions", show: true },
         { id: "fa-treasury", icon: Wallet, label: "Trésorerie prévisionnelle", show: true },
         { id: "fa-debt", icon: Landmark, label: "Endettement & historique", show: true },
-        { id: "fa-sector", icon: Factory, label: "Analyse sectorielle", show: true },
-        { id: "fa-es", icon: Leaf, label: "Analyse E&S", show: true },
+        { id: "fa-sector", icon: Factory, label: "Analyse sectorielle", show: isCorporate || isGroupement },
+        { id: "fa-es", icon: Leaf, label: "Analyse E&S", show: isCorporate || isGroupement },
         { id: "fa-conclusion", icon: Calculator, label: "Conclusion", show: true },
       ].filter((s) => s.show),
-    [isCorporate],
+    [isCorporate, isIndividual, isGroupement],
   );
 
   const [activeSection, setActiveSection] = useState("fa-params");
@@ -322,6 +354,10 @@ export function FinancialAnalysisForm({
       if (creditBureauDate) fd.append("credit_bureau_date", creditBureauDate);
       fd.append("has_payment_incidents", String(hasIncidents));
       fd.append("incidents_comment", incidentsComment);
+      fd.append("has_side_activity", String(hasSideActivity));
+      fd.append("activity_comment", activityComment);
+      fd.append("solidarity_commitment", String(solidarity));
+      fd.append("group_comment", groupComment);
       fd.append("strengths", strengths);
       fd.append("weaknesses", weaknesses);
       fd.append("recommended_conditions", conditions);
@@ -408,10 +444,25 @@ export function FinancialAnalysisForm({
           description="Période de référence et date de l'analyse."
         >
           <div className={`profile-banner ${isCorporate ? "corp" : "indiv"}`}>
-            {isCorporate ? <Store size={16} /> : <Briefcase size={16} />}
+            {isCorporate ? (
+              <Store size={16} />
+            ) : isGroupement ? (
+              <Users size={16} />
+            ) : (
+              <Briefcase size={16} />
+            )}
             <span>
-              Profil : <strong>{isCorporate ? "Entreprise" : "Particulier"}</strong>
-              {application.client_display ? ` — ${application.client_display}` : ""}
+              Profil :{" "}
+              <strong>
+                {isCorporate
+                  ? "Personne morale"
+                  : isGroupement
+                    ? "Groupement"
+                    : "Personne physique"}
+              </strong>
+              {application.client_display
+                ? ` — ${application.client_display}`
+                : ""}
             </span>
           </div>
           <div className="form-grid two-col">
@@ -431,7 +482,12 @@ export function FinancialAnalysisForm({
           <p className="muted small" style={{ marginBottom: 0 }}>
             Tous les montants doivent être exprimés sur cette période (
             {FINANCE_LABELS.reference_period[period]}). Défaut :{" "}
-            {isCorporate ? "annuelle (entreprise)" : "mensuelle (particulier)"}.
+            {isCorporate
+              ? "annuelle (personne morale)"
+              : isGroupement
+                ? "mensuelle (groupement)"
+                : "mensuelle (personne physique)"}
+            .
           </p>
         </FormSection>
 
@@ -501,6 +557,80 @@ export function FinancialAnalysisForm({
             </p>
           </FormSection>
         </>
+      ) : isGroupement ? (
+        <FormSection
+          id="fa-group"
+          icon={Users}
+          title="Analyse groupement"
+          description="Composition, cotisations, capacité collective et activité commune éventuelle."
+        >
+          <div className="form-grid two-col">
+            <Money
+              label="Nombre de membres"
+              type="number"
+              value={numbers.members_count}
+              onChange={set("members_count")}
+            />
+            <Money
+              label="Membres cotisants actifs"
+              type="number"
+              value={numbers.active_contributing_members}
+              onChange={set("active_contributing_members")}
+            />
+            <Money
+              label="Cotisations périodiques"
+              value={numbers.collective_contributions}
+              onChange={set("collective_contributions")}
+              cur={cur}
+            />
+            <Money
+              label="Épargne du groupement"
+              value={numbers.collective_savings}
+              onChange={set("collective_savings")}
+              cur={cur}
+            />
+            <Money
+              label="Autres recettes collectives"
+              value={numbers.collective_other_income}
+              onChange={set("collective_other_income")}
+              cur={cur}
+            />
+            <Money
+              label="Charges de fonctionnement"
+              value={numbers.collective_operating_expenses}
+              onChange={set("collective_operating_expenses")}
+              cur={cur}
+            />
+            <Money
+              label="CA activité commune (si applicable)"
+              value={numbers.group_activity_turnover}
+              onChange={set("group_activity_turnover")}
+              cur={cur}
+            />
+            <Money
+              label="Charges activité commune"
+              value={numbers.group_activity_expenses}
+              onChange={set("group_activity_expenses")}
+              cur={cur}
+            />
+          </div>
+          <label className="check-row" style={{ marginTop: "0.75rem" }}>
+            <input
+              type="checkbox"
+              checked={solidarity}
+              onChange={(e) => setSolidarity(e.target.checked)}
+            />
+            Engagement de solidarité entre membres
+          </label>
+          <label className="field" style={{ marginTop: "0.75rem" }}>
+            <span>Commentaire groupement</span>
+            <textarea
+              rows={3}
+              value={groupComment}
+              onChange={(e) => setGroupComment(e.target.value)}
+            />
+          </label>
+        </FormSection>
       ) : (
         <>
           <FormSection
@@ -519,6 +649,48 @@ export function FinancialAnalysisForm({
             <div className="finance-recap">
               <RecapItem label="Total revenus" value={formatMoney(recap.income, cur)} strong />
             </div>
+          </FormSection>
+
+          <FormSection
+            id="fa-activity"
+            icon={Store}
+            title="Mini-bloc activité annexe"
+            description="Si le demandeur exerce une activité indépendante en plus du ménage."
+          >
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={hasSideActivity}
+                onChange={(e) => setHasSideActivity(e.target.checked)}
+              />
+              Exerce une activité annexe
+            </label>
+            {hasSideActivity && (
+              <>
+                <div className="form-grid two-col" style={{ marginTop: "0.75rem" }}>
+                  <Money
+                    label="CA / recettes activité"
+                    value={numbers.activity_turnover}
+                    onChange={set("activity_turnover")}
+                    cur={cur}
+                  />
+                  <Money
+                    label="Charges activité"
+                    value={numbers.activity_expenses}
+                    onChange={set("activity_expenses")}
+                    cur={cur}
+                  />
+                </div>
+                <label className="field">
+                  <span>Commentaire activité</span>
+                  <textarea
+                    rows={2}
+                    value={activityComment}
+                    onChange={(e) => setActivityComment(e.target.value)}
+                  />
+                </label>
+              </>
+            )}
           </FormSection>
 
           <FormSection
@@ -571,6 +743,18 @@ export function FinancialAnalysisForm({
           </FormSection>
         </>
       )}
+
+        <FormSection
+          id="fa-collateral"
+          icon={Shield}
+          title="Garanties & cautions"
+          description="Synthèse des piliers collatéral (garanties réelles et cautions) — hors mainlevée / dation."
+        >
+          <CollateralSummaryCard
+            applicationId={application.id}
+            currency={cur}
+          />
+        </FormSection>
 
         <FormSection
           id="fa-treasury"
@@ -650,6 +834,7 @@ export function FinancialAnalysisForm({
         </p>
         </FormSection>
 
+        {(isCorporate || isGroupement) && (
         <FormSection
           id="fa-sector"
           icon={Factory}
@@ -680,7 +865,9 @@ export function FinancialAnalysisForm({
           <textarea rows={2} value={esStr.sector_comment} onChange={(e) => setStr("sector_comment")(e.target.value)} />
         </label>
         </FormSection>
+        )}
 
+        {(isCorporate || isGroupement) && (
         <FormSection
           id="fa-es"
           icon={Leaf}
@@ -738,6 +925,7 @@ export function FinancialAnalysisForm({
           <textarea rows={2} value={esStr.es_comment} onChange={(e) => setStr("es_comment")(e.target.value)} />
         </label>
         </FormSection>
+        )}
 
         <FormSection
           id="fa-conclusion"
@@ -747,7 +935,7 @@ export function FinancialAnalysisForm({
         >
         <div className="form-grid two-col">
           <Select
-            label="Recommandation"
+            label="Recommandation (obligatoire pour soumettre)"
             value={recommendation}
             onChange={setRecommendation}
             options={RECOMMENDATIONS}

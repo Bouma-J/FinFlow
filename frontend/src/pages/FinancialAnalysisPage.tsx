@@ -61,7 +61,7 @@ export function FinancialAnalysisPage() {
     const isAuthor = isSuper || (!!uid && existing?.created_by === uid);
     if (!canChange || !isAuthor || !(existing?.can_edit || isSuper)) {
       return (
-        <div>
+    <div className="page-shell">
           <PageHeader
             icon={LineChart}
             title="Analyse financière"

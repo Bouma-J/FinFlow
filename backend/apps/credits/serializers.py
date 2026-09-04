@@ -27,6 +27,9 @@ class AnalysisThresholdSerializer(serializers.ModelSerializer):
             "min_financial_autonomy", "min_current_ratio",
             "min_guarantee_coverage", "stress_pct",
             "transferable_quota_fraction", "informal_income_weight",
+            "haircut_mortgage", "haircut_vehicle", "haircut_jewelry",
+            "haircut_financial_deposit", "haircut_financial_security",
+            "haircut_other",
             "created_at", "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
@@ -99,6 +102,9 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
             "min_financial_autonomy", "min_current_ratio",
             "min_guarantee_coverage", "stress_pct",
             "transferable_quota_fraction", "informal_income_weight",
+            "haircut_mortgage", "haircut_vehicle", "haircut_jewelry",
+            "haircut_financial_deposit", "haircut_financial_security",
+            "haircut_other",
         ]
         out = {}
         for k in keys:
@@ -190,6 +196,15 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
             "jobs_maintained", "jobs_women", "jobs_youth", "workforce_count",
             "es_mitigation_plan",
             "es_action_required", "es_insurance", "es_risk_level", "es_comment",
+            # Personne physique — activité annexe
+            "has_side_activity", "activity_turnover", "activity_expenses",
+            "activity_comment",
+            # Groupement
+            "members_count", "active_contributing_members",
+            "solidarity_commitment", "collective_contributions",
+            "collective_savings", "collective_other_income",
+            "collective_operating_expenses", "group_activity_turnover",
+            "group_activity_expenses", "group_comment",
             # Décision & synthèse
             "internal_score", "score_breakdown",
             "strengths", "weaknesses", "recommended_conditions",

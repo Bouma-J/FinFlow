@@ -17,6 +17,7 @@ def _dec(value) -> Decimal | None:
 _APPROVED_LIKE = frozenset({
     "APPROVED",
     "CONTRACT_GENERATED",
+    "DISBURSEMENT_PENDING",
     "DISBURSED",
     "CLOSED",
 })

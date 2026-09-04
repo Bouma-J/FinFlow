@@ -4,12 +4,15 @@ import os
 from django.http import FileResponse, HttpResponse
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.response import Response
 
 from apps.common.access import apply_data_scope
 from apps.common.permissions import HasModelPermission
 from apps.common.storage_urls import CLIENT_FILE_FIELDS, image_content_type
+from apps.common.tenancy import get_current_tenant_id
 from apps.common.viewsets import AgencyScopedMixin, AgencyScopedViewSet
 
+from .cbs_services import import_client_from_cbs, preview_client_from_cbs
 from .models import Client
 from .serializers import ClientListSerializer, ClientSerializer
 
@@ -69,6 +72,8 @@ class ClientViewSet(AgencyScopedViewSet):
         # Ouverture navigateur sans JWT (proxy / URL présignée en amont).
         "photo": [],
         "files": [],
+        "cbs_preview": ["clients.add_client"],
+        "cbs_import": ["clients.add_client"],
     }
     filterset_fields = ["client_type", "kyc_status", "agency", "is_active", "city"]
     search_fields = [
@@ -164,3 +169,48 @@ class ClientViewSet(AgencyScopedViewSet):
     def files(self, request, pk=None, field=None):
         """Sert un document client (scan pièce, IFU, RCCM…) via l'API."""
         return self._serve_client_file(pk, field or "")
+
+    @action(detail=False, methods=["post"], url_path="cbs-preview")
+    def cbs_preview(self, request):
+        """Prévisualise un adhérent CBS avant création (données non éditables)."""
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return Response(
+                {
+                    "detail": (
+                        "Aucune filiale sélectionnée. Choisissez une filiale "
+                        "avant d'interroger le CBS."
+                    )
+                },
+                status=400,
+            )
+        preview = preview_client_from_cbs(
+            tenant_id=tenant_id, data=request.data or {}
+        )
+        # Ne pas renvoyer le raw volumineux à l'UI sauf besoin debug.
+        payload = {k: v for k, v in preview.items() if k != "raw"}
+        return Response(payload)
+
+    @action(detail=False, methods=["post"], url_path="cbs-import")
+    def cbs_import(self, request):
+        """Crée un client à partir du CBS après choix du type (prévisualisation)."""
+        tenant_id = get_current_tenant_id()
+        if tenant_id is None:
+            return Response(
+                {
+                    "detail": (
+                        "Aucune filiale sélectionnée. Choisissez une filiale "
+                        "avant d'importer un client."
+                    )
+                },
+                status=400,
+            )
+        client, preview = import_client_from_cbs(
+            tenant_id=tenant_id,
+            user=request.user,
+            data=request.data or {},
+        )
+        data = ClientSerializer(client, context={"request": request}).data
+        data["kyc_alert"] = bool(preview.get("kyc_alert"))
+        data["cbs_est_valide"] = bool(preview.get("est_valide"))
+        return Response(data, status=201)

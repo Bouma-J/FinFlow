@@ -36,7 +36,7 @@ export function GuaranteeEditPage() {
   );
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={ShieldCheck}
         title="Modifier la garantie"

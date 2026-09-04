@@ -201,9 +201,13 @@ class TenantMandatoryMixin:
         return qs
 
 
-class TenantScopedViewSet(TenantContextMixin, AuthorPersistMixin,
-                          viewsets.ModelViewSet):
-    """ViewSet CRUD complet avec isolation multi-tenants, audit et RBAC."""
+class TenantScopedViewSet(TenantMandatoryMixin, TenantContextMixin,
+                          AuthorPersistMixin, viewsets.ModelViewSet):
+    """ViewSet CRUD complet avec isolation multi-tenants, audit et RBAC.
+
+    Inclut ``TenantMandatoryMixin`` : un utilisateur Groupe sans
+    ``X-Tenant-Id`` obtient des listes vides (pas de fuite cross-filiale).
+    """
 
     permission_classes = [
         IsAuthenticated,
@@ -228,7 +232,7 @@ class AgencyScopedViewSet(AgencyScopedMixin, TenantScopedViewSet):
     """ViewSet CRUD avec isolation filiale + agence + périmètre utilisateur."""
 
 
-class TenantScopedReadOnlyViewSet(TenantContextMixin,
+class TenantScopedReadOnlyViewSet(TenantMandatoryMixin, TenantContextMixin,
                                   viewsets.ReadOnlyModelViewSet):
     """ViewSet en lecture seule avec isolation multi-tenants, audit et RBAC."""
 

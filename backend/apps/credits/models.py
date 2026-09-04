@@ -583,6 +583,13 @@ DEFAULT_THRESHOLDS = {
     "stress_pct": Decimal("20"),
     "transferable_quota_fraction": Decimal("33.33"),
     "informal_income_weight": Decimal("70"),
+    # Haircuts filiale (% retranché de la valeur brute retenue).
+    "haircut_mortgage": Decimal("0"),
+    "haircut_vehicle": Decimal("30"),
+    "haircut_jewelry": Decimal("20"),
+    "haircut_financial_deposit": Decimal("0"),
+    "haircut_financial_security": Decimal("10"),
+    "haircut_other": Decimal("20"),
 }
 
 
@@ -636,6 +643,30 @@ class AnalysisThreshold(TenantScopedModel):
     informal_income_weight = models.DecimalField(
         "pondération des revenus informels (%)", max_digits=6, decimal_places=2,
         default=DEFAULT_THRESHOLDS["informal_income_weight"],
+    )
+    haircut_mortgage = models.DecimalField(
+        "haircut hypothèque (%)", max_digits=6, decimal_places=2,
+        default=DEFAULT_THRESHOLDS["haircut_mortgage"],
+    )
+    haircut_vehicle = models.DecimalField(
+        "haircut véhicule (%)", max_digits=6, decimal_places=2,
+        default=DEFAULT_THRESHOLDS["haircut_vehicle"],
+    )
+    haircut_jewelry = models.DecimalField(
+        "haircut bijoux / objets (%)", max_digits=6, decimal_places=2,
+        default=DEFAULT_THRESHOLDS["haircut_jewelry"],
+    )
+    haircut_financial_deposit = models.DecimalField(
+        "haircut DAT / épargne (%)", max_digits=6, decimal_places=2,
+        default=DEFAULT_THRESHOLDS["haircut_financial_deposit"],
+    )
+    haircut_financial_security = models.DecimalField(
+        "haircut titres (%)", max_digits=6, decimal_places=2,
+        default=DEFAULT_THRESHOLDS["haircut_financial_security"],
+    )
+    haircut_other = models.DecimalField(
+        "haircut autres garanties (%)", max_digits=6, decimal_places=2,
+        default=DEFAULT_THRESHOLDS["haircut_other"],
     )
 
     class Meta:
@@ -1098,6 +1129,56 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
     )
     es_comment = models.TextField("commentaire E&S", blank=True)
 
+    # ------------------------------------------------------------------ #
+    # Personne physique — mini-bloc activité annexe
+    # ------------------------------------------------------------------ #
+    has_side_activity = models.BooleanField(
+        "exerce une activité annexe", default=False
+    )
+    activity_turnover = models.DecimalField(
+        "CA / recettes activité annexe", max_digits=18, decimal_places=2,
+        default=0,
+    )
+    activity_expenses = models.DecimalField(
+        "charges activité annexe", max_digits=18, decimal_places=2, default=0,
+    )
+    activity_comment = models.TextField("commentaire activité annexe", blank=True)
+
+    # ------------------------------------------------------------------ #
+    # Groupement (PROFESSIONAL)
+    # ------------------------------------------------------------------ #
+    members_count = models.PositiveIntegerField(
+        "nombre de membres", null=True, blank=True
+    )
+    active_contributing_members = models.PositiveIntegerField(
+        "membres cotisants actifs", null=True, blank=True
+    )
+    solidarity_commitment = models.BooleanField(
+        "engagement de solidarité entre membres", default=False
+    )
+    collective_contributions = models.DecimalField(
+        "cotisations périodiques collectées", max_digits=18, decimal_places=2,
+        default=0,
+    )
+    collective_savings = models.DecimalField(
+        "épargne du groupement", max_digits=18, decimal_places=2, default=0,
+    )
+    collective_other_income = models.DecimalField(
+        "autres recettes collectives", max_digits=18, decimal_places=2, default=0,
+    )
+    collective_operating_expenses = models.DecimalField(
+        "charges de fonctionnement collectives", max_digits=18, decimal_places=2,
+        default=0,
+    )
+    group_activity_turnover = models.DecimalField(
+        "CA activité commune (si applicable)", max_digits=18, decimal_places=2,
+        default=0,
+    )
+    group_activity_expenses = models.DecimalField(
+        "charges activité commune", max_digits=18, decimal_places=2, default=0,
+    )
+    group_comment = models.TextField("commentaire groupement", blank=True)
+
     # Décision & synthèse structurée
     internal_score = models.DecimalField(
         "score interne (/100)", max_digits=6, decimal_places=2, null=True, blank=True
@@ -1126,10 +1207,28 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
     # -------------------- valeurs dérivées (particulier) --------------- #
     @property
     def total_income(self):
-        return (
+        base = (
             _dec(self.salary_income) + _dec(self.spouse_income)
             + _dec(self.rental_income) + _dec(self.other_activity_income)
             + _dec(self.other_income)
+        )
+        if self.has_side_activity:
+            base += _dec(self.activity_turnover) - _dec(self.activity_expenses)
+        return base
+
+    @property
+    def activity_net(self):
+        return _dec(self.activity_turnover) - _dec(self.activity_expenses)
+
+    @property
+    def collective_capacity(self):
+        """Capacité nette d'un groupement (hors service dette existant)."""
+        return (
+            _dec(self.collective_contributions)
+            + _dec(self.collective_other_income)
+            + _dec(self.group_activity_turnover)
+            - _dec(self.collective_operating_expenses)
+            - _dec(self.group_activity_expenses)
         )
 
     @property
@@ -1231,6 +1330,16 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
     @property
     def is_corporate(self):
         return self.client_type == "CORPORATE"
+
+    @property
+    def is_groupement(self):
+        return self.client_type == "PROFESSIONAL"
+
+    @property
+    def is_individual(self):
+        return self.client_type == "INDIVIDUAL" or (
+            self.client_type not in ("CORPORATE", "PROFESSIONAL")
+        )
 
     def _compute_new_installment(self):
         """Échéance institution (principal + intérêt), hors épargne obligatoire."""

@@ -84,7 +84,7 @@ export function LegalPartiesPage() {
   }
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={Scale}
         title="Intervenants juridiques"

@@ -289,7 +289,8 @@ def _mark_kept_promises(repayment: Repayment):
 def refresh_broken_promises(as_of=None) -> int:
     """Passe en BROKEN les promesses PENDING dont la date est dépassée."""
     as_of = as_of or timezone.localdate()
-    return PaymentPromise.objects.filter(
+    # all_tenants : appelé depuis Celery hors ContextVar tenant.
+    return PaymentPromise.all_tenants.filter(
         status=PaymentPromise.Status.PENDING,
         promised_date__lt=as_of,
     ).update(status=PaymentPromise.Status.BROKEN)
@@ -829,8 +830,9 @@ def notify_upcoming_hearings(*, within_days: int = 7) -> dict:
 
     today = timezone.localdate()
     target = today + timedelta(days=within_days)
+    # all_tenants : tâche Celery hors ContextVar tenant.
     qs = (
-        LitigationFile.objects.filter(hearing_date=target)
+        LitigationFile.all_tenants.filter(hearing_date=target)
         .exclude(
             status__in=[
                 LitigationFile.Status.CLOSED,
@@ -844,46 +846,49 @@ def notify_upcoming_hearings(*, within_days: int = 7) -> dict:
         )
     )
     sent = skipped = failed = 0
+    from apps.common.tenancy import tenant_context
+
     for lit in qs.iterator():
-        prefs = TenantNotificationSettings.for_tenant(lit.tenant)
-        agent = lit.case.assigned_to
-        email = (getattr(agent, "email", None) or "").strip()
-        if not email or not prefs or not prefs.enabled:
-            skipped += 1
-            continue
-        ref = lit.case_reference or lit.title or str(lit.id)
-        subject = f"Audience contentieux le {lit.hearing_date} — {ref}"
-        text = (
-            f"Rappel : audience prévue le {lit.hearing_date}"
-            f"{(' à ' + lit.hearing_time.strftime('%H:%M')) if lit.hearing_time else ''}"
-            f" — {lit.court_name or 'juridiction n/c'}\n"
-            f"Dossier recouvrement : {lit.case_id}\n"
-            f"Lieu : {lit.hearing_location or '—'}"
-        )
-        try:
-            send_email_for_tenant(
-                tenant=lit.tenant,
-                subject=subject,
-                text_body=text,
-                recipients=[email],
-                prefs=prefs,
+        with tenant_context(lit.tenant_id):
+            prefs = TenantNotificationSettings.for_tenant(lit.tenant)
+            agent = lit.case.assigned_to
+            email = (getattr(agent, "email", None) or "").strip()
+            if not email or not prefs or not prefs.enabled:
+                skipped += 1
+                continue
+            ref = lit.case_reference or lit.title or str(lit.id)
+            subject = f"Audience contentieux le {lit.hearing_date} — {ref}"
+            text = (
+                f"Rappel : audience prévue le {lit.hearing_date}"
+                f"{(' à ' + lit.hearing_time.strftime('%H:%M')) if lit.hearing_time else ''}"
+                f" — {lit.court_name or 'juridiction n/c'}\n"
+                f"Dossier recouvrement : {lit.case_id}\n"
+                f"Lieu : {lit.hearing_location or '—'}"
             )
-            status = NotificationLog.Status.SENT
-            sent += 1
-            err = ""
-        except Exception as exc:  # noqa: BLE001
-            status = NotificationLog.Status.FAILED
-            failed += 1
-            err = str(exc)
-        NotificationLog.objects.create(
-            tenant_id=lit.tenant_id,
-            kind=NotificationLog.Kind.COLLECTION_REMINDER,
-            status=status,
-            subject=subject,
-            recipients=[email],
-            body_preview=text[:500],
-            error_message=err,
-        )
+            try:
+                send_email_for_tenant(
+                    tenant=lit.tenant,
+                    subject=subject,
+                    text_body=text,
+                    recipients=[email],
+                    prefs=prefs,
+                )
+                status = NotificationLog.Status.SENT
+                sent += 1
+                err = ""
+            except Exception as exc:  # noqa: BLE001
+                status = NotificationLog.Status.FAILED
+                failed += 1
+                err = str(exc)
+            NotificationLog.objects.create(
+                tenant_id=lit.tenant_id,
+                kind=NotificationLog.Kind.COLLECTION_REMINDER,
+                status=status,
+                subject=subject,
+                recipients=[email],
+                body_preview=text[:500],
+                error_message=err,
+            )
     return {"sent": sent, "skipped": skipped, "failed": failed, "as_of": target.isoformat()}
 
 
@@ -1030,8 +1035,9 @@ def send_collection_reminder(
 def send_due_collection_reminders(*, as_of=None) -> dict:
     """Relances auto pour les prochaines actions EMAIL/SMS dues."""
     as_of = as_of or timezone.localdate()
+    # all_tenants : tâche Celery hors ContextVar tenant.
     qs = (
-        CollectionCase.objects.exclude(stage=CollectionCase.Stage.CLOSED)
+        CollectionCase.all_tenants.exclude(stage=CollectionCase.Stage.CLOSED)
         .filter(
             next_action_date__isnull=False,
             next_action_date__lte=as_of,
@@ -1046,17 +1052,20 @@ def send_due_collection_reminders(*, as_of=None) -> dict:
         )
     )
     stats = {"email_sent": 0, "sms_stub": 0, "skipped": 0, "failed": 0}
+    from apps.common.tenancy import tenant_context
+
     for case in qs.iterator():
-        result = send_collection_reminder(case, channel=case.next_action_type)
-        status = result.get("status")
-        if status == "SENT":
-            stats["email_sent"] += 1
-            set_next_action(case, action_date=None, action_type="", note="")
-        elif status == "SKIPPED" and case.next_action_type == CollectionActionType.SMS:
-            stats["sms_stub"] += 1
-            set_next_action(case, action_date=None, action_type="", note="")
-        elif status == "FAILED":
-            stats["failed"] += 1
-        else:
-            stats["skipped"] += 1
+        with tenant_context(case.tenant_id):
+            result = send_collection_reminder(case, channel=case.next_action_type)
+            status = result.get("status")
+            if status == "SENT":
+                stats["email_sent"] += 1
+                set_next_action(case, action_date=None, action_type="", note="")
+            elif status == "SKIPPED" and case.next_action_type == CollectionActionType.SMS:
+                stats["sms_stub"] += 1
+                set_next_action(case, action_date=None, action_type="", note="")
+            elif status == "FAILED":
+                stats["failed"] += 1
+            else:
+                stats["skipped"] += 1
     return stats

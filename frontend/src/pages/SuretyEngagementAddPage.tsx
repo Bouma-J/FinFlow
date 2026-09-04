@@ -67,7 +67,7 @@ export function SuretyEngagementAddPage() {
   }
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={HandCoins}
         title="Ajouter une caution"

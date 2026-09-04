@@ -58,6 +58,7 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
         "disburse": ["credits.disburse_creditapplication"],
         "simulate": ["credits.view_creditapplication"],
         "timeline": ["credits.view_creditapplication"],
+        "collateral_summary": ["credits.view_creditapplication"],
         "renewable_guarantees": ["credits.view_creditapplication"],
         "renew_guarantee": [
             "credits.change_creditapplication",
@@ -191,6 +192,14 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
         except WorkflowError as exc:
             raise ValidationError(str(exc))
         return Response(self.get_serializer(application).data)
+
+    @action(detail=True, methods=["get"], url_path="collateral-summary")
+    def collateral_summary(self, request, pk=None):
+        """Synthèse garanties réelles + cautions (piliers séparés) pour l'analyse."""
+        from .collateral import build_collateral_summary
+
+        application = self.get_object()
+        return Response(build_collateral_summary(application))
 
     @action(detail=True, methods=["get"])
     def timeline(self, request, pk=None):

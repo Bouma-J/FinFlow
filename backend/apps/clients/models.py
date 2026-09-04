@@ -47,9 +47,9 @@ class Client(TenantScopedModel, AuthoredModel):
     """Client d'une filiale. Les champs varient selon le type."""
 
     class ClientType(models.TextChoices):
-        INDIVIDUAL = "INDIVIDUAL", "Particulier"
-        PROFESSIONAL = "PROFESSIONAL", "Professionnel"
-        CORPORATE = "CORPORATE", "Entreprise"
+        INDIVIDUAL = "INDIVIDUAL", "Personne physique"
+        PROFESSIONAL = "PROFESSIONAL", "Groupement"
+        CORPORATE = "CORPORATE", "Personne morale"
 
     class KycStatus(models.TextChoices):
         PENDING = "PENDING", "À vérifier"
@@ -233,13 +233,21 @@ class Client(TenantScopedModel, AuthoredModel):
 
     @property
     def display_name(self):
-        if self.client_type == self.ClientType.CORPORATE:
-            return self.company_name or "(entreprise sans nom)"
+        if self.client_type in (
+            self.ClientType.CORPORATE,
+            self.ClientType.PROFESSIONAL,
+        ):
+            return self.company_name or "(sans raison sociale)"
         return f"{self.first_name} {self.last_name}".strip() or "(client sans nom)"
 
     def _generate_reference(self):
         """Génère un matricule unique par filiale (ex. PAR-2026-00001)."""
-        prefix = "ENT" if self.client_type == self.ClientType.CORPORATE else "PAR"
+        if self.client_type == self.ClientType.CORPORATE:
+            prefix = "ENT"
+        elif self.client_type == self.ClientType.PROFESSIONAL:
+            prefix = "GRP"
+        else:
+            prefix = "PAR"
         base = f"{prefix}-{timezone.now().year}-"
         existing = (
             Client.all_tenants.filter(

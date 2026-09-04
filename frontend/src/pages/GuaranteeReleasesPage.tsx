@@ -226,7 +226,7 @@ export function GuaranteeReleaseNewPage() {
   const currency = selectedCredit?.cbs_currency || "XOF";
 
   return (
-    <div className="release-compose">
+    <div className="page-shell release-compose">
       <PageHeader
         icon={ShieldOff}
         title="Nouvelle main levée"

@@ -11,7 +11,7 @@ export function CreditApplicationNewPage() {
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={FilePlus2}
         title="Nouveau dossier de crédit"

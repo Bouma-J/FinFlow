@@ -64,11 +64,44 @@ export function useTenantBranding() {
     root.style.setProperty("--brand", primary);
     root.style.setProperty("--brand-dark", secondary);
     root.style.setProperty("--accent", accent);
+
+    // Alias historiques : tous les écrans qui utilisent --teal-* / --gold-*
+    // suivent automatiquement la charte filiale.
+    root.style.setProperty("--teal-50", mixHex(primary, "white", 92));
+    root.style.setProperty("--teal-100", mixHex(primary, "white", 80));
+    root.style.setProperty("--teal-400", mixHex(primary, "white", 22));
     root.style.setProperty("--teal-500", primary);
     root.style.setProperty("--teal-600", secondary);
+    root.style.setProperty("--teal-700", mixHex(primary, "black", 28));
+    root.style.setProperty("--gold-400", mixHex(accent, "white", 18));
     root.style.setProperty("--gold-500", accent);
+    root.style.setProperty("--gold-600", mixHex(accent, "black", 12));
     root.style.setProperty("--info", primary);
+    root.style.setProperty("--warning", mixHex(accent, "black", 8));
     root.style.setProperty("--shadow-brand", `0 8px 20px ${rgba(primary, 0.28)}`);
+
+    // Surfaces dérivées (confort visuel + cohérence multi-écrans)
+    root.style.setProperty("--brand-soft", mixHex(primary, "white", 92));
+    root.style.setProperty("--brand-softer", mixHex(primary, "white", 96));
+    root.style.setProperty("--brand-ink", mixHex(primary, "black", 38));
+    root.style.setProperty("--brand-ring", rgba(primary, 0.22));
+    root.style.setProperty("--accent-soft", mixHex(accent, "white", 88));
+    root.style.setProperty("--accent-ink", mixHex(accent, "black", 35));
+    root.style.setProperty("--surface-brand", mixHex(primary, "white", 97));
+    root.style.setProperty(
+      "--page-wash",
+      `linear-gradient(180deg, ${mixHex(primary, "white", 95)} 0%, var(--bg) 220px)`,
+    );
+    root.style.setProperty("--brand-glow", rgba(primary, 0.14));
+    root.style.setProperty("--accent-glow", rgba(accent, 0.22));
+    root.style.setProperty(
+      "--hero-gradient",
+      `linear-gradient(135deg, ${mixHex(secondary, "black", 38)} 0%, ${mixHex(secondary, "black", 12)} 48%, ${secondary} 100%)`,
+    );
+    root.style.setProperty(
+      "--login-gradient",
+      `linear-gradient(160deg, ${mixHex(secondary, "black", 42)}, ${mixHex(secondary, "black", 58)})`,
+    );
 
     // Barre de menu latérale dérivée de la couleur principale / secondaire
     root.style.setProperty(

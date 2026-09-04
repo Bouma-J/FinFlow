@@ -1,0 +1,100 @@
+"""Exhaustivité de l'analyse de référence avant soumission du dossier."""
+from decimal import Decimal
+
+from apps.workflow.services import WorkflowError
+
+
+def _dec(value):
+    try:
+        return Decimal(str(value or 0))
+    except Exception:
+        return Decimal("0")
+
+
+def assert_analysis_ready_for_submission(application):
+    """
+    Bloque la soumission si l'analyse de référence est incomplète.
+
+    - Recommandation obligatoire
+    - Sections minimales selon le type de client
+    - Produit exigeant une garantie : au moins une garantie ACTIVE ou caution
+    """
+    from apps.guarantees.models import Guarantee
+    from apps.sureties.models import SuretyEngagement
+
+    from .models import FinancialAnalysis
+
+    reference = (
+        application.financial_analyses.filter(is_reference=True).first()
+        or application.financial_analyses.order_by("-created_at").first()
+    )
+    if reference is None:
+        raise WorkflowError(
+            "Une analyse financière de référence est obligatoire avant soumission."
+        )
+
+    if not reference.recommendation:
+        raise WorkflowError(
+            "L'analyse de référence doit porter une recommandation "
+            "(favorable, sous conditions ou défavorable) avant soumission."
+        )
+
+    if (
+        reference.recommendation
+        == FinancialAnalysis.Recommendation.CONDITIONAL
+        and not (reference.recommended_conditions or "").strip()
+    ):
+        raise WorkflowError(
+            "Pour une recommandation sous conditions, précisez les conditions "
+            "dans l'analyse de référence."
+        )
+
+    ctype = reference.client_type or getattr(
+        application.client, "client_type", ""
+    )
+
+    if ctype == "CORPORATE":
+        if _dec(reference.turnover) <= 0:
+            raise WorkflowError(
+                "Analyse entreprise incomplète : le chiffre d'affaires est obligatoire."
+            )
+    elif ctype == "PROFESSIONAL":
+        if not reference.members_count:
+            raise WorkflowError(
+                "Analyse groupement incomplète : indiquez le nombre de membres."
+            )
+        if _dec(reference.collective_contributions) <= 0 and _dec(
+            reference.group_activity_turnover
+        ) <= 0:
+            raise WorkflowError(
+                "Analyse groupement incomplète : renseignez les cotisations "
+                "ou le CA de l'activité commune."
+            )
+    else:
+        if reference.total_income <= 0:
+            raise WorkflowError(
+                "Analyse personne physique incomplète : les revenus du ménage "
+                "(ou de l'activité) doivent être renseignés."
+            )
+        if reference.has_side_activity and _dec(reference.activity_turnover) <= 0:
+            raise WorkflowError(
+                "Mini-bloc activité : indiquez le chiffre d'affaires / recettes "
+                "de l'activité annexe."
+            )
+
+    product = application.product
+    if product and getattr(product, "requires_guarantee", False):
+        has_g = application.guarantees.filter(
+            status=Guarantee.Status.ACTIVE
+        ).exists()
+        has_s = SuretyEngagement.objects.filter(
+            application=application,
+            status=SuretyEngagement.Status.ACTIVE,
+        ).exists()
+        if not has_g and not has_s:
+            raise WorkflowError(
+                "Le produit exige une garantie ou une caution : "
+                "rattachez-en au moins une avant soumission."
+            )
+
+    return reference

@@ -557,7 +557,7 @@ function TenantFields({
   codeReadOnly?: boolean;
 }) {
   return (
-    <div className="form-grid two-col">
+    <div className="page-shell form-grid two-col">
       <label className="field">
         <span>Code filiale *</span>
         <input

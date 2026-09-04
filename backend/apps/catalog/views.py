@@ -3,7 +3,7 @@ from rest_framework.response import Response
 
 from apps.common.cache_utils import cache_key, cached_get
 from apps.common.tenancy import get_current_tenant_id
-from apps.common.viewsets import TenantMandatoryMixin, TenantScopedViewSet
+from apps.common.viewsets import TenantScopedViewSet
 
 from .models import (
     ChecklistItem,
@@ -19,14 +19,14 @@ from .serializers import (
 )
 
 
-class ProductCategoryViewSet(TenantMandatoryMixin, TenantScopedViewSet):
+class ProductCategoryViewSet(TenantScopedViewSet):
     queryset = ProductCategory.objects.all()
     serializer_class = ProductCategorySerializer
     filterset_fields = ["is_active"]
     search_fields = ["code", "label"]
 
 
-class CreditProductViewSet(TenantMandatoryMixin, TenantScopedViewSet):
+class CreditProductViewSet(TenantScopedViewSet):
     queryset = CreditProduct.objects.select_related("category").all()
     serializer_class = CreditProductSerializer
     filterset_fields = ["category", "client_type", "currency", "is_active"]
@@ -53,14 +53,14 @@ class CreditProductViewSet(TenantMandatoryMixin, TenantScopedViewSet):
         return Response(cached_get(key, _produce, timeout=ttl))
 
 
-class RejectReasonViewSet(TenantMandatoryMixin, TenantScopedViewSet):
+class RejectReasonViewSet(TenantScopedViewSet):
     queryset = RejectReason.objects.all()
     serializer_class = RejectReasonSerializer
     filterset_fields = ["is_active"]
     search_fields = ["code", "label"]
 
 
-class ChecklistItemViewSet(TenantMandatoryMixin, TenantScopedViewSet):
+class ChecklistItemViewSet(TenantScopedViewSet):
     queryset = ChecklistItem.objects.select_related("product").all()
     serializer_class = ChecklistItemSerializer
     filterset_fields = ["product", "is_mandatory"]

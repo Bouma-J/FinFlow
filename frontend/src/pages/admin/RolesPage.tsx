@@ -75,7 +75,7 @@ export function AdminRolesPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={KeyRound}
           title="Rôles & droits"

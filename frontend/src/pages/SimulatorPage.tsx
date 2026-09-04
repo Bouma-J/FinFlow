@@ -168,7 +168,7 @@ export function SimulatorPage() {
   }
 
   return (
-    <div className="simulator-page">
+    <div className="page-shell simulator-page">
       <PageHeader
         icon={Calculator}
         title="Simulateur d'amortissement"

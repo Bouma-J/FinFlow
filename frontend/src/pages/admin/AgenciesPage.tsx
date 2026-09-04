@@ -116,7 +116,7 @@ export function AdminAgenciesPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={MapPin}
           title="Agences"

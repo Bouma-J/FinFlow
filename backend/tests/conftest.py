@@ -36,4 +36,5 @@ def client_a(tenant_a):
             tenant=tenant_a, reference="CLIA",
             client_type=Client.ClientType.INDIVIDUAL,
             first_name="Test", last_name="Client",
+            kyc_status=Client.KycStatus.VALIDATED,
         )

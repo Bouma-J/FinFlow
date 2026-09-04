@@ -211,7 +211,7 @@ export function AdminNotificationsPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={Bell}
           title="Alertes e-mail"

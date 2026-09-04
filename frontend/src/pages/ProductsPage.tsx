@@ -26,7 +26,7 @@ export function ProductsPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={Boxes}
           title="Produits de crédit"

@@ -30,7 +30,7 @@ export function SuretiesPage() {
   });
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={HandCoins}
         title="Cautions"

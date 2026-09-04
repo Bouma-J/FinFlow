@@ -13,13 +13,16 @@ def refresh_all_overdue_loans():
         refresh_broken_promises,
         refresh_loan_overdue,
     )
+    from apps.common.tenancy import tenant_context
     from apps.credits.models import Loan
 
     loans = Loan.all_tenants.filter(status=Loan.Status.ACTIVE).iterator()
     count = 0
     for loan in loans:
         try:
-            refresh_loan_overdue(loan)
+            # TenantManager filtre sur ContextVar : obligatoire hors requête HTTP.
+            with tenant_context(loan.tenant_id):
+                refresh_loan_overdue(loan)
             count += 1
         except Exception:  # noqa: BLE001
             logger.exception("Échec refresh overdue loan=%s", loan.id)

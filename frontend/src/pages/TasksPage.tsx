@@ -136,7 +136,7 @@ export function TasksPage() {
   }
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={ClipboardCheck}
         title="Mes validations"

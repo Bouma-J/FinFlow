@@ -189,7 +189,7 @@ export function ClientDetailPage() {
     : fullName || c.display_name;
 
   return (
-    <div>
+    <div className="page-shell client-detail-page">
       {confirmDelete && (
         <div className="confirm-bar">
           <span>

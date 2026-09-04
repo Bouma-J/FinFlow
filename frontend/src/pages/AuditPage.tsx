@@ -23,7 +23,7 @@ export function AuditPage() {
   });
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={ScrollText}
         title="Piste d'audit"

@@ -67,5 +67,17 @@ class AnalysisThresholdAdmin(admin.ModelAdmin):
     list_display = [
         "tenant", "max_debt_ratio", "min_dscr", "max_gearing",
         "min_guarantee_coverage", "stress_pct",
+        "haircut_mortgage", "haircut_vehicle", "haircut_jewelry",
     ]
     list_filter = ["tenant"]
+    fields = [
+        "tenant",
+        "max_debt_ratio", "min_dscr", "max_leverage_ratio",
+        "min_living_wage_per_capita", "min_interest_coverage",
+        "max_gearing", "min_financial_autonomy", "min_current_ratio",
+        "min_guarantee_coverage", "stress_pct",
+        "transferable_quota_fraction", "informal_income_weight",
+        "haircut_mortgage", "haircut_vehicle", "haircut_jewelry",
+        "haircut_financial_deposit", "haircut_financial_security",
+        "haircut_other",
+    ]

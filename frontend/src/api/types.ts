@@ -484,9 +484,9 @@ export const CLIENT_LABELS = {
     SNC_SCS: "SNC / SCS",
   } as Record<string, string>,
   client_type: {
-    INDIVIDUAL: "Particulier",
-    PROFESSIONAL: "Professionnel",
-    CORPORATE: "Entreprise",
+    INDIVIDUAL: "Personne physique",
+    PROFESSIONAL: "Groupement",
+    CORPORATE: "Personne morale",
   } as Record<string, string>,
 };
 
@@ -865,6 +865,21 @@ export interface FinancialAnalysis {
   projected_monthly_outflows: string;
   projected_monthly_surplus: string | null;
   cashflow_comment: string;
+  // Activité annexe / groupement
+  has_side_activity?: boolean;
+  activity_turnover?: string;
+  activity_expenses?: string;
+  activity_comment?: string;
+  members_count?: number | null;
+  active_contributing_members?: number | null;
+  solidarity_commitment?: boolean;
+  collective_contributions?: string;
+  collective_savings?: string;
+  collective_other_income?: string;
+  collective_operating_expenses?: string;
+  group_activity_turnover?: string;
+  group_activity_expenses?: string;
+  group_comment?: string;
   // Indicateurs calculés
   new_installment: string | null;
   repayment_capacity: string | null;

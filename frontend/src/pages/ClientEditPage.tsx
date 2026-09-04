@@ -20,7 +20,7 @@ export function ClientEditPage() {
   if (isLoading || !client) return <Spinner />;
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={UserPen}
         title={`Modifier — ${client.display_name}`}

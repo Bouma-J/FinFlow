@@ -76,7 +76,7 @@ export function AdminProductsPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={Package}
           title="Produits de crédit"

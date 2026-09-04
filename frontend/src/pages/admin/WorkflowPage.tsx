@@ -537,7 +537,7 @@ function StepFields({
   roles: Role[];
 }) {
   return (
-    <div className="form-grid">
+    <div className="page-shell form-grid">
       <label className="field">
         <span>Nom de l'étape</span>
         <input

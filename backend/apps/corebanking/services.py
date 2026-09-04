@@ -26,6 +26,10 @@ class CoreBankingError(Exception):
 OP_PING = "PING"
 OP_GET_LOAN_STATUS = "GET_LOAN_STATUS"
 OP_GET_CLIENT_OUTSTANDING = "GET_CLIENT_OUTSTANDING"
+OP_GET_CLIENT_SITUATION = "GET_CLIENT_SITUATION"
+
+# Chemin Perfect API (modifiable via mapping_rules.endpoints.adh_situation).
+DEFAULT_ADH_SITUATION_PATH = "gateway-perfect/adh/situation"
 
 
 class BaseAdapter:
@@ -101,14 +105,237 @@ class SimulatedAdapter(BaseAdapter):
                 "raw": {"simulated": True, "cbs_client_id": client_id},
             }
 
+        if operation == OP_GET_CLIENT_SITUATION:
+            return self._simulate_client_situation(payload, simulate)
+
         return {
             "status": "ACK",
             "external_reference": f"CBS-{payload.get('reference', '')}",
         }
 
+    def _simulate_client_situation(self, payload: dict, simulate: dict) -> dict:
+        code = str(payload.get("codeAdherent") or "").strip()
+        num_manuel = str(payload.get("numManuel") or "").strip()
+        num_piece = str(payload.get("numPieceIdentite") or "").strip()
+        by_id = simulate.get("client_situation_by_id") or {}
+        raw = None
+        for key in (code, num_manuel, num_piece):
+            if key and key in by_id:
+                raw = dict(by_id[key])
+                break
+        if raw is None:
+            if not (code or num_manuel or num_piece):
+                raise CoreBankingError(
+                    "Au moins un identifiant CBS est requis "
+                    "(codeAdherent, numManuel ou numPieceIdentite)."
+                )
+            # Défaut démo si aucun fixture : succès synthétique.
+            if simulate.get("client_situation_not_found"):
+                raise CoreBankingError("Adhérent introuvable !")
+            raw = {
+                "responseCode": 200,
+                "message": "Opération effectuée avec succès ! (simulé)",
+                "codeAdherent": code or "A0012345",
+                "numManuel": num_manuel or "M00987",
+                "limitCredit": float(
+                    simulate.get("client_limit_credit_default", 500000)
+                ),
+                "estValide": bool(simulate.get("client_est_valide_default", True)),
+                "idPointService": "PS01",
+                "nomPointService": "Agence Principale",
+                "nomAdherent": simulate.get(
+                    "client_nom_default", "Koné Awa Démo"
+                ),
+                "numPieceIdentite": num_piece or "CI1234567890",
+                "identificationNationale": "",
+                "telephone": "+2250700000000",
+                "email": "awa.kone@example.com",
+                "boitePostale": "N/A",
+                "ville": "Abidjan",
+                "adresse": "Cocody, Angré 8e tranche",
+                "dateInscription": "2020-01-15",
+                "context": "ADHERENT SITUATION",
+            }
+        code_http = int(raw.get("responseCode") or 200)
+        if code_http >= 400:
+            raise CoreBankingError(
+                str(raw.get("message") or "Adhérent introuvable !")
+            )
+        return {
+            "status": "ACK",
+            "external_reference": f"CBS-SIT-{raw.get('codeAdherent') or 'NA'}",
+            "raw": {**raw, "simulated": True},
+        }
+
+
+class RestAdapter(BaseAdapter):
+    """Adaptateur REST (API Perfect / gateway).
+
+    Auth : ``auth_config.access_token`` / ``token`` / ``bearer_token``,
+    ou obtention via ``auth_config.token_url`` (client_credentials / password).
+
+    Endpoints configurables dans ``mapping_rules.endpoints`` :
+    - ``adh_situation`` (défaut ``gateway-perfect/adh/situation``)
+    """
+
+    def send(self, operation: str, payload: dict) -> dict:
+        if operation == OP_PING:
+            return {
+                "status": "ACK",
+                "external_reference": f"CBS-PING-{self.connector.id}",
+            }
+        if operation == OP_GET_CLIENT_SITUATION:
+            return self._adh_situation(payload)
+        # Autres ops REST : non encore branchées → simulation locale.
+        return SimulatedAdapter(self.connector).send(operation, payload)
+
+    def _adh_situation(self, payload: dict) -> dict:
+        import requests
+
+        code = str(payload.get("codeAdherent") or "").strip()
+        num_manuel = str(payload.get("numManuel") or "").strip()
+        num_piece = str(payload.get("numPieceIdentite") or "").strip()
+        if not (code or num_manuel or num_piece):
+            raise CoreBankingError(
+                "Au moins un identifiant CBS est requis "
+                "(codeAdherent, numManuel ou numPieceIdentite)."
+            )
+
+        body = {}
+        if code:
+            body["codeAdherent"] = code
+        if num_manuel:
+            body["numManuel"] = num_manuel
+        if num_piece:
+            body["numPieceIdentite"] = num_piece
+
+        url = self._build_url(
+            self._endpoint("adh_situation", DEFAULT_ADH_SITUATION_PATH)
+        )
+        token = self._resolve_bearer_token()
+        timeout = self.connector.timeout_seconds or 30
+        try:
+            resp = requests.post(
+                url,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise CoreBankingError(
+                f"Impossible de joindre le CBS ({exc})."
+            ) from exc
+
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise CoreBankingError(
+                f"Réponse CBS non JSON (HTTP {resp.status_code})."
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise CoreBankingError("Réponse CBS invalide.")
+
+        code_http = int(data.get("responseCode") or resp.status_code or 0)
+        if resp.status_code >= 400 or code_http >= 400:
+            raise CoreBankingError(
+                str(data.get("message") or f"Échec CBS (HTTP {resp.status_code}).")
+            )
+
+        return {
+            "status": "ACK",
+            "external_reference": f"CBS-SIT-{data.get('codeAdherent') or 'NA'}",
+            "raw": data,
+        }
+
+    def _endpoint(self, key: str, default: str) -> str:
+        endpoints = (self.connector.mapping_rules or {}).get("endpoints") or {}
+        path = str(endpoints.get(key) or default).strip()
+        return path.lstrip("/")
+
+    def _build_url(self, path: str) -> str:
+        base = (self.connector.base_url or "").rstrip("/")
+        if not base:
+            raise CoreBankingError(
+                "URL de base du connecteur CBS manquante. "
+                "Renseignez-la dans Administration → Connecteurs CBS."
+            )
+        return f"{base}/{path}"
+
+    def _resolve_bearer_token(self) -> str:
+        import requests
+
+        auth = self.connector.auth_config or {}
+        for key in ("access_token", "token", "bearer_token"):
+            value = str(auth.get(key) or "").strip()
+            if value:
+                return value
+
+        token_url = str(auth.get("token_url") or "").strip()
+        if not token_url:
+            raise CoreBankingError(
+                "Token CBS manquant : renseignez access_token (ou token) "
+                "dans l'authentification du connecteur, ou un token_url."
+            )
+
+        timeout = self.connector.timeout_seconds or 30
+        grant = str(auth.get("grant_type") or "client_credentials").strip()
+        data = {"grant_type": grant}
+        if grant == "password":
+            data["username"] = auth.get("username") or ""
+            data["password"] = auth.get("password") or ""
+        client_id = auth.get("client_id")
+        client_secret = auth.get("client_secret")
+        try:
+            if client_id and client_secret:
+                resp = requests.post(
+                    token_url,
+                    data=data,
+                    auth=(str(client_id), str(client_secret)),
+                    timeout=timeout,
+                )
+            else:
+                if auth.get("username"):
+                    data.setdefault("username", auth["username"])
+                if auth.get("password"):
+                    data.setdefault("password", auth["password"])
+                if client_id:
+                    data["client_id"] = client_id
+                if client_secret:
+                    data["client_secret"] = client_secret
+                resp = requests.post(token_url, data=data, timeout=timeout)
+            payload = resp.json() if resp.content else {}
+        except (requests.RequestException, ValueError) as exc:
+            raise CoreBankingError(
+                f"Échec d'obtention du token CBS ({exc})."
+            ) from exc
+
+        token = str(
+            payload.get("access_token") or payload.get("token") or ""
+        ).strip()
+        if resp.status_code >= 400 or not token:
+            raise CoreBankingError(
+                str(
+                    payload.get("error_description")
+                    or payload.get("message")
+                    or "Impossible d'obtenir un jeton CBS."
+                )
+            )
+        return token
+
 
 def get_adapter(connector: CoreBankingConnector) -> BaseAdapter:
-    # Point d'extension : router selon connector.protocol vers l'adaptateur réel.
+    """Choisit l'adaptateur selon le protocole / la config."""
+    rules = connector.mapping_rules or {}
+    if rules.get("force_simulate"):
+        return SimulatedAdapter(connector)
+    if connector.protocol == CoreBankingConnector.Protocol.REST:
+        # Sans URL : reste en simulation (dev / démo).
+        if (connector.base_url or "").strip():
+            return RestAdapter(connector)
     return SimulatedAdapter(connector)
 
 
@@ -299,3 +526,87 @@ def assert_client_outstanding_for_dation(
             f"{result['currency']})."
         )
     return result
+
+
+def normalize_client_situation(raw: dict) -> dict:
+    """Normalise la réponse Perfect ``adh/situation`` pour l'UI / l'import."""
+    raw = raw or {}
+    est_valide = raw.get("estValide")
+    if isinstance(est_valide, str):
+        est_valide = est_valide.strip().lower() in {"1", "true", "oui", "yes"}
+    else:
+        est_valide = bool(est_valide)
+
+    full_name = str(raw.get("nomAdherent") or "").strip()
+    limit = raw.get("limitCredit")
+    try:
+        limit_credit = Decimal(str(limit)) if limit not in (None, "") else None
+    except (InvalidOperation, TypeError, ValueError):
+        limit_credit = None
+
+    return {
+        "full_name": full_name,
+        "code_adherent": str(raw.get("codeAdherent") or "").strip(),
+        "num_manuel": str(raw.get("numManuel") or "").strip(),
+        "num_piece_identite": str(raw.get("numPieceIdentite") or "").strip(),
+        "identification_nationale": str(
+            raw.get("identificationNationale") or ""
+        ).strip(),
+        "phone": str(raw.get("telephone") or "").strip(),
+        "email": str(raw.get("email") or "").strip(),
+        "boite_postale": str(raw.get("boitePostale") or "").strip(),
+        "city": str(raw.get("ville") or "").strip(),
+        "address": str(raw.get("adresse") or "").strip(),
+        "date_inscription": str(raw.get("dateInscription") or "").strip(),
+        "limit_credit": str(limit_credit) if limit_credit is not None else None,
+        "est_valide": est_valide,
+        "id_point_service": str(raw.get("idPointService") or "").strip(),
+        "nom_point_service": str(raw.get("nomPointService") or "").strip(),
+        "context": str(raw.get("context") or "").strip(),
+        "message": str(raw.get("message") or "").strip(),
+        "kyc_alert": not est_valide,
+        "raw": raw,
+    }
+
+
+def get_client_situation(
+    tenant_id,
+    *,
+    code_adherent: str = "",
+    num_manuel: str = "",
+    num_piece_identite: str = "",
+) -> dict:
+    """
+    Récupère la situation / identité d'un adhérent CBS (Perfect).
+
+    Retour normalisé via ``normalize_client_situation`` + ``log_id``.
+    """
+    code_adherent = (code_adherent or "").strip()
+    num_manuel = (num_manuel or "").strip()
+    num_piece_identite = (num_piece_identite or "").strip()
+    if not (code_adherent or num_manuel or num_piece_identite):
+        raise CoreBankingError(
+            "Au moins un identifiant CBS est requis "
+            "(code adhérent, n° manuel ou n° pièce d'identité)."
+        )
+
+    connector = resolve_active_connector(tenant_id)
+    log = send_operation(
+        connector,
+        OP_GET_CLIENT_SITUATION,
+        {
+            "codeAdherent": code_adherent,
+            "numManuel": num_manuel,
+            "numPieceIdentite": num_piece_identite,
+        },
+    )
+    payload = _require_success(log, OP_GET_CLIENT_SITUATION)
+    raw = payload.get("raw") or payload
+    normalized = normalize_client_situation(raw)
+    if not normalized["full_name"]:
+        raise CoreBankingError(
+            "Réponse CBS incomplète : nom de l'adhérent manquant."
+        )
+    normalized["log_id"] = str(log.id)
+    normalized["external_reference"] = log.external_reference
+    return normalized

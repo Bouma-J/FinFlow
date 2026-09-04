@@ -242,7 +242,11 @@ function ClientDonut({
   total: number;
 }) {
   if (total === 0) return <EmptyState message="Aucun client." />;
-  const colors = ["#0f766e", "#0369a1", "#b45309"];
+  const colors = [
+    "var(--brand)",
+    "var(--brand-dark)",
+    "var(--accent)",
+  ];
   return (
     <ul className="client-donut-list">
       {rows.map((r, i) => {

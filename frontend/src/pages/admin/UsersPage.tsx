@@ -309,7 +309,7 @@ export function AdminUsersPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={UsersRound}
           title="Utilisateurs"

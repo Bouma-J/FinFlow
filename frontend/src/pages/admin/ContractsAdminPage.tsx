@@ -158,7 +158,7 @@ export function AdminContractsPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={FileSignature}
           title="Modèles de contrats"

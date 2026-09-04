@@ -70,22 +70,10 @@ def _score_low(value, good, bad):
 
 
 def guarantee_coverage(analysis):
-    """Couverture (%) du crédit de référence par la valeur actuelle des garanties."""
-    from .amounts import reference_amount
+    """Couverture (%) du crédit par la valeur retenue des garanties ACTIVE."""
+    from .collateral import guarantee_coverage_retained
 
-    app = analysis.application
-    if app is None:
-        return None
-    amount = reference_amount(app)
-    if not amount:
-        return None
-    try:
-        total = sum(
-            _dec(g.current_value) for g in app.guarantees.all()
-        )
-    except Exception:
-        total = Decimal("0")
-    return _pct(total, amount)
+    return guarantee_coverage_retained(analysis)
 
 
 def compute_metrics(analysis, th):
@@ -205,6 +193,52 @@ def compute_metrics(analysis, th):
             "guarantee_ok": _cmp_ge(m["guarantee_coverage"],
                                     th.min_guarantee_coverage),
         }
+    elif analysis.is_groupement:
+        collective_income = (
+            _dec(analysis.collective_contributions)
+            + _dec(analysis.collective_other_income)
+            + _dec(analysis.group_activity_turnover)
+        )
+        collective_charges = (
+            _dec(analysis.collective_operating_expenses)
+            + _dec(analysis.group_activity_expenses)
+        )
+        net_capacity = analysis.collective_capacity - existing
+        stressed = collective_income * (Decimal("1") - stress)
+
+        m.update({
+            "collective_income": _q(collective_income),
+            "collective_charges": _q(collective_charges),
+            "collective_capacity": _q(analysis.collective_capacity),
+            "collective_net_capacity": _q(net_capacity),
+            "debt_ratio": _q(_pct(global_service, collective_income)),
+            "debt_ratio_stress": _q(_pct(global_service, stressed)),
+            "safety_margin": _q(net_capacity - installment),
+            "members_count": analysis.members_count,
+            "active_contributing_members": analysis.active_contributing_members,
+            "solidarity_commitment": analysis.solidarity_commitment,
+        })
+        concentration = None
+        if analysis.members_count and analysis.active_contributing_members:
+            concentration = _pct(
+                analysis.active_contributing_members, analysis.members_count
+            )
+        m["contribution_concentration"] = _q(concentration)
+
+        flags = {
+            "debt_ratio_ok": _cmp_le(m["debt_ratio"], th.max_debt_ratio),
+            "debt_ratio_stress_ok": _cmp_le(
+                m["debt_ratio_stress"], th.max_debt_ratio
+            ),
+            "capacity_ok": net_capacity > 0,
+            "members_ok": bool(
+                analysis.members_count and analysis.members_count > 0
+            ),
+            "solidarity_ok": analysis.solidarity_commitment,
+            "guarantee_ok": _cmp_ge(
+                m["guarantee_coverage"], th.min_guarantee_coverage
+            ),
+        }
     else:
         income = analysis.total_income
         stable_income = (
@@ -216,6 +250,8 @@ def compute_metrics(analysis, th):
         weighted_income = stable_income + (
             _dec(analysis.other_activity_income) + _dec(analysis.other_income)
         ) * weight / Decimal("100")
+        if analysis.has_side_activity:
+            weighted_income += analysis.activity_net * weight / Decimal("100")
 
         stressed_income = income * (Decimal("1") - stress)
         frac = _dec(th.transferable_quota_fraction) / Decimal("100")
@@ -224,6 +260,8 @@ def compute_metrics(analysis, th):
 
         m.update({
             "weighted_income": _q(weighted_income),
+            "activity_net": _q(analysis.activity_net)
+            if analysis.has_side_activity else None,
             "residual_after_loan": _q(analysis.disposable_income - installment),
             "debt_ratio": _q(_pct(global_service, income)),
             "debt_ratio_weighted": _q(_pct(global_service, weighted_income)),
@@ -307,7 +345,33 @@ def compute_score(analysis, m, th):
             ("capacity", "Capacité de remboursement (DSCR)", capacity_s, 30),
             ("debt", "Endettement / gearing", debt_s, 20),
             ("structure", "Structure financière", structure_s, 20),
-            ("guarantee", "Garanties", guarantee_s, 15),
+            ("guarantee", "Garanties réelles", guarantee_s, 15),
+            ("history", "Historique de remboursement", history_s, 15),
+        ]
+    elif analysis.is_groupement:
+        capacity_s = _score_low(
+            m.get("debt_ratio"),
+            good=_dec(th.max_debt_ratio) * Decimal("0.5"),
+            bad=_dec(th.max_debt_ratio) * Decimal("1.25"),
+        )
+        debt_s = _score_low(
+            m.get("debt_ratio_stress"),
+            good=_dec(th.max_debt_ratio) * Decimal("0.6"),
+            bad=_dec(th.max_debt_ratio) * Decimal("1.4"),
+        )
+        solidarity_s = (
+            Decimal("100") if analysis.solidarity_commitment else Decimal("40")
+        )
+        concentration = m.get("contribution_concentration")
+        concentration_s = _score_high(
+            concentration, bad=Decimal("20"), good=Decimal("80")
+        )
+        structure_s = _avg([solidarity_s, concentration_s])
+        parts = [
+            ("capacity", "Capacité collective", capacity_s, 35),
+            ("debt", "Effort collectif sous stress", debt_s, 20),
+            ("structure", "Solidarité & cotisations", structure_s, 15),
+            ("guarantee", "Garanties réelles", guarantee_s, 15),
             ("history", "Historique de remboursement", history_s, 15),
         ]
     else:
@@ -334,7 +398,7 @@ def compute_score(analysis, m, th):
             ("capacity", "Taux d'effort / reste à vivre", capacity_s, 35),
             ("debt", "Endettement sous stress", debt_s, 20),
             ("stability", "Stabilité & quotité", stability_s, 15),
-            ("guarantee", "Garanties", guarantee_s, 15),
+            ("guarantee", "Garanties réelles", guarantee_s, 15),
             ("history", "Historique de remboursement", history_s, 15),
         ]
 

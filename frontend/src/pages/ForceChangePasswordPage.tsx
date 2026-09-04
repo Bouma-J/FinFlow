@@ -78,7 +78,7 @@ export function ForceChangePasswordPage() {
   }
 
   return (
-    <div className="login-screen">
+    <div className="page-shell login-screen">
       <div className="login-card force-password-card">
         <div className="login-brand">
           <img src={logo} alt="Thuin Tech" />

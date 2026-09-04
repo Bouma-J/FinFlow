@@ -38,7 +38,7 @@ function lbl(map: Record<string, string>, key: string) {
 function Row({ term, value }: { term: string; value?: ReactNode }) {
   if (value === null || value === undefined || value === "") return null;
   return (
-    <div>
+    <div className="page-shell">
       <dt>{term}</dt>
       <dd>{value}</dd>
     </div>
@@ -305,7 +305,7 @@ export function GuaranteeDetailPage({
                   value={g.value_to_consider && formatMoney(g.value_to_consider)}
                 />
                 <Row
-                  term="Ratio LTV"
+                  term="Taux de couverture"
                   value={
                     g.ltv_ratio
                       ? `${(Number(g.ltv_ratio) * 100).toFixed(0)} %`

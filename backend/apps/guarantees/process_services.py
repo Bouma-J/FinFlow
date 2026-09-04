@@ -381,6 +381,9 @@ def cancel_release_request(request: GuaranteeReleaseRequest, *, user=None, comme
         GuaranteeReleaseRequest.Status.BLOCKED,
     ):
         raise ProcessError("Ce dossier ne peut plus être annulé.")
+    from apps.workflow.services import cancel_active_workflows_for_target
+
+    cancel_active_workflows_for_target(request)
     request.status = GuaranteeReleaseRequest.Status.CANCELLED
     if comment:
         request.comment = (
@@ -1233,6 +1236,9 @@ def cancel_dation_request(request: DationRequest, *, user=None, comment=""):
         DationRequest.Status.BLOCKED,
     ):
         raise ProcessError("Ce dossier ne peut plus être annulé.")
+    from apps.workflow.services import cancel_active_workflows_for_target
+
+    cancel_active_workflows_for_target(request)
     request.status = DationRequest.Status.CANCELLED
     if comment:
         request.comment = (

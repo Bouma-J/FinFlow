@@ -31,7 +31,7 @@ export function CreditApplicationsPage() {
   });
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={FileText}
         title="Dossiers de crédit"

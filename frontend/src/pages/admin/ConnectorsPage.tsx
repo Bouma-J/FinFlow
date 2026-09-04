@@ -28,6 +28,9 @@ export function AdminConnectorsPage() {
     max_retries: 3,
     auth_username: "",
     auth_password: "",
+    auth_token: "",
+    auth_token_url: "",
+    adh_situation_path: "gateway-perfect/adh/situation",
     sim_loan_settled: true,
     sim_client_outstanding: "1000000",
   });
@@ -45,7 +48,14 @@ export function AdminConnectorsPage() {
       const auth_config: Record<string, string> = {};
       if (form.auth_username) auth_config.username = form.auth_username;
       if (form.auth_password) auth_config.password = form.auth_password;
+      if (form.auth_token) auth_config.access_token = form.auth_token;
+      if (form.auth_token_url) auth_config.token_url = form.auth_token_url;
       const mapping_rules = {
+        endpoints: {
+          adh_situation:
+            form.adh_situation_path.trim() ||
+            "gateway-perfect/adh/situation",
+        },
         simulate: {
           loan_settled_default: form.sim_loan_settled,
           client_outstanding_default: form.sim_client_outstanding,
@@ -72,6 +82,8 @@ export function AdminConnectorsPage() {
         base_url: "",
         auth_username: "",
         auth_password: "",
+        auth_token: "",
+        auth_token_url: "",
       });
       setError(null);
     },
@@ -80,7 +92,7 @@ export function AdminConnectorsPage() {
 
   if (needsTenant) {
     return (
-      <div>
+    <div className="page-shell">
         <PageHeader
           icon={Cable}
           title="Connecteurs Core Banking"
@@ -175,6 +187,38 @@ export function AdminConnectorsPage() {
                 setForm({ ...form, auth_password: e.target.value })
               }
               autoComplete="new-password"
+            />
+          </label>
+          <label className="field">
+            <span>Auth — access token (Bearer)</span>
+            <input
+              type="password"
+              value={form.auth_token}
+              onChange={(e) =>
+                setForm({ ...form, auth_token: e.target.value })
+              }
+              placeholder="Optionnel si token_url renseigné"
+              autoComplete="off"
+            />
+          </label>
+          <label className="field">
+            <span>Auth — URL token OAuth</span>
+            <input
+              value={form.auth_token_url}
+              onChange={(e) =>
+                setForm({ ...form, auth_token_url: e.target.value })
+              }
+              placeholder="https://…/oauth/token"
+            />
+          </label>
+          <label className="field">
+            <span>Endpoint situation adhérent</span>
+            <input
+              value={form.adh_situation_path}
+              onChange={(e) =>
+                setForm({ ...form, adh_situation_path: e.target.value })
+              }
+              placeholder="gateway-perfect/adh/situation"
             />
           </label>
           <label className="field">

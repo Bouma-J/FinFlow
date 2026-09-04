@@ -346,7 +346,7 @@ export function DationNewPage() {
     covers == null ? "idle" : covers ? "ok" : selectedTotal > 0 ? "warn" : "idle";
 
   return (
-    <div className="dation-compose">
+    <div className="page-shell dation-compose">
       <PageHeader
         icon={HandCoins}
         title="Nouvelle dation en paiement"

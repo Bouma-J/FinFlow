@@ -102,7 +102,7 @@ const FIELD_LABELS: Record<string, string> = {
   description: "Description",
   expertise_value: "Valeur expertisée / estimée",
   value_to_consider: "Valeur à considérer",
-  ltv_ratio: "Ratio LTV",
+  ltv_ratio: "Taux de couverture",
   document_type: "Type de document",
   document_number: "Numéro du document",
   document_issue_date: "Date d'établissement",
@@ -592,7 +592,7 @@ function MortgageSection({
           <Text label="Nom de l'expert" value={text.expert_name} onChange={set("expert_name")} />
           <Text label="Valeur à considérer (XOF)" type="number" value={text.value_to_consider} onChange={set("value_to_consider")} />
           <label className="field">
-            <span>Ratio LTV (auto)</span>
+            <span>Taux de couverture (auto)</span>
             <input
               className="readonly"
               readOnly

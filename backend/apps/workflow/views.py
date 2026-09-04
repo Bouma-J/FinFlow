@@ -5,7 +5,6 @@ from rest_framework.response import Response
 
 from apps.catalog.models import RejectReason
 from apps.common.viewsets import (
-    TenantMandatoryMixin,
     TenantScopedReadOnlyViewSet,
     TenantScopedViewSet,
 )
@@ -36,14 +35,14 @@ from .services import (
 )
 
 
-class WorkflowDefinitionViewSet(TenantMandatoryMixin, TenantScopedViewSet):
+class WorkflowDefinitionViewSet(TenantScopedViewSet):
     queryset = WorkflowDefinition.objects.prefetch_related("steps").all()
     serializer_class = WorkflowDefinitionSerializer
     filterset_fields = ["target_type", "is_active"]
     search_fields = ["code", "name"]
 
 
-class ApprovalStepViewSet(TenantMandatoryMixin, TenantScopedViewSet):
+class ApprovalStepViewSet(TenantScopedViewSet):
     queryset = ApprovalStep.objects.select_related("definition", "required_group").all()
     serializer_class = ApprovalStepSerializer
     filterset_fields = ["definition"]

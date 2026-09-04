@@ -296,12 +296,36 @@ class Guarantee(TenantScopedModel, AuthoredModel):
             if self.value_to_consider is not None:
                 self.current_value = self.value_to_consider
         elif self.guarantee_type == self.GuaranteeType.PLEDGE:
-            if self.pledge_category == PledgeCategory.VEHICLE and self.resale_value is not None:
+            if (
+                self.pledge_category == PledgeCategory.VEHICLE
+                and self.resale_value is not None
+            ):
                 self.current_value = self.resale_value
+            elif (
+                self.pledge_category == PledgeCategory.VALUABLE
+                and self.expertise_value is not None
+            ):
+                # Bijoux / objets de valeur : l'expertise alimente la couverture.
+                self.current_value = self.expertise_value
+            elif self.expertise_value is not None and self.current_value in (
+                None,
+                Decimal("0"),
+            ):
+                self.current_value = self.expertise_value
         elif self.guarantee_type == self.GuaranteeType.FINANCIAL:
             if self.balance is not None:
-                self.current_value = self.balance
-        # Ratio LTV = valeur à considérer / montant du prêt.
+                discount = self.security_discount
+                if discount is None:
+                    discount = Decimal("0")
+                # Décote titres / nantissement appliquée sur le solde.
+                factor = (Decimal("100") - Decimal(discount)) / Decimal("100")
+                if factor < 0:
+                    factor = Decimal("0")
+                self.current_value = (Decimal(self.balance) * factor).quantize(
+                    Decimal("0.01")
+                )
+        # Taux de couverture = valeur à considérer / montant du prêt
+        # (libellé historique « LTV » — pas le LTV bancaire prêt/valeur).
         loan = self._loan_amount()
         if self.value_to_consider is not None and loan:
             ratio = (self.value_to_consider / Decimal(loan)).quantize(

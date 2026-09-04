@@ -68,6 +68,7 @@ import {
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import { ApprovalConditionsCard } from "@/components/ApprovalConditionsCard";
+import { CollateralSummaryCard } from "@/components/CollateralSummaryCard";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import { RenewGuaranteesPanel } from "@/components/RenewGuaranteesPanel";
 import { Badge, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
@@ -1784,14 +1785,24 @@ export function CreditApplicationDetailPage() {
 
   const [activeSection, setActiveSection] = useScrollSpy(
     [app?.id, app?.status],
-    "sec-financial",
+    "sec-terms",
   );
 
-  // Accordéon : seule « Analyse financière » est dépliée à l'ouverture.
-  // (Doit rester au-dessus de tout return conditionnel — règle des hooks.)
+  // Accordéon : conditions du crédit + analyse + collatéral ouverts à l'arrivée.
   const [openSections, setOpenSections] = useState<Set<string>>(
-    () => new Set(["sec-financial"]),
+    () => new Set(["sec-terms", "sec-financial", "sec-patrimoine"]),
   );
+
+  useEffect(() => {
+    const hasDecisionTask = !!myTasks?.results.some(
+      (t) => t.application?.id === id,
+    );
+    if (!hasDecisionTask) return;
+    setOpenSections((prev) => {
+      if (prev.has("sec-decision")) return prev;
+      return new Set(prev).add("sec-decision");
+    });
+  }, [myTasks, id]);
 
   if (isLoading || !app) return <Spinner />;
 
@@ -1960,24 +1971,24 @@ export function CreditApplicationDetailPage() {
   const hasConditions = (conditions?.results.length ?? 0) > 0;
 
   const navSections = [
-    { id: "sec-financial", icon: LineChart, label: "Analyse financière", show: true },
-    { id: "sec-decision", icon: Gavel, label: "Décision à rendre", show: !!myTask },
-    { id: "sec-conditions", icon: ClipboardCheck, label: "Réserves", show: hasConditions },
-    { id: "sec-contracts", icon: FileSignature, label: "Contrats", show: showContracts },
-    { id: "sec-terms", icon: Banknote, label: "Conditions du crédit", show: true },
-    { id: "sec-activity", icon: Store, label: "Activité & commerce", show: showActivity },
-    { id: "sec-patrimoine", icon: Landmark, label: "Garanties & cautions", show: true },
-    { id: "sec-applicant", icon: Briefcase, label: "Demandeur & emploi", show: showApplicant },
-    { id: "sec-banking", icon: History, label: "Relation bancaire", show: showBanking },
-    { id: "sec-insurance", icon: ShieldCheck, label: "Assurance", show: showInsurance },
-    { id: "sec-special", icon: NotebookPen, label: "Conditions particulières", show: showSpecial },
-    { id: "sec-compliance", icon: ShieldCheck, label: "Conformité (LBC-FT)", show: showCompliance },
-    { id: "sec-schedule", icon: CalendarClock, label: "Échéancier", show: !!schedule },
-    { id: "sec-visits", icon: MapPin, label: "Visites terrain", show: true },
-    { id: "sec-checklist", icon: ClipboardList, label: "Pièces du dossier", show: hasChecklist },
-    { id: "sec-documents", icon: Paperclip, label: "Documents", show: true },
-    { id: "sec-workflow", icon: GitBranch, label: "Circuit d'approbation", show: true },
-    { id: "sec-timeline", icon: History, label: "Historique & audit", show: true },
+    { id: "sec-decision", icon: Gavel, label: "Décision à rendre", show: !!myTask, group: "Priorité" },
+    { id: "sec-conditions", icon: ClipboardCheck, label: "Réserves", show: hasConditions, group: "Priorité" },
+    { id: "sec-terms", icon: Banknote, label: "Conditions du crédit", show: true, group: "Instruction" },
+    { id: "sec-financial", icon: LineChart, label: "Analyse financière", show: true, group: "Instruction" },
+    { id: "sec-patrimoine", icon: Landmark, label: "Garanties & cautions", show: true, group: "Instruction" },
+    { id: "sec-activity", icon: Store, label: "Activité & commerce", show: showActivity, group: "Profil" },
+    { id: "sec-applicant", icon: Briefcase, label: "Demandeur & emploi", show: showApplicant, group: "Profil" },
+    { id: "sec-banking", icon: History, label: "Relation bancaire", show: showBanking, group: "Profil" },
+    { id: "sec-insurance", icon: ShieldCheck, label: "Assurance", show: showInsurance, group: "Profil" },
+    { id: "sec-special", icon: NotebookPen, label: "Conditions particulières", show: showSpecial, group: "Profil" },
+    { id: "sec-compliance", icon: ShieldCheck, label: "Conformité (LBC-FT)", show: showCompliance, group: "Profil" },
+    { id: "sec-schedule", icon: CalendarClock, label: "Échéancier", show: !!schedule, group: "Suivi" },
+    { id: "sec-visits", icon: MapPin, label: "Visites terrain", show: true, group: "Suivi" },
+    { id: "sec-checklist", icon: ClipboardList, label: "Pièces du dossier", show: hasChecklist, group: "Pièces" },
+    { id: "sec-documents", icon: Paperclip, label: "Documents", show: true, group: "Pièces" },
+    { id: "sec-contracts", icon: FileSignature, label: "Contrats", show: showContracts, group: "Pièces" },
+    { id: "sec-workflow", icon: GitBranch, label: "Circuit d'approbation", show: true, group: "Circuit" },
+    { id: "sec-timeline", icon: History, label: "Historique & audit", show: true, group: "Circuit" },
   ].filter((s) => s.show);
 
   const collapseCtx = {
@@ -2023,7 +2034,7 @@ export function CreditApplicationDetailPage() {
   }
 
   return (
-    <div>
+    <div className="page-shell dossier-page">
       <PageHeader
         icon={FileText}
         title={`Dossier ${app.reference || app.id.slice(0, 8)}`}
@@ -2120,6 +2131,7 @@ export function CreditApplicationDetailPage() {
             <FileText size={26} />
           </span>
           <div className="credit-hero-text">
+            <p className="credit-hero-kicker">Fiche dossier</p>
             <h2 className="credit-hero-name">
               <Link className="link-inline" to={`/clients/${app.client}`}>
                 {app.client_display}
@@ -2188,7 +2200,7 @@ export function CreditApplicationDetailPage() {
       </div>
 
       {actionError && (
-        <div className="form-error" style={{ marginBottom: 16 }}>
+        <div className="form-error" style={{ marginBottom: 0 }}>
           {actionError}
         </div>
       )}
@@ -2196,20 +2208,28 @@ export function CreditApplicationDetailPage() {
       <div className="credit-form">
         <aside className="credit-form-nav">
           <div className="credit-form-nav-inner">
-            <p className="credit-form-nav-title">Sections</p>
-            {navSections.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={`credit-nav-item${activeSection === s.id ? " active" : ""}${
-                  openSections.has(s.id) ? " open" : ""
-                }`}
-                onClick={() => goToSection(s.id)}
-              >
-                <s.icon size={16} />
-                <span>{s.label}</span>
-              </button>
-            ))}
+            <p className="credit-form-nav-title">Navigation</p>
+            {navSections.map((s, idx) => {
+              const prevGroup = idx > 0 ? navSections[idx - 1].group : null;
+              const showGroup = s.group && s.group !== prevGroup;
+              return (
+                <div key={s.id}>
+                  {showGroup && (
+                    <p className="credit-nav-group">{s.group}</p>
+                  )}
+                  <button
+                    type="button"
+                    className={`credit-nav-item${activeSection === s.id ? " active" : ""}${
+                      openSections.has(s.id) ? " open" : ""
+                    }`}
+                    onClick={() => goToSection(s.id)}
+                  >
+                    <s.icon size={16} />
+                    <span>{s.label}</span>
+                  </button>
+                </div>
+              );
+            })}
             <button
               type="button"
               className="btn btn-ghost btn-sm credit-nav-toggle-all"
@@ -2222,13 +2242,6 @@ export function CreditApplicationDetailPage() {
 
         <SectionCollapseContext.Provider value={collapseCtx}>
         <div className="credit-form-main stack">
-          <FinancialAnalysesSection
-            analyses={analyses}
-            currency={cur}
-            appId={app.id}
-            canContribute={canContributeAnalysis}
-          />
-
           {myTask && (
             <ViewSection
               id="sec-decision"
@@ -2256,13 +2269,6 @@ export function CreditApplicationDetailPage() {
                 appId={app.id}
               />
             </ViewSection>
-          )}
-
-          {showContracts && (
-            <ContractsSection
-              appId={app.id}
-              canGenerate={canGenerateContracts}
-            />
           )}
 
           <ViewSection
@@ -2391,6 +2397,13 @@ export function CreditApplicationDetailPage() {
           )}
           </ViewSection>
 
+          <FinancialAnalysesSection
+            analyses={analyses}
+            currency={cur}
+            appId={app.id}
+            canContribute={canContributeAnalysis}
+          />
+
           {showActivity && (
           <ViewSection
             id="sec-activity"
@@ -2424,7 +2437,13 @@ export function CreditApplicationDetailPage() {
             id="sec-patrimoine"
             icon={Landmark}
             title="Patrimoine, garanties et cautions"
+            description="Piliers collatéral d'instruction : garanties réelles et cautions."
           >
+          <CollateralSummaryCard
+            applicationId={app.id}
+            currency={cur}
+            embedded
+          />
           <dl className="def-list two">
             <Row term="Occupation des locaux" value={app.premises_status && lbl(CREDIT_LABELS.premises_status, app.premises_status)} />
           </dl>
@@ -2473,7 +2492,7 @@ export function CreditApplicationDetailPage() {
                     <span className="muted">
                       {formatMoney(g.current_value, cur)}
                       {g.guarantee_type === "MORTGAGE" && g.ltv_ratio && (
-                        <> · LTV {(Number(g.ltv_ratio) * 100).toFixed(0)} %</>
+                        <> · Couverture {(Number(g.ltv_ratio) * 100).toFixed(0)} %</>
                       )}
                     </span>
                     <Badge value={g.status} />
@@ -2829,6 +2848,13 @@ export function CreditApplicationDetailPage() {
             );
           })}
           </ViewSection>
+
+          {showContracts && (
+            <ContractsSection
+              appId={app.id}
+              canGenerate={canGenerateContracts}
+            />
+          )}
 
           <ViewSection
             id="sec-workflow"

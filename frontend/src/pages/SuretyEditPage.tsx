@@ -20,7 +20,7 @@ export function SuretyEditPage() {
   if (isLoading || !surety) return <Spinner />;
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={UserRoundPen}
         title={`Modifier — ${surety.display_name}`}

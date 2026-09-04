@@ -26,7 +26,7 @@ export function GuaranteeAddPage() {
   );
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={ShieldCheck}
         title="Ajouter une garantie"

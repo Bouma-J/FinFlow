@@ -91,7 +91,7 @@ export function ProfilePage() {
   }
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={UserRound}
         title="Mon profil"

@@ -211,6 +211,7 @@ class Command(BaseCommand):
                     "client_type": Client.ClientType.INDIVIDUAL,
                     "first_name": "Awa", "last_name": "Koné",
                     "phone": "+22500000000", "agency": agency,
+                    "kyc_status": Client.KycStatus.VALIDATED,
                 },
             )
 

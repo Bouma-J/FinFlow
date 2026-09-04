@@ -202,17 +202,51 @@ def submit_application(application, user):
     ):
         raise WorkflowError("Seul un dossier en brouillon ou retourné peut être soumis.")
 
+    from apps.clients.models import Client
+
+    from .analysis_validation import assert_analysis_ready_for_submission
     from .models import FinancialAnalysis
     from .risk import risk_level_from_analysis
 
-    reference = (
-        application.financial_analyses.filter(is_reference=True).first()
-        or application.financial_analyses.order_by("-created_at").first()
-    )
-    if reference is None:
+    client = application.client
+    if client is None:
+        raise WorkflowError("Un client est obligatoire avant soumission.")
+    if client.kyc_status != Client.KycStatus.VALIDATED:
         raise WorkflowError(
-            "Une analyse financière de référence est obligatoire avant soumission."
+            "Le KYC du client doit être validé avant soumission du dossier."
         )
+
+    product = application.product
+    if product is None:
+        raise WorkflowError("Un produit de crédit est obligatoire avant soumission.")
+    if not getattr(product, "is_active", True):
+        raise WorkflowError("Le produit de crédit sélectionné n'est plus actif.")
+
+    amount = application.amount_requested
+    if amount is None:
+        raise WorkflowError("Le montant demandé est obligatoire.")
+    if product.amount_min is not None and amount < product.amount_min:
+        raise WorkflowError(
+            f"Le montant demandé ({amount}) est inférieur au minimum du produit "
+            f"({product.amount_min})."
+        )
+    if product.amount_max is not None and amount > product.amount_max:
+        raise WorkflowError(
+            f"Le montant demandé ({amount}) dépasse le maximum du produit "
+            f"({product.amount_max})."
+        )
+
+    duration = application.duration_months
+    if duration is None:
+        raise WorkflowError("La durée demandée est obligatoire.")
+    if duration < product.duration_min_months or duration > product.duration_max_months:
+        raise WorkflowError(
+            f"La durée ({duration} mois) doit être entre "
+            f"{product.duration_min_months} et {product.duration_max_months} mois "
+            f"pour ce produit."
+        )
+
+    reference = assert_analysis_ready_for_submission(application)
     if not reference.is_reference:
         # Garantit qu'il existe toujours une référence explicite.
         FinancialAnalysis.objects.filter(application=application).update(

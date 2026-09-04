@@ -55,7 +55,7 @@ function SubSection({
   children: ReactNode;
 }) {
   return (
-    <div className="subsection">
+    <div className="page-shell subsection">
       <div className="subsection-title">
         <Icon size={15} />
         {title}

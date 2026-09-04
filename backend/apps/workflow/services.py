@@ -276,12 +276,55 @@ def _apply_proposed_amount(instance, proposed_amount):
 
 
 def user_can_act(user, step):
-    """Indique si l'utilisateur est habilité à décider sur cette étape."""
+    """Indique si l'utilisateur est habilité à décider sur cette étape.
+
+    Prend en compte les délégations actives : le délégataire peut agir si
+    le délégant appartient au groupe requis par l'étape.
+    """
     if not (user and user.is_authenticated):
         return False
     if user.is_superuser or getattr(user, "is_group_level", False):
         return True
-    return user.groups.filter(id=step.required_group_id).exists()
+    if step.required_group_id is None:
+        return False
+    if user.groups.filter(id=step.required_group_id).exists():
+        return True
+
+    from apps.accounts.models import Delegation
+
+    today = timezone.now().date()
+    return Delegation.objects.filter(
+        delegate_id=user.id,
+        is_active=True,
+        start_date__lte=today,
+        end_date__gte=today,
+        delegator__groups__id=step.required_group_id,
+    ).exists()
+
+
+def cancel_active_workflows_for_target(target) -> int:
+    """Annule les circuits en cours d'une cible et ignore les tâches PENDING.
+
+    Retourne le nombre d'instances annulées.
+    """
+    content_type = ContentType.objects.get_for_model(target.__class__)
+    instances = list(
+        WorkflowInstance.all_tenants.filter(
+            content_type=content_type,
+            object_id=target.pk,
+            status__in=[
+                WorkflowInstance.Status.IN_PROGRESS,
+                WorkflowInstance.Status.AWAITING_CONDITIONS,
+            ],
+        )
+    )
+    for instance in instances:
+        instance.tasks.filter(status=ApprovalTask.Status.PENDING).update(
+            status=ApprovalTask.Status.SKIPPED
+        )
+        instance.status = WorkflowInstance.Status.CANCELLED
+        instance.save(update_fields=["status", "updated_at"])
+    return len(instances)
 
 
 def _check_self_validation(user, application):

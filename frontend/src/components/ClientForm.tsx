@@ -122,7 +122,7 @@ export function ClientForm({
   );
   const [error, setError] = useState<string | null>(null);
 
-  const isCorporate = type === "CORPORATE";
+  const isCorporate = type === "CORPORATE" || type === "PROFESSIONAL";
   const isMarried = text.marital_status === "MARRIED";
   const fileUrls = initial as unknown as Record<string, string | null>;
 
@@ -213,9 +213,9 @@ export function ClientForm({
         <div className="type-toggle">
           {(
             [
-              ["INDIVIDUAL", "Particulier", UserRound],
-              ["PROFESSIONAL", "Professionnel", Contact],
-              ["CORPORATE", "Entreprise", Building2],
+              ["INDIVIDUAL", "Personne physique", UserRound],
+              ["PROFESSIONAL", "Groupement", Users],
+              ["CORPORATE", "Personne morale", Building2],
             ] as const
           ).map(([value, lbl, Icon]) => (
             <button

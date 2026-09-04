@@ -118,13 +118,25 @@ class ClientSerializer(serializers.ModelSerializer):
         client_type = attrs.get("client_type") or getattr(
             self.instance, "client_type", None
         )
-        if client_type == Client.ClientType.CORPORATE:
-            if not (attrs.get("company_name") or getattr(self.instance, "company_name", "")):
+        if client_type in (
+            Client.ClientType.CORPORATE,
+            Client.ClientType.PROFESSIONAL,
+        ):
+            if not (
+                attrs.get("company_name")
+                or getattr(self.instance, "company_name", "")
+            ):
                 raise serializers.ValidationError(
-                    {"company_name": "Obligatoire pour une entreprise."}
+                    {
+                        "company_name": (
+                            "Obligatoire pour une personne morale ou un groupement."
+                        )
+                    }
                 )
         else:
-            has_name = attrs.get("last_name") or getattr(self.instance, "last_name", "")
+            has_name = attrs.get("last_name") or getattr(
+                self.instance, "last_name", ""
+            )
             if not has_name:
                 raise serializers.ValidationError(
                     {"last_name": "Obligatoire pour une personne physique."}
