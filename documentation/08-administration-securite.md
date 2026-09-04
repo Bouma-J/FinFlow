@@ -29,7 +29,7 @@ l’action est refusée (403), pas seulement masquée dans l’UI.
 
 | Rôle | Contenu typique |
 |------|-----------------|
-| **Administrateur filiale** | Pack complet (tous modules) + paramétrage + décaissement, dation, mainlevée |
+| **Administrateur filiale** | Pack complet (tous modules métier + paramétrage) : clients, dossiers, garanties, recouvrement, admin — **uniquement** sa filiale |
 | **Chargé d'affaire** | Instruction : clients, dossiers (création / édition créateur), analyses, garanties, cautions, contrats générés — pas de décaissement |
 | **Chef d'agence** | Même pack instruction (validation 1er niveau via groupe circuit) |
 | **Analyste crédit et risque** | Analyses / visites / documents uniquement — **pas** de création ni d’édition des champs dossier |
@@ -78,10 +78,9 @@ L’admin Groupe sélectionne une filiale puis, dans **Administration → Utilis
 - appelle `POST /api/v1/users/provision-filiale-admin/`.
 
 Effets :
-- rattachement à la filiale + agence ;
-- `data_scope = TENANT` ;
+- rattachement à la filiale (`data_scope = TENANT`) — **aucune** donnée des autres filiales ;
 - `is_staff = True` (menus Administration) ;
-- rôle **Administrateur filiale** avec le pack de permissions métier (catalogue, crédit, GED, workflow, CBS, garanties, etc.).
+- rôle **Administrateur filiale** : pack métier complet (clients, crédit, GED, workflow, CBS, garanties, recouvrement, etc.) **en plus** du paramétrage.
 
 Permissions métier notables :
 - `credits.disburse_creditapplication`

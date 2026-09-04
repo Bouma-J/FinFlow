@@ -1,23 +1,70 @@
-import { KeyRound, Lock, LogIn, User } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Building2, KeyRound, Lock, LogIn, User } from "lucide-react";
+import { useEffect, useState, type FormEvent } from "react";
+import {
+  Navigate,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
 
-import logo from "@/assets/logo.jpg";
 import {
   MfaInvalidError,
   MfaRequiredError,
   useAuth,
 } from "@/auth/AuthContext";
+import {
+  applyTenantTheme,
+  readRememberedLoginTenantCode,
+  rememberLoginTenantCode,
+  usePublicTenantBranding,
+} from "@/hooks/useTenantBranding";
+
+function initialTenantCode(
+  routeCode?: string,
+  queryCode?: string | null,
+): string {
+  return (
+    (routeCode || "").trim() ||
+    (queryCode || "").trim() ||
+    readRememberedLoginTenantCode() ||
+    ""
+  ).toUpperCase();
+}
 
 export function LoginPage() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
+  const { tenantCode: routeCode } = useParams<{ tenantCode?: string }>();
+  const [searchParams] = useSearchParams();
+  const [tenantCode, setTenantCode] = useState(() =>
+    initialTenantCode(routeCode, searchParams.get("filiale")),
+  );
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [otp, setOtp] = useState("");
   const [mfaStep, setMfaStep] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  const {
+    branding,
+    logoUrl,
+    tenantName,
+    tenantCode: resolvedCode,
+    notFound,
+  } = usePublicTenantBranding(tenantCode);
+
+  useEffect(() => {
+    if (!tenantCode.trim()) {
+      applyTenantTheme(null);
+    }
+  }, [tenantCode]);
+
+  useEffect(() => {
+    if (routeCode && routeCode.trim().toUpperCase() !== tenantCode) {
+      setTenantCode(routeCode.trim().toUpperCase());
+    }
+  }, [routeCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (user) {
     return (
@@ -33,6 +80,11 @@ export function LoginPage() {
     setError(null);
     setSubmitting(true);
     try {
+      if (resolvedCode) {
+        rememberLoginTenantCode(resolvedCode);
+      } else if (tenantCode.trim()) {
+        rememberLoginTenantCode(tenantCode);
+      }
       const result = await login(
         username,
         password,
@@ -58,17 +110,56 @@ export function LoginPage() {
     }
   }
 
+  const subtitle = branding
+    ? `Connexion — ${tenantName}`
+    : "Gestion des dossiers de crédit — Thuin Tech";
+
   return (
     <div className="login-screen">
       <div className="login-card">
         <div className="login-brand">
-          <img src={logo} alt="Thuin Tech" />
+          <img
+            src={logoUrl}
+            alt={branding ? tenantName : "Thuin Tech"}
+            className={branding?.logo_url ? "has-tenant-logo" : undefined}
+          />
           <h1>FIN_FLOW</h1>
-          <p>Gestion des dossiers de crédit — Thuin Tech</p>
+          <p>{subtitle}</p>
+          {resolvedCode && (
+            <span className="login-tenant-chip">{resolvedCode}</span>
+          )}
         </div>
         <form onSubmit={handleSubmit} className="login-form">
           {!mfaStep ? (
             <>
+              <label className="field">
+                <span>Code filiale</span>
+                <div className="input-icon">
+                  <Building2 />
+                  <input
+                    value={tenantCode}
+                    onChange={(e) =>
+                      setTenantCode(e.target.value.toUpperCase())
+                    }
+                    onBlur={() => {
+                      const code = tenantCode.trim().toUpperCase();
+                      setTenantCode(code);
+                      if (code) rememberLoginTenantCode(code);
+                    }}
+                    placeholder="ex. FIL01"
+                    autoComplete="organization"
+                  />
+                </div>
+                <span className="field-hint">
+                  Adapte le logo et les couleurs à votre filiale. Laissez vide
+                  pour la charte Groupe / Thuin Tech.
+                </span>
+                {notFound && tenantCode.trim() && (
+                  <span className="field-hint login-branding-warn">
+                    Filiale introuvable ou inactive — charte par défaut affichée.
+                  </span>
+                )}
+              </label>
               <label className="field">
                 <span>Identifiant</span>
                 <div className="input-icon">
@@ -77,7 +168,7 @@ export function LoginPage() {
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="votre identifiant"
-                    autoFocus
+                    autoFocus={!tenantCode}
                     required
                   />
                 </div>

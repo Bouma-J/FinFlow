@@ -176,7 +176,11 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
         lors qu'une étape du circuit implique l'un de ses groupes.
         """
         from apps.credits.models import CreditApplication
-        from apps.guarantees.models import DationRequest, GuaranteeReleaseRequest
+        from apps.guarantees.models import (
+            DationRequest,
+            GuaranteeFormalizationRequest,
+            GuaranteeReleaseRequest,
+        )
 
         user = request.user
         group_ids = set(user.groups.values_list("id", flat=True))
@@ -245,6 +249,30 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
                 status = target.status
                 status_display = target.get_status_display()
                 product_label = "Dation en paiement"
+                created_by = target.created_by
+                created_at = target.created_at
+            elif isinstance(target, GuaranteeFormalizationRequest):
+                target_kind = "FORMALISATION"
+                detail_path = f"/formalisations/{target.id}"
+                row_id = str(target.id)
+                reference = target.reference
+                client = (
+                    target.guarantee.client if target.guarantee_id else None
+                )
+                amount = str(
+                    target.fees_client_total
+                    or (
+                        target.guarantee.current_value
+                        if target.guarantee_id
+                        else 0
+                    )
+                    or 0
+                )
+                amount_proposed = None
+                currency = "XOF"
+                status = target.status
+                status_display = target.get_status_display()
+                product_label = "Formalisation"
                 created_by = target.created_by
                 created_at = target.created_at
             else:

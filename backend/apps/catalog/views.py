@@ -8,14 +8,20 @@ from apps.common.viewsets import TenantScopedViewSet
 from .models import (
     ChecklistItem,
     CreditProduct,
+    Currency,
+    LoanPeriodicity,
     ProductCategory,
     RejectReason,
+    RepaymentMethod,
 )
 from .serializers import (
     ChecklistItemSerializer,
     CreditProductSerializer,
+    CurrencySerializer,
+    LoanPeriodicitySerializer,
     ProductCategorySerializer,
     RejectReasonSerializer,
+    RepaymentMethodSerializer,
 )
 
 
@@ -58,6 +64,30 @@ class RejectReasonViewSet(TenantScopedViewSet):
     serializer_class = RejectReasonSerializer
     filterset_fields = ["is_active"]
     search_fields = ["code", "label"]
+
+
+class LoanPeriodicityViewSet(TenantScopedViewSet):
+    queryset = LoanPeriodicity.objects.all()
+    serializer_class = LoanPeriodicitySerializer
+    filterset_fields = ["is_active"]
+    search_fields = ["code", "label", "cbs_code"]
+    ordering = ["sort_order", "label"]
+
+
+class RepaymentMethodViewSet(TenantScopedViewSet):
+    queryset = RepaymentMethod.objects.all()
+    serializer_class = RepaymentMethodSerializer
+    filterset_fields = ["is_active"]
+    search_fields = ["code", "label", "cbs_code"]
+    ordering = ["sort_order", "label"]
+
+
+class CurrencyViewSet(TenantScopedViewSet):
+    queryset = Currency.objects.all()
+    serializer_class = CurrencySerializer
+    filterset_fields = ["is_active"]
+    search_fields = ["code", "label", "cbs_code"]
+    ordering = ["sort_order", "label"]
 
 
 class ChecklistItemViewSet(TenantScopedViewSet):

@@ -74,6 +74,12 @@ class User(AbstractUser):
         help_text="Accès transverse de consolidation Groupe.",
     )
     employee_id = models.CharField("matricule", max_length=50, blank=True)
+    cbs_id = models.CharField(
+        "identifiant CBS (idGestionnaire)",
+        max_length=64,
+        blank=True,
+        help_text="Identifiant Perfect / CBS du gestionnaire (optionnel).",
+    )
     phone = models.CharField("téléphone", max_length=50, blank=True)
     mfa_enabled = models.BooleanField("MFA activé", default=False)
     mfa_secret = models.CharField(

@@ -10,16 +10,22 @@ import {
   Landmark,
   ShieldCheck,
   ShieldOff,
+  Stamp,
   Trash2,
   UploadCloud,
   User,
   type LucideIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
-import { GUARANTEE_LABELS, type Guarantee } from "@/api/types";
+import {
+  GUARANTEE_LABELS,
+  type Guarantee,
+  type GuaranteeFormalizationRequest,
+  type Paginated,
+} from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import {
@@ -31,6 +37,14 @@ import {
   formatMoney,
 } from "@/components/ui";
 
+const OPEN_FORM_STATUSES = [
+  "DRAFT",
+  "IN_PROGRESS",
+  "IN_APPROVAL",
+  "RETURNED",
+  "APPROVED",
+];
+
 function lbl(map: Record<string, string>, key: string) {
   return map[key] || key || "—";
 }
@@ -38,7 +52,7 @@ function lbl(map: Record<string, string>, key: string) {
 function Row({ term, value }: { term: string; value?: ReactNode }) {
   if (value === null || value === undefined || value === "") return null;
   return (
-    <div className="page-shell">
+    <div>
       <dt>{term}</dt>
       <dd>{value}</dd>
     </div>
@@ -86,7 +100,6 @@ export function GuaranteeDetailPage({
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { user } = useAuth();
-  const [releaseError, setReleaseError] = useState<string | null>(null);
 
   const { data: g, isLoading } = useQuery({
     queryKey: ["guarantee", id],
@@ -94,32 +107,34 @@ export function GuaranteeDetailPage({
     enabled: !!id,
   });
 
+  const openFormalization = useQuery({
+    queryKey: ["guarantee-formalizations", "open", id],
+    queryFn: async () => {
+      if (g?.open_formalization_id) {
+        return {
+          id: g.open_formalization_id,
+          status: "IN_PROGRESS",
+        } as Pick<GuaranteeFormalizationRequest, "id" | "status">;
+      }
+      const data = (
+        await api.get<Paginated<GuaranteeFormalizationRequest>>(
+          "/guarantee-formalizations/",
+          { params: { guarantee: id, page_size: 10 } },
+        )
+      ).data;
+      return (
+        data.results.find((r) => OPEN_FORM_STATUSES.includes(r.status)) ?? null
+      );
+    },
+    enabled: !!id && !!g,
+    retry: false,
+  });
+
   const deleteMutation = useMutation({
     mutationFn: async () => api.delete(`/guarantees/${id}/`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["guarantees"] });
       navigate("/garanties");
-    },
-  });
-
-  const releaseMutation = useMutation({
-    mutationFn: async () =>
-      (await api.post(`/guarantees/${id}/initiate-release/`, {})).data,
-    onSuccess: (data: { id: string }) => {
-      qc.invalidateQueries({ queryKey: ["guarantee-releases"] });
-      navigate(`/mains-levees/${data.id}`);
-    },
-    onError: (err: unknown) => {
-      const data = (err as { response?: { data?: unknown } })?.response?.data;
-      const raw =
-        data && typeof data === "object" && "errors" in data
-          ? (data as { errors: unknown }).errors
-          : data;
-      setReleaseError(
-        typeof raw === "string"
-          ? raw
-          : "Main levée impossible (CBS ou circuit).",
-      );
     },
   });
 
@@ -137,6 +152,13 @@ export function GuaranteeDetailPage({
   const canRelease =
     g.status === "ACTIVE" &&
     hasPerm(user, "guarantees.initiate_guaranteereleaserequest");
+  const canFormalize =
+    g.status === "ACTIVE" &&
+    !openFormalization.data &&
+    !g.formalized_at &&
+    hasPerm(user, "guarantees.initiate_guaranteeformalizationrequest");
+  const openFormId =
+    openFormalization.data?.id || g.open_formalization_id || null;
 
   function remove() {
     if (
@@ -165,7 +187,11 @@ export function GuaranteeDetailPage({
               <ArrowLeft />
               Retour
             </Link>
-            {(canEdit || canDelete || canRelease) && (
+            {(canEdit ||
+              canDelete ||
+              canRelease ||
+              canFormalize ||
+              openFormId) && (
               <>
                 {canEdit && (
                   <Link
@@ -176,24 +202,32 @@ export function GuaranteeDetailPage({
                     Modifier
                   </Link>
                 )}
-                {canRelease && (
-                  <button
+                {canFormalize && (
+                  <Link
                     className="btn btn-primary"
-                    onClick={() => {
-                      setReleaseError(null);
-                      if (
-                        window.confirm(
-                          "Initier une main levée ? Le CBS doit confirmer que le prêt est soldé.",
-                        )
-                      ) {
-                        releaseMutation.mutate();
-                      }
-                    }}
-                    disabled={releaseMutation.isPending}
+                    to={`/formalisations/nouvelle?client=${g.client}&guarantee=${g.id}`}
+                  >
+                    <Stamp />
+                    Formaliser
+                  </Link>
+                )}
+                {openFormId && (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/formalisations/${openFormId}`}
+                  >
+                    <Stamp />
+                    Voir formalisation
+                  </Link>
+                )}
+                {canRelease && (
+                  <Link
+                    className="btn btn-primary"
+                    to={`/mains-levees/nouvelle?client=${g.client}&guarantee=${g.id}`}
                   >
                     <ShieldOff />
                     Main levée
-                  </button>
+                  </Link>
                 )}
                 {canDelete && (
                   <button
@@ -211,8 +245,6 @@ export function GuaranteeDetailPage({
         }
       />
 
-      {releaseError && <div className="form-error">{releaseError}</div>}
-
       <div className="client-banner">
         <div className="client-banner-info">
           <span className="client-banner-icon">
@@ -223,6 +255,10 @@ export function GuaranteeDetailPage({
             <div className="client-banner-meta">
               <code>{g.reference || g.id.slice(0, 8)}</code>
               <Badge value={g.status} />
+              {openFormId && (
+                <Badge value="IN_PROGRESS" label="Formalisation en cours" />
+              )}
+              {g.formalized_at && <Badge value="OK" label="Formalisée" />}
               <span className="muted">
                 Valeur actualisée : {formatMoney(g.current_value)}
               </span>
@@ -230,6 +266,30 @@ export function GuaranteeDetailPage({
           </div>
         </div>
       </div>
+
+      {(g.formalized_at ||
+        g.registration_number ||
+        g.registration_date ||
+        g.registration_authority) && (
+        <Card title="Constitution juridique">
+          <dl className="def-list two">
+            <Row
+              term="Formalisée le"
+              value={g.formalized_at && formatDate(g.formalized_at)}
+            />
+            <Row term="N° d'enregistrement" value={g.registration_number} />
+            <Row
+              term="Date d'enregistrement"
+              value={g.registration_date && formatDate(g.registration_date)}
+            />
+            <Row term="Organisme" value={g.registration_authority} />
+          </dl>
+          <p className="muted small" style={{ marginTop: 8 }}>
+            La formalisation est parallèle au crédit et ne bloque pas le
+            décaissement.
+          </p>
+        </Card>
+      )}
 
       <div className="detail-row">
         <Section icon={User} title="Propriété du bien">
@@ -287,7 +347,9 @@ export function GuaranteeDetailPage({
                 <Row term="Numéro du document" value={g.document_number} />
                 <Row
                   term="Date d'établissement"
-                  value={g.document_issue_date && formatDate(g.document_issue_date)}
+                  value={
+                    g.document_issue_date && formatDate(g.document_issue_date)
+                  }
                 />
                 <Row term="Adresse du bien" value={g.address} />
                 <Row
@@ -406,7 +468,9 @@ export function GuaranteeDetailPage({
                         <td>{idx + 1}</td>
                         <td>{item.nature || "—"}</td>
                         <td>
-                          {item.weight !== null && item.weight !== undefined && item.weight !== ""
+                          {item.weight !== null &&
+                          item.weight !== undefined &&
+                          item.weight !== ""
                             ? String(item.weight)
                             : "—"}
                         </td>
@@ -519,7 +583,10 @@ export function GuaranteeDetailPage({
               {photos.map((p) => (
                 <figure key={p.id} className="photo-item">
                   <a href={p.image} target="_blank" rel="noreferrer">
-                    <img src={p.image} alt={p.caption || "Photo de la garantie"} />
+                    <img
+                      src={p.image}
+                      alt={p.caption || "Photo de la garantie"}
+                    />
                   </a>
                   {p.caption && <figcaption>{p.caption}</figcaption>}
                 </figure>

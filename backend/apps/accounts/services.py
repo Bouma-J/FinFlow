@@ -60,6 +60,7 @@ FILIALE_ADMIN_APP_LABELS = (
 FILIALE_ADMIN_EXTRA_PERMS = (
     ("guarantees", "initiate_dationrequest"),
     ("guarantees", "initiate_guaranteereleaserequest"),
+    ("guarantees", "initiate_guaranteeformalizationrequest"),
     ("credits", "disburse_creditapplication"),
     ("credits", "initiate_disburse_creditapplication"),
 )
@@ -196,6 +197,7 @@ _WRITE_OPERATIONS = (
     ("guarantees", "change_guarantee"),
     ("guarantees", "initiate_guaranteereleaserequest"),
     ("guarantees", "initiate_dationrequest"),
+    ("guarantees", "initiate_guaranteeformalizationrequest"),
     ("sureties", "add_suretyengagement"),
     ("sureties", "change_suretyengagement"),
     ("credits", "disburse_creditapplication"),
@@ -220,6 +222,7 @@ _WRITE_LEGAL = (
     ("guarantees", "add_guaranteemovement"),
     ("guarantees", "initiate_guaranteereleaserequest"),
     ("guarantees", "initiate_dationrequest"),
+    ("guarantees", "initiate_guaranteeformalizationrequest"),
     ("sureties", "add_surety"),
     ("sureties", "change_surety"),
     ("sureties", "add_suretyengagement"),
@@ -297,6 +300,7 @@ _WRITE_COLLECTIONS_MGR = (
     ("collections", "change_writeoff"),
     # Issue fréquente d'un dossier de recouvrement ; suivi possible par juridique / exploitation.
     ("guarantees", "initiate_dationrequest"),
+    ("guarantees", "initiate_guaranteeformalizationrequest"),
 )
 
 _WRITE_COLLECTIONS_ASSIST = (
@@ -316,6 +320,7 @@ _WRITE_COLLECTIONS_ASSIST = (
     ("collections", "add_litigationcost"),
     ("collections", "change_litigationcost"),
     ("guarantees", "initiate_dationrequest"),
+    ("guarantees", "initiate_guaranteeformalizationrequest"),
 )
 
 _READ_METIER = (
@@ -727,6 +732,7 @@ def provision_filiale_admin(
     last_name="",
     phone="",
     employee_id="",
+    cbs_id="",
     agency_ids=None,
     send_credentials=True,
     must_change_password=True,
@@ -777,6 +783,7 @@ def provision_filiale_admin(
             "last_name": last_name,
             "phone": phone,
             "employee_id": employee_id,
+            "cbs_id": cbs_id,
             "must_change_password": must_change_password,
         },
     )
@@ -819,6 +826,8 @@ def provision_filiale_admin(
             user.phone = phone
         if employee_id:
             user.employee_id = employee_id
+        if cbs_id:
+            user.cbs_id = cbs_id
         user.save()
         if password is not None:
             assign_password(

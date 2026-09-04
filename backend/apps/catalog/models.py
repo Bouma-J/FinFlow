@@ -58,6 +58,19 @@ class CreditProduct(ReferenceModel):
         "frais de dossier (%)", max_digits=6, decimal_places=3, default=0
     )
     requires_guarantee = models.BooleanField("garantie obligatoire", default=False)
+    cbs_product_code = models.CharField(
+        "code produit crédit CBS (idProduitCrd)",
+        max_length=64,
+        blank=True,
+        help_text="Identifiant Perfect / CBS du produit de crédit.",
+    )
+    cbs_repayment_product_code = models.CharField(
+        "code produit remboursement CBS (idProduitRemb)",
+        max_length=64,
+        blank=True,
+        help_text="Identifiant Perfect / CBS du produit de remboursement "
+        "(ex. compte courant).",
+    )
 
     class Meta(ReferenceModel.Meta):
         verbose_name = "produit de crédit"
@@ -78,6 +91,70 @@ class RejectReason(ReferenceModel):
         constraints = [
             models.UniqueConstraint(
                 fields=["tenant", "code"], name="unique_rejectreason_code_per_tenant"
+            )
+        ]
+
+
+class CbsMappedReference(ReferenceModel):
+    """Référentiel filiale avec code métier + identifiant CBS Perfect."""
+
+    cbs_code = models.CharField(
+        "identifiant CBS",
+        max_length=64,
+        blank=True,
+        help_text="Code Perfect / CBS envoyé lors des appels d'intégration.",
+    )
+    sort_order = models.PositiveIntegerField("ordre d'affichage", default=0)
+
+    class Meta(ReferenceModel.Meta):
+        abstract = True
+        ordering = ["sort_order", "label"]
+
+
+class LoanPeriodicity(CbsMappedReference):
+    """Périodicité de remboursement (ex. MONTHLY → MENSUEL)."""
+
+    periods_per_year = models.PositiveIntegerField(
+        "périodes / an",
+        default=12,
+        help_text="Utilisé pour calculer le nombre d'échéances.",
+    )
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "périodicité"
+        verbose_name_plural = "périodicités"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_loanperiodicity_code_per_tenant",
+            )
+        ]
+
+
+class RepaymentMethod(CbsMappedReference):
+    """Méthode / mécanisme de remboursement (mapping idProduitRemb)."""
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "méthode de remboursement"
+        verbose_name_plural = "méthodes de remboursement"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_repaymentmethod_code_per_tenant",
+            )
+        ]
+
+
+class Currency(CbsMappedReference):
+    """Devise paramétrable (code ISO + identifiant CBS / codeDevise)."""
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "devise"
+        verbose_name_plural = "devises"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_currency_code_per_tenant",
             )
         ]
 

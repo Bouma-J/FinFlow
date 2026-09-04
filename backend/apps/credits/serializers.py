@@ -8,6 +8,7 @@ from .models import (
     CreditApplication,
     CreditApplicationFee,
     CreditDocument,
+    CreditInstructionPolicy,
     FieldVisit,
     FinancialAnalysis,
     FinancialDocument,
@@ -31,6 +32,28 @@ class AnalysisThresholdSerializer(serializers.ModelSerializer):
             "haircut_financial_deposit", "haircut_financial_security",
             "haircut_other",
             "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
+class CreditInstructionPolicySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CreditInstructionPolicy
+        fields = [
+            "id",
+            "collateral_coverage_mode",
+            "require_field_visit",
+            "allow_unfavorable_analysis_submit",
+            "require_product_checklist",
+            "match_product_client_type",
+            "kyc_gate",
+            "product_bounds_gate",
+            "amount_approved_mode",
+            "show_readiness_checklist",
+            "enable_cancel_status",
+            "allow_collateral_during_approval",
+            "created_at",
+            "updated_at",
         ]
         read_only_fields = ["id", "created_at", "updated_at"]
 
@@ -288,7 +311,7 @@ class FieldVisitSerializer(serializers.ModelSerializer):
         fields = [
             "id", "application", "visit_date", "visited_by",
             "visited_by_display", "visitor_role", "can_edit",
-            "latitude", "longitude", "report", "created_at",
+            "geo_coordinates", "report", "created_at",
         ]
         read_only_fields = [
             "id", "visited_by", "visited_by_display", "visitor_role",
@@ -359,6 +382,10 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
     fees_breakdown = serializers.SerializerMethodField()
     submitted_by_display = serializers.SerializerMethodField()
     created_by_display = serializers.SerializerMethodField()
+    cbs_refs = serializers.SerializerMethodField()
+    periodicity_label = serializers.SerializerMethodField()
+    repayment_mechanism_label = serializers.SerializerMethodField()
+    currency_label = serializers.SerializerMethodField()
 
     def get_submitted_by_display(self, obj):
         return str(obj.submitted_by) if obj.submitted_by_id else ""
@@ -369,6 +396,29 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
     def get_fees_breakdown(self, obj):
         return build_fees_breakdown(obj)
 
+    def get_cbs_refs(self, obj):
+        cached = getattr(obj, "_cbs_refs_cache", None)
+        if cached is None:
+            from apps.catalog.cbs_resolve import application_cbs_refs
+
+            cached = application_cbs_refs(obj)
+            obj._cbs_refs_cache = cached
+        return cached
+
+    def get_periodicity_label(self, obj):
+        refs = self.get_cbs_refs(obj)
+        return (refs.get("periodicity") or {}).get("label") or obj.periodicity
+
+    def get_repayment_mechanism_label(self, obj):
+        refs = self.get_cbs_refs(obj)
+        return (refs.get("repayment_method") or {}).get("label") or (
+            obj.repayment_mechanism or ""
+        )
+
+    def get_currency_label(self, obj):
+        refs = self.get_cbs_refs(obj)
+        return (refs.get("currency") or {}).get("label") or obj.currency
+
     class Meta:
         model = CreditApplication
         fields = [
@@ -378,9 +428,12 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
             "amount_requested", "amount_proposed", "interest_rate", "fees_rate",
             "mandatory_savings_rate",
             "extra_fees", "fees_breakdown",
-            "periodicity", "duration_months", "first_due_date", "last_due_date",
-            "repayment_mechanism", "purpose_type", "purpose",
-            "request_letter_scan", "currency",
+            "periodicity", "periodicity_label",
+            "duration_months", "first_due_date", "last_due_date",
+            "repayment_mechanism", "repayment_mechanism_label",
+            "purpose_type", "purpose",
+            "request_letter_scan", "currency", "currency_label",
+            "cbs_refs",
             # Plan de financement
             "project_total_cost", "personal_contribution", "financed_quota",
             # Activité (contexte opérationnel)
@@ -423,7 +476,123 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
             "submitted_by_display", "created_by", "created_by_display",
             "created_at", "updated_at",
             "extra_fees", "fees_breakdown",
+            "cbs_refs", "periodicity_label", "repayment_mechanism_label",
+            "currency_label",
         ]
+
+    def validate(self, attrs):
+        from apps.common.tenancy import get_current_tenant_id
+        from apps.workflow.services import WorkflowError
+
+        from .instruction_policy import (
+            amount_approved_writable,
+            assert_kyc_validated,
+            assert_product_bounds,
+            get_instruction_policy,
+        )
+        from .models import CreditInstructionPolicy
+
+        instance = getattr(self, "instance", None)
+        merged = instance
+        if instance is None:
+            # Objet transitoire pour les contrôles create
+            class _Tmp:
+                pass
+
+            merged = _Tmp()
+            merged.tenant_id = get_current_tenant_id()
+            merged.status = CreditApplication.Status.DRAFT
+            merged.client = attrs.get("client")
+            merged.product = attrs.get("product")
+            merged.amount_requested = attrs.get("amount_requested")
+            merged.duration_months = attrs.get("duration_months")
+            merged.amount_approved = attrs.get("amount_approved")
+        else:
+            for key, val in attrs.items():
+                setattr(merged, key, val)
+
+        policy = get_instruction_policy(getattr(merged, "tenant_id", None))
+
+        if "amount_approved" in attrs and attrs["amount_approved"] is not None:
+            if instance is None or not amount_approved_writable(instance):
+                if (
+                    policy.amount_approved_mode
+                    == CreditInstructionPolicy.AmountApprovedMode.FORBID
+                ):
+                    raise serializers.ValidationError(
+                        {
+                            "amount_approved": (
+                                "La politique filiale réserve le montant approuvé "
+                                "à la décision du circuit."
+                            )
+                        }
+                    )
+
+        if (
+            policy.kyc_gate == CreditInstructionPolicy.KycGate.ON_CREATE
+            and instance is None
+            and merged.client is not None
+        ):
+            try:
+                assert_kyc_validated(merged)
+            except WorkflowError as exc:
+                raise serializers.ValidationError({"client": str(exc)}) from exc
+
+        if (
+            policy.product_bounds_gate
+            == CreditInstructionPolicy.BoundsGate.ON_SAVE
+            and merged.product is not None
+        ):
+            try:
+                assert_product_bounds(merged)
+            except WorkflowError as exc:
+                raise serializers.ValidationError(str(exc)) from exc
+
+        if (
+            policy.match_product_client_type
+            and merged.product is not None
+            and merged.client is not None
+        ):
+            from .instruction_policy import _product_client_type_ok
+
+            if not _product_client_type_ok(merged):
+                raise serializers.ValidationError(
+                    {
+                        "product": (
+                            "Le type de client ne correspond pas à ce produit."
+                        )
+                    }
+                )
+
+        tenant_id = getattr(merged, "tenant_id", None) or get_current_tenant_id()
+        self._validate_catalog_refs(attrs, tenant_id)
+        return attrs
+
+    def _validate_catalog_refs(self, attrs, tenant_id):
+        """Valide périodicité / mécanisme / devise contre le référentiel filiale."""
+        from apps.catalog.cbs_resolve import active_codes
+        from apps.catalog.models import Currency, LoanPeriodicity, RepaymentMethod
+
+        checks = [
+            ("periodicity", LoanPeriodicity, "périodicité"),
+            ("repayment_mechanism", RepaymentMethod, "méthode de remboursement"),
+            ("currency", Currency, "devise"),
+        ]
+        errors = {}
+        for field, model, label in checks:
+            if field not in attrs:
+                continue
+            value = attrs.get(field)
+            if value in (None, ""):
+                continue
+            codes = active_codes(model, tenant_id)
+            if codes and str(value) not in codes:
+                errors[field] = (
+                    f"{label.capitalize()} « {value} » inconnue dans le "
+                    f"référentiel filiale. Paramétrez-la dans Administration."
+                )
+        if errors:
+            raise serializers.ValidationError(errors)
 
     def _save_stock_photos(self, application):
         request = self.context.get("request")
@@ -490,6 +659,8 @@ class LoanSerializer(serializers.ModelSerializer):
             "principal", "interest_rate",
             "mandatory_savings_rate", "duration_months", "disbursed_at",
             "first_due_date", "status", "core_banking_reference",
+            "cbs_external_id", "cbs_demande_number", "cbs_demande_ref",
+            "cbs_contract_number", "cbs_disbursement_status",
             "installments", "fees_breakdown",
         ]
         read_only_fields = fields
@@ -508,18 +679,41 @@ class SimulationSerializer(serializers.Serializer):
         max_digits=6, decimal_places=3, min_value=Decimal("0")
     )
     months = serializers.IntegerField(min_value=1, max_value=600)
-    periodicity = serializers.ChoiceField(
-        choices=["DAILY", "WEEKLY", "MONTHLY", "QUARTERLY", "SEMIANNUAL", "ANNUAL"],
-        default="MONTHLY",
-    )
+    periodicity = serializers.CharField(required=False, default="MONTHLY")
     first_due_date = serializers.DateField(required=False, allow_null=True)
     simulation_date = serializers.DateField(required=False, allow_null=True)
     savings_rate = serializers.DecimalField(
         max_digits=6, decimal_places=3, min_value=Decimal("0"),
         required=False, default=Decimal("0"),
     )
-    mechanism = serializers.ChoiceField(
-        choices=["DEGRESSIVE", "IN_FINE", "BULLET", "CONSTANT"],
-        required=False,
-        default="DEGRESSIVE",
-    )
+    mechanism = serializers.CharField(required=False, default="DEGRESSIVE")
+
+    def validate(self, attrs):
+        from apps.catalog.cbs_resolve import active_codes
+        from apps.catalog.models import LoanPeriodicity, RepaymentMethod
+        from apps.common.tenancy import get_current_tenant_id
+
+        tenant_id = get_current_tenant_id()
+        periodicity = attrs.get("periodicity") or "MONTHLY"
+        mechanism = attrs.get("mechanism") or "DEGRESSIVE"
+        period_codes = active_codes(LoanPeriodicity, tenant_id)
+        if period_codes and periodicity not in period_codes:
+            raise serializers.ValidationError(
+                {
+                    "periodicity": (
+                        f"Périodicité « {periodicity} » inconnue dans le "
+                        f"référentiel filiale."
+                    )
+                }
+            )
+        remb_codes = active_codes(RepaymentMethod, tenant_id)
+        if remb_codes and mechanism not in remb_codes:
+            raise serializers.ValidationError(
+                {
+                    "mechanism": (
+                        f"Mécanisme « {mechanism} » inconnu dans le "
+                        f"référentiel filiale."
+                    )
+                }
+            )
+        return attrs

@@ -35,6 +35,7 @@ const EMPTY = {
   manager_last_name: "",
   manager_first_name: "",
   manager_phone: "",
+  cbs_point_of_service_id: "",
 };
 
 export function AdminAgenciesPage() {
@@ -111,6 +112,7 @@ export function AdminAgenciesPage() {
       manager_last_name: agency.manager_last_name || "",
       manager_first_name: agency.manager_first_name || "",
       manager_phone: agency.manager_phone || "",
+      cbs_point_of_service_id: agency.cbs_point_of_service_id || "",
     });
   }
 
@@ -208,6 +210,16 @@ export function AdminAgenciesPage() {
                 }
               />
             </label>
+            <label className="field">
+              <span>Point de service CBS (idPointService)</span>
+              <input
+                value={form.cbs_point_of_service_id}
+                onChange={(e) =>
+                  setForm({ ...form, cbs_point_of_service_id: e.target.value })
+                }
+                placeholder="PS01"
+              />
+            </label>
           </div>
           {error && <div className="form-error">{error}</div>}
           <button className="btn btn-primary" disabled={createMutation.isPending}>
@@ -271,6 +283,19 @@ export function AdminAgenciesPage() {
                   onChange={(e) =>
                     setForm({ ...form, manager_phone: e.target.value })
                   }
+                />
+              </label>
+              <label className="field">
+                <span>Point de service CBS (idPointService)</span>
+                <input
+                  value={form.cbs_point_of_service_id}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      cbs_point_of_service_id: e.target.value,
+                    })
+                  }
+                  placeholder="PS01"
                 />
               </label>
               <label className="field checkbox">

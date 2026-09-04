@@ -75,4 +75,14 @@ def can_attach_collateral(application, user=None):
         return True
     if user is not None and getattr(user, "is_superuser", False):
         return True
-    return application.status in COLLATERAL_ATTACH_STATUSES
+    allowed = set(COLLATERAL_ATTACH_STATUSES)
+    try:
+        from .instruction_policy import get_instruction_policy
+
+        policy = get_instruction_policy(application.tenant_id)
+        if policy.allow_collateral_during_approval:
+            allowed.add(CreditApplication.Status.IN_APPROVAL)
+            allowed.add(CreditApplication.Status.SUBMITTED)
+    except Exception:  # noqa: BLE001
+        pass
+    return application.status in allowed

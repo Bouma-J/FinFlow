@@ -74,7 +74,7 @@ Les retards PAR sont recalculés automatiquement (batch nocturne). Un encaisseme
 
 | Écran | Usage |
 |-------|--------|
-| Utilisateurs | Comptes, rôles, agences, périmètre. L’**admin Groupe** peut cocher « Administrateur filiale » pour créer un admin complet sur la filiale sélectionnée. |
+| Utilisateurs | Comptes, rôles, agences, périmètre. L’**admin Groupe** peut cocher « Administrateur filiale » : accès **admin + métier** (clients, dossiers, garanties…) **uniquement** sur la filiale sélectionnée. |
 | Rôles | Permissions Django par rôle |
 | Produits | Catalogue crédit |
 | Circuits | Étapes, SLA, rôles validateurs |

@@ -20,6 +20,7 @@ from apps.clients.models import Client
 from apps.accounts.services import get_or_create_tenant_role
 from apps.common.tenancy import tenant_context
 from apps.corebanking.models import CoreBankingConnector
+from apps.corebanking.perfect_defaults import ensure_perfect_connector, perfect_connector_defaults
 from apps.tenants.models import Agency, Tenant
 from apps.workflow.models import ApprovalStep, WorkflowDefinition
 
@@ -127,8 +128,22 @@ class Command(BaseCommand):
                     "duration_min_months": 3,
                     "duration_max_months": 36,
                     "interest_rate": Decimal("12.5"),
+                    "cbs_product_code": "CRED-TRESO",
+                    "cbs_repayment_product_code": "COMPTE-COURANT",
                 },
             )
+            if not product.cbs_product_code:
+                product.cbs_product_code = "CRED-TRESO"
+                product.cbs_repayment_product_code = (
+                    product.cbs_repayment_product_code or "COMPTE-COURANT"
+                )
+                product.save(
+                    update_fields=[
+                        "cbs_product_code",
+                        "cbs_repayment_product_code",
+                        "updated_at",
+                    ]
+                )
 
             definition, created_def = WorkflowDefinition.objects.get_or_create(
                 tenant=tenant, code="CIRCUIT-STD", version=1,
@@ -200,10 +215,16 @@ class Command(BaseCommand):
                     step_kind=ApprovalStep.StepKind.DECISIONAL,
                 )
 
-            CoreBankingConnector.objects.get_or_create(
-                tenant=tenant, name="CBS Filiale 01",
-                defaults={"protocol": "REST", "base_url": "https://cbs.fil01.local/api"},
+            defaults = perfect_connector_defaults(
+                demo=True, base_url="https://cbs.fil01.local/api"
             )
+            CoreBankingConnector.objects.get_or_create(
+                tenant=tenant,
+                name="CBS Filiale 01",
+                defaults=defaults,
+            )
+            # Complète endpoints Perfect si le connecteur existait déjà.
+            ensure_perfect_connector(tenant, demo=True, name="CBS Filiale 01")
 
             Client.objects.get_or_create(
                 tenant=tenant, reference="CLI-0001",

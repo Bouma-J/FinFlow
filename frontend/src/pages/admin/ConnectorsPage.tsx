@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Cable } from "lucide-react";
+import {
+  Cable,
+  KeyRound,
+  PlugZap,
+  Plus,
+  Radio,
+  Save,
+  Settings2,
+  X,
+} from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
@@ -13,86 +22,366 @@ import {
   TenantScopeNotice,
 } from "@/components/ui";
 
-const PROTOCOLS = ["REST", "SOAP", "SFTP", "BATCH"];
+/** Défauts Perfect alignés sur backend/apps/corebanking/perfect_defaults.py */
+const PERFECT = {
+  provider: "perfect",
+  scope: "perfect",
+  endpoints: {
+    authentification: "gateway-perfect/authentification",
+    adh_situation: "gateway-perfect/adh/situation",
+    crd_simple: "gateway-perfect/crd/simple",
+    crd_situation: "gateway-perfect/crd/situation",
+  },
+  periodicity_map: {
+    DAILY: "JOURNALIER",
+    WEEKLY: "HEBDOMADAIRE",
+    BIMONTHLY: "BIMENSUEL",
+    MONTHLY: "MENSUEL",
+    QUARTERLY: "TRIMESTRIEL",
+    SEMIANNUAL: "SEMESTRIEL",
+    ANNUAL: "ANNUEL",
+  },
+  purpose_map: {
+    WORKING_CAPITAL: "FONDS_ROULEMENT",
+    EQUIPMENT: "EQUIPEMENT",
+    STOCK: "STOCK",
+    REAL_ESTATE: "IMMOBILIER",
+    TREASURY: "TRESORERIE",
+    CONSUMPTION: "CONSOMMATION",
+    OTHER: "AUTRE",
+  },
+  defaults: {
+    idPointService: "PS01",
+    idGestionnaire: "GEST01",
+    idProduitRemb: "COMPTE-COURANT",
+  },
+} as const;
+
+type ConnectorForm = {
+  name: string;
+  protocol: string;
+  base_url: string;
+  timeout_seconds: number;
+  max_retries: number;
+  is_active: boolean;
+  auth_username: string;
+  auth_password: string;
+  auth_token: string;
+  auth_scope: string;
+  auth_path: string;
+  adh_situation_path: string;
+  crd_simple_path: string;
+  crd_situation_path: string;
+  disburse_mode: "LOCAL" | "CBS";
+  id_point_service: string;
+  id_gestionnaire: string;
+  id_produit_remb: string;
+  sim_loan_settled: boolean;
+  sim_client_outstanding: string;
+};
+
+const EMPTY_FORM: ConnectorForm = {
+  name: "CBS Perfect",
+  protocol: "REST",
+  base_url: "",
+  timeout_seconds: 30,
+  max_retries: 3,
+  is_active: true,
+  auth_username: "",
+  auth_password: "",
+  auth_token: "",
+  auth_scope: PERFECT.scope,
+  auth_path: PERFECT.endpoints.authentification,
+  adh_situation_path: PERFECT.endpoints.adh_situation,
+  crd_simple_path: PERFECT.endpoints.crd_simple,
+  crd_situation_path: PERFECT.endpoints.crd_situation,
+  disburse_mode: "LOCAL",
+  id_point_service: PERFECT.defaults.idPointService,
+  id_gestionnaire: PERFECT.defaults.idGestionnaire,
+  id_produit_remb: PERFECT.defaults.idProduitRemb,
+  sim_loan_settled: true,
+  sim_client_outstanding: "0",
+};
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function str(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim() ? value : fallback;
+}
+
+function formFromConnector(c: CbsConnector): ConnectorForm {
+  const rules = asRecord(c.mapping_rules);
+  const endpoints = asRecord(rules.endpoints);
+  const disbursement = asRecord(rules.disbursement);
+  const defaults = asRecord(disbursement.defaults);
+  const simulate = asRecord(rules.simulate);
+  const mode = String(disbursement.mode || "").toUpperCase();
+  return {
+    name: c.name,
+    protocol: c.protocol || "REST",
+    base_url: c.base_url || "",
+    timeout_seconds: c.timeout_seconds ?? 30,
+    max_retries: c.max_retries ?? 3,
+    is_active: c.is_active,
+    auth_username: "",
+    auth_password: "",
+    auth_token: "",
+    auth_scope: PERFECT.scope,
+    auth_path: str(
+      endpoints.authentification,
+      PERFECT.endpoints.authentification,
+    ),
+    adh_situation_path: str(
+      endpoints.adh_situation,
+      PERFECT.endpoints.adh_situation,
+    ),
+    crd_simple_path: str(endpoints.crd_simple, PERFECT.endpoints.crd_simple),
+    crd_situation_path: str(
+      endpoints.crd_situation,
+      PERFECT.endpoints.crd_situation,
+    ),
+    disburse_mode: mode === "CBS" ? "CBS" : "LOCAL",
+    id_point_service: str(
+      defaults.idPointService,
+      PERFECT.defaults.idPointService,
+    ),
+    id_gestionnaire: str(
+      defaults.idGestionnaire,
+      PERFECT.defaults.idGestionnaire,
+    ),
+    id_produit_remb: str(
+      defaults.idProduitRemb,
+      PERFECT.defaults.idProduitRemb,
+    ),
+    sim_loan_settled: simulate.loan_settled_default !== false,
+    sim_client_outstanding: String(
+      simulate.client_outstanding_default ?? "0",
+    ),
+  };
+}
+
+function buildPayload(form: ConnectorForm, opts: { includeAuth: boolean }) {
+  const mapping_rules = {
+    provider: PERFECT.provider,
+    force_simulate: form.disburse_mode === "LOCAL",
+    endpoints: {
+      authentification:
+        form.auth_path.trim() || PERFECT.endpoints.authentification,
+      adh_situation:
+        form.adh_situation_path.trim() || PERFECT.endpoints.adh_situation,
+      crd_simple: form.crd_simple_path.trim() || PERFECT.endpoints.crd_simple,
+      crd_situation:
+        form.crd_situation_path.trim() || PERFECT.endpoints.crd_situation,
+    },
+    disbursement: {
+      mode: form.disburse_mode,
+      defaults: {
+        idPointService: form.id_point_service.trim(),
+        idGestionnaire: form.id_gestionnaire.trim(),
+        idProduitRemb: form.id_produit_remb.trim(),
+      },
+      periodicity_map: { ...PERFECT.periodicity_map },
+      purpose_map: { ...PERFECT.purpose_map },
+    },
+    simulate: {
+      loan_settled_default: form.sim_loan_settled,
+      loan_outstanding_default: "0",
+      client_outstanding_default: form.sim_client_outstanding,
+    },
+  };
+
+  const payload: Record<string, unknown> = {
+    name: form.name.trim(),
+    protocol: form.protocol,
+    base_url: form.base_url.trim(),
+    timeout_seconds: form.timeout_seconds,
+    max_retries: form.max_retries,
+    is_active: form.is_active,
+    mapping_rules,
+  };
+
+  if (opts.includeAuth) {
+    const auth_config: Record<string, string> = {
+      scope: form.auth_scope.trim() || PERFECT.scope,
+    };
+    if (form.auth_username.trim()) {
+      auth_config.username = form.auth_username.trim();
+    }
+    if (form.auth_password) auth_config.password = form.auth_password;
+    if (form.auth_token.trim()) {
+      auth_config.access_token = form.auth_token.trim();
+    }
+    payload.auth_config = auth_config;
+  }
+
+  return payload;
+}
+
+function connectorProvider(c: CbsConnector): string {
+  return str(asRecord(c.mapping_rules).provider, "—");
+}
+
+function connectorMode(c: CbsConnector): string {
+  const rules = asRecord(c.mapping_rules);
+  const mode = str(asRecord(rules.disbursement).mode).toUpperCase();
+  if (mode === "CBS" || mode === "LOCAL") return mode;
+  if (rules.force_simulate) return "LOCAL";
+  return c.base_url ? "CBS" : "LOCAL";
+}
+
+function apiErrorMessage(err: unknown, fallback: string): string {
+  const data = (err as { response?: { data?: Record<string, unknown> } })
+    ?.response?.data;
+  if (!data) return fallback;
+  if (typeof data.detail === "string") return data.detail;
+  const errors = data.errors as Record<string, string[]> | undefined;
+  if (errors) {
+    const first = Object.entries(errors)[0];
+    if (first) return `${first[0]} : ${first[1][0]}`;
+  }
+  return fallback;
+}
 
 export function AdminConnectorsPage() {
   const { user, activeTenant } = useAuth();
   const qc = useQueryClient();
-  const needsTenant = user?.is_group_level && !activeTenant;
+  const needsTenant = Boolean(user?.is_group_level && !activeTenant);
 
-  const [form, setForm] = useState({
-    name: "",
-    protocol: "REST",
-    base_url: "",
-    timeout_seconds: 30,
-    max_retries: 3,
-    auth_username: "",
-    auth_password: "",
-    auth_token: "",
-    auth_token_url: "",
-    adh_situation_path: "gateway-perfect/adh/situation",
-    sim_loan_settled: true,
-    sim_client_outstanding: "1000000",
-  });
+  const [showForm, setShowForm] = useState(false);
+  const [editing, setEditing] = useState<CbsConnector | null>(null);
+  const [form, setForm] = useState<ConnectorForm>({ ...EMPTY_FORM });
   const [error, setError] = useState<string | null>(null);
+  const [testMsg, setTestMsg] = useState<string | null>(null);
 
   const connectors = useQuery({
     queryKey: ["cbs-connectors", activeTenant],
     queryFn: async () =>
-      (await api.get<Paginated<CbsConnector>>("/cbs-connectors/")).data,
+      (
+        await api.get<Paginated<CbsConnector>>("/cbs-connectors/", {
+          params: { page_size: 100 },
+        })
+      ).data,
     enabled: !needsTenant,
   });
 
+  const invalidate = () =>
+    qc.invalidateQueries({ queryKey: ["cbs-connectors"] });
+
   const create = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post(
+          "/cbs-connectors/",
+          buildPayload(form, { includeAuth: true }),
+        )
+      ).data,
+    onSuccess: () => {
+      invalidate();
+      setShowForm(false);
+      setForm({ ...EMPTY_FORM });
+      setError(null);
+    },
+    onError: (err) =>
+      setError(
+        apiErrorMessage(err, "Création impossible. Vérifiez les champs."),
+      ),
+  });
+
+  const patch = useMutation({
     mutationFn: async () => {
-      const auth_config: Record<string, string> = {};
-      if (form.auth_username) auth_config.username = form.auth_username;
-      if (form.auth_password) auth_config.password = form.auth_password;
-      if (form.auth_token) auth_config.access_token = form.auth_token;
-      if (form.auth_token_url) auth_config.token_url = form.auth_token_url;
-      const mapping_rules = {
-        endpoints: {
-          adh_situation:
-            form.adh_situation_path.trim() ||
-            "gateway-perfect/adh/situation",
-        },
-        simulate: {
-          loan_settled_default: form.sim_loan_settled,
-          client_outstanding_default: form.sim_client_outstanding,
-        },
-      };
+      if (!editing) throw new Error("missing");
+      const hasAuth =
+        Boolean(form.auth_username.trim()) ||
+        Boolean(form.auth_password) ||
+        Boolean(form.auth_token.trim());
       return (
-        await api.post("/cbs-connectors/", {
-          name: form.name,
-          protocol: form.protocol,
-          base_url: form.base_url,
-          timeout_seconds: form.timeout_seconds,
-          max_retries: form.max_retries,
-          auth_config,
-          mapping_rules,
-          is_active: true,
-        })
+        await api.patch(
+          `/cbs-connectors/${editing.id}/`,
+          buildPayload(form, { includeAuth: hasAuth }),
+        )
       ).data;
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["cbs-connectors"] });
-      setForm({
-        ...form,
-        name: "",
-        base_url: "",
-        auth_username: "",
-        auth_password: "",
-        auth_token: "",
-        auth_token_url: "",
-      });
+      invalidate();
+      setEditing(null);
+      setShowForm(false);
+      setForm({ ...EMPTY_FORM });
       setError(null);
     },
-    onError: () => setError("Création impossible. Vérifiez les champs."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Mise à jour impossible.")),
   });
+
+  const toggleActive = useMutation({
+    mutationFn: async (c: CbsConnector) =>
+      (
+        await api.patch(`/cbs-connectors/${c.id}/`, {
+          is_active: !c.is_active,
+        })
+      ).data,
+    onSuccess: () => invalidate(),
+  });
+
+  const testPing = useMutation({
+    mutationFn: async (id: string) =>
+      (
+        await api.post(`/cbs-connectors/${id}/test_operation/`, {
+          operation: "PING",
+          payload: {},
+        })
+      ).data as { status?: string; error_message?: string },
+    onSuccess: (log) => {
+      setTestMsg(
+        log.status === "SUCCESS"
+          ? "Test PING réussi."
+          : `Test PING : ${log.status || "échec"}${
+              log.error_message ? ` — ${log.error_message}` : ""
+            }`,
+      );
+    },
+    onError: (err) =>
+      setTestMsg(apiErrorMessage(err, "Échec du test PING.")),
+  });
+
+  const formOpen = showForm || Boolean(editing);
+  const pending = create.isPending || patch.isPending;
+
+  function openCreate() {
+    setEditing(null);
+    setForm({ ...EMPTY_FORM });
+    setShowForm(true);
+    setError(null);
+    setTestMsg(null);
+  }
+
+  function openEdit(c: CbsConnector) {
+    setShowForm(false);
+    setEditing(c);
+    setForm(formFromConnector(c));
+    setError(null);
+    setTestMsg(null);
+  }
+
+  function closeForm() {
+    setShowForm(false);
+    setEditing(null);
+    setForm({ ...EMPTY_FORM });
+    setError(null);
+  }
+
+  function onSubmit(e: FormEvent) {
+    e.preventDefault();
+    if (editing) patch.mutate();
+    else create.mutate();
+  }
 
   if (needsTenant) {
     return (
-    <div className="page-shell">
+      <div className="page-shell">
         <PageHeader
           icon={Cable}
           title="Connecteurs Core Banking"
@@ -108,182 +397,444 @@ export function AdminConnectorsPage() {
       <PageHeader
         icon={Cable}
         title="Connecteurs Core Banking"
-        subtitle="Chaque filiale configure son CBS (auth, mapping, simulation)"
+        subtitle="API Perfect : authentification, situation adhérent, décaissement crédit"
+        actions={
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={() => (formOpen ? closeForm() : openCreate())}
+          >
+            {formOpen ? <X size={16} /> : <Plus size={16} />}
+            {formOpen ? "Fermer" : "Nouveau connecteur Perfect"}
+          </button>
+        }
       />
 
-      <form
-        className="inline-form"
-        onSubmit={(e: FormEvent) => {
-          e.preventDefault();
-          create.mutate();
-        }}
-      >
-        <div className="form-grid">
-          <label className="field">
-            <span>Nom</span>
-            <input
-              value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
-              required
-            />
-          </label>
-          <label className="field">
-            <span>Protocole</span>
-            <select
-              value={form.protocol}
-              onChange={(e) => setForm({ ...form, protocol: e.target.value })}
-            >
-              {PROTOCOLS.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>URL de base</span>
-            <input
-              value={form.base_url}
-              onChange={(e) => setForm({ ...form, base_url: e.target.value })}
-              placeholder="https://cbs.filiale.local/api"
-            />
-          </label>
-          <label className="field">
-            <span>Timeout (s)</span>
-            <input
-              type="number"
-              value={form.timeout_seconds}
-              onChange={(e) =>
-                setForm({ ...form, timeout_seconds: Number(e.target.value) })
-              }
-            />
-          </label>
-          <label className="field">
-            <span>Tentatives max</span>
-            <input
-              type="number"
-              value={form.max_retries}
-              onChange={(e) =>
-                setForm({ ...form, max_retries: Number(e.target.value) })
-              }
-            />
-          </label>
-          <label className="field">
-            <span>Auth — utilisateur</span>
-            <input
-              value={form.auth_username}
-              onChange={(e) =>
-                setForm({ ...form, auth_username: e.target.value })
-              }
-              autoComplete="off"
-            />
-          </label>
-          <label className="field">
-            <span>Auth — mot de passe</span>
-            <input
-              type="password"
-              value={form.auth_password}
-              onChange={(e) =>
-                setForm({ ...form, auth_password: e.target.value })
-              }
-              autoComplete="new-password"
-            />
-          </label>
-          <label className="field">
-            <span>Auth — access token (Bearer)</span>
-            <input
-              type="password"
-              value={form.auth_token}
-              onChange={(e) =>
-                setForm({ ...form, auth_token: e.target.value })
-              }
-              placeholder="Optionnel si token_url renseigné"
-              autoComplete="off"
-            />
-          </label>
-          <label className="field">
-            <span>Auth — URL token OAuth</span>
-            <input
-              value={form.auth_token_url}
-              onChange={(e) =>
-                setForm({ ...form, auth_token_url: e.target.value })
-              }
-              placeholder="https://…/oauth/token"
-            />
-          </label>
-          <label className="field">
-            <span>Endpoint situation adhérent</span>
-            <input
-              value={form.adh_situation_path}
-              onChange={(e) =>
-                setForm({ ...form, adh_situation_path: e.target.value })
-              }
-              placeholder="gateway-perfect/adh/situation"
-            />
-          </label>
-          <label className="field">
-            <span>Simulation — prêt soldé par défaut</span>
-            <select
-              value={form.sim_loan_settled ? "1" : "0"}
-              onChange={(e) =>
-                setForm({
-                  ...form,
-                  sim_loan_settled: e.target.value === "1",
-                })
-              }
-            >
-              <option value="1">Oui (main levée possible)</option>
-              <option value="0">Non (blocage main levée)</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Simulation — encours client défaut</span>
-            <input
-              value={form.sim_client_outstanding}
-              onChange={(e) =>
-                setForm({ ...form, sim_client_outstanding: e.target.value })
-              }
-            />
-          </label>
+      {testMsg && (
+        <div className="form-hint" style={{ marginBottom: 12 }}>
+          {testMsg}
         </div>
-        {error && <div className="form-error">{error}</div>}
-        <button className="btn btn-primary btn-sm" disabled={create.isPending}>
-          Ajouter le connecteur
-        </button>
-      </form>
+      )}
+
+      {formOpen && (
+        <form className="tenant-compose-form" onSubmit={onSubmit}>
+          <div className="form-section-head">
+            <div className="form-section-icon">
+              <PlugZap size={18} />
+            </div>
+            <div className="form-section-heading">
+              <div className="form-section-title">
+                {editing
+                  ? "Modifier le connecteur"
+                  : "Nouveau connecteur Perfect"}
+              </div>
+              <div className="form-section-desc">
+                Prérempli avec les endpoints gateway-perfect. Renseignez l’URL
+                serveur et les identifiants API pour le mode CBS.
+              </div>
+            </div>
+          </div>
+
+          <div className="form-section-head" style={{ marginTop: 8 }}>
+            <div className="form-section-icon">
+              <Settings2 size={18} />
+            </div>
+            <div className="form-section-heading">
+              <div className="form-section-title">Connexion</div>
+            </div>
+          </div>
+          <div className="form-grid">
+            <label className="field">
+              <span>Nom *</span>
+              <input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Protocole</span>
+              <select
+                value={form.protocol}
+                onChange={(e) =>
+                  setForm({ ...form, protocol: e.target.value })
+                }
+              >
+                <option value="REST">REST (Perfect)</option>
+                <option value="SOAP">SOAP</option>
+                <option value="SFTP">SFTP</option>
+                <option value="BATCH">BATCH</option>
+              </select>
+            </label>
+            <label className="field full-span">
+              <span>URL de base Perfect</span>
+              <input
+                value={form.base_url}
+                onChange={(e) =>
+                  setForm({ ...form, base_url: e.target.value })
+                }
+                placeholder="https://serveur-api"
+              />
+            </label>
+            <label className="field">
+              <span>Timeout (s)</span>
+              <input
+                type="number"
+                min={1}
+                value={form.timeout_seconds}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    timeout_seconds: Number(e.target.value) || 30,
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Tentatives max</span>
+              <input
+                type="number"
+                min={0}
+                value={form.max_retries}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    max_retries: Number(e.target.value) || 0,
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>Actif</span>
+              <select
+                value={form.is_active ? "1" : "0"}
+                onChange={(e) =>
+                  setForm({ ...form, is_active: e.target.value === "1" })
+                }
+              >
+                <option value="1">Oui</option>
+                <option value="0">Non</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Mode décaissement</span>
+              <select
+                value={form.disburse_mode}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    disburse_mode: e.target.value as "LOCAL" | "CBS",
+                  })
+                }
+              >
+                <option value="LOCAL">LOCAL — simulation (démo)</option>
+                <option value="CBS">CBS — POST Perfect crd/simple</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="form-section-head" style={{ marginTop: 12 }}>
+            <div className="form-section-icon">
+              <KeyRound size={18} />
+            </div>
+            <div className="form-section-heading">
+              <div className="form-section-title">Authentification Perfect</div>
+              <div className="form-section-desc">
+                POST form-urlencoded → accessToken (scope = perfect). En
+                modification, laissez vide pour conserver les secrets
+                existants.
+              </div>
+            </div>
+          </div>
+          <div className="form-grid">
+            <label className="field">
+              <span>Utilisateur API</span>
+              <input
+                value={form.auth_username}
+                onChange={(e) =>
+                  setForm({ ...form, auth_username: e.target.value })
+                }
+                autoComplete="off"
+                placeholder="username"
+              />
+            </label>
+            <label className="field">
+              <span>Mot de passe API</span>
+              <input
+                type="password"
+                value={form.auth_password}
+                onChange={(e) =>
+                  setForm({ ...form, auth_password: e.target.value })
+                }
+                autoComplete="new-password"
+              />
+            </label>
+            <label className="field">
+              <span>Scope</span>
+              <input
+                value={form.auth_scope}
+                onChange={(e) =>
+                  setForm({ ...form, auth_scope: e.target.value })
+                }
+                placeholder="perfect"
+              />
+            </label>
+            <label className="field">
+              <span>Access token (optionnel)</span>
+              <input
+                type="password"
+                value={form.auth_token}
+                onChange={(e) =>
+                  setForm({ ...form, auth_token: e.target.value })
+                }
+                placeholder="Sinon obtenu via /authentification"
+                autoComplete="off"
+              />
+            </label>
+          </div>
+
+          <div className="form-section-head" style={{ marginTop: 12 }}>
+            <div className="form-section-icon">
+              <Radio size={18} />
+            </div>
+            <div className="form-section-heading">
+              <div className="form-section-title">Endpoints gateway-perfect</div>
+              <div className="form-section-desc">
+                Chemins relatifs à l’URL de base (modifiables si besoin).
+              </div>
+            </div>
+          </div>
+          <div className="form-grid">
+            <label className="field full-span">
+              <span>Authentification</span>
+              <input
+                value={form.auth_path}
+                onChange={(e) =>
+                  setForm({ ...form, auth_path: e.target.value })
+                }
+              />
+            </label>
+            <label className="field full-span">
+              <span>Situation adhérent</span>
+              <input
+                value={form.adh_situation_path}
+                onChange={(e) =>
+                  setForm({ ...form, adh_situation_path: e.target.value })
+                }
+              />
+            </label>
+            <label className="field full-span">
+              <span>Décaissement crédit (crd/simple)</span>
+              <input
+                value={form.crd_simple_path}
+                onChange={(e) =>
+                  setForm({ ...form, crd_simple_path: e.target.value })
+                }
+              />
+            </label>
+            <label className="field full-span">
+              <span>Situation crédit (crd/situation)</span>
+              <input
+                value={form.crd_situation_path}
+                onChange={(e) =>
+                  setForm({ ...form, crd_situation_path: e.target.value })
+                }
+              />
+            </label>
+          </div>
+
+          <div className="form-section-head" style={{ marginTop: 12 }}>
+            <div className="form-section-heading">
+              <div className="form-section-title">
+                Défauts décaissement Perfect
+              </div>
+              <div className="form-section-desc">
+                Utilisés si agence / utilisateur / produit n’ont pas de code
+                CBS.
+              </div>
+            </div>
+          </div>
+          <div className="form-grid">
+            <label className="field">
+              <span>idPointService</span>
+              <input
+                value={form.id_point_service}
+                onChange={(e) =>
+                  setForm({ ...form, id_point_service: e.target.value })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>idGestionnaire</span>
+              <input
+                value={form.id_gestionnaire}
+                onChange={(e) =>
+                  setForm({ ...form, id_gestionnaire: e.target.value })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>idProduitRemb</span>
+              <input
+                value={form.id_produit_remb}
+                onChange={(e) =>
+                  setForm({ ...form, id_produit_remb: e.target.value })
+                }
+              />
+            </label>
+          </div>
+
+          {form.disburse_mode === "LOCAL" && (
+            <>
+              <div className="form-section-head" style={{ marginTop: 12 }}>
+                <div className="form-section-heading">
+                  <div className="form-section-title">
+                    Simulation (mode LOCAL)
+                  </div>
+                </div>
+              </div>
+              <div className="form-grid">
+                <label className="field">
+                  <span>Prêt soldé par défaut</span>
+                  <select
+                    value={form.sim_loan_settled ? "1" : "0"}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        sim_loan_settled: e.target.value === "1",
+                      })
+                    }
+                  >
+                    <option value="1">Oui (main levée possible)</option>
+                    <option value="0">Non (blocage main levée)</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Encours client défaut</span>
+                  <input
+                    value={form.sim_client_outstanding}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        sim_client_outstanding: e.target.value,
+                      })
+                    }
+                  />
+                </label>
+              </div>
+            </>
+          )}
+
+          {error && <div className="form-error">{error}</div>}
+
+          <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+            <button className="btn btn-primary" disabled={pending} type="submit">
+              <Save size={16} />
+              {editing ? "Enregistrer" : "Créer le connecteur Perfect"}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={closeForm}
+              disabled={pending}
+            >
+              Annuler
+            </button>
+          </div>
+        </form>
+      )}
 
       {connectors.isLoading || !connectors.data ? (
         <Spinner />
       ) : connectors.data.results.length === 0 ? (
-        <EmptyState message="Aucun connecteur configuré." />
+        <EmptyState message="Aucun connecteur. Créez un connecteur Perfect pour la filiale." />
       ) : (
         <table className="table card">
           <thead>
             <tr>
               <th>Nom</th>
-              <th>Protocole</th>
+              <th>Provider</th>
+              <th>Mode</th>
               <th>URL</th>
-              <th className="num">Timeout</th>
-              <th className="num">Retries</th>
+              <th>Endpoints</th>
               <th>Actif</th>
+              <th />
             </tr>
           </thead>
           <tbody>
-            {connectors.data.results.map((c) => (
-              <tr key={c.id}>
-                <td>{c.name}</td>
-                <td>{c.protocol}</td>
-                <td className="muted small">{c.base_url}</td>
-                <td className="num">{c.timeout_seconds}s</td>
-                <td className="num">{c.max_retries}</td>
-                <td>
-                  <Badge
-                    value={c.is_active ? "ACTIVE" : "DRAFT"}
-                    label={c.is_active ? "Oui" : "Non"}
-                  />
-                </td>
-              </tr>
-            ))}
+            {connectors.data.results.map((c) => {
+              const endpoints = asRecord(asRecord(c.mapping_rules).endpoints);
+              const authPath = str(endpoints.authentification, "—");
+              const crdPath = str(endpoints.crd_simple, "—");
+              const mode = connectorMode(c);
+              return (
+                <tr key={c.id}>
+                  <td>
+                    <strong>{c.name}</strong>
+                    <div className="muted small">{c.protocol}</div>
+                  </td>
+                  <td>
+                    <Badge
+                      value={
+                        connectorProvider(c) === "perfect" ? "ACTIVE" : "DRAFT"
+                      }
+                      label={connectorProvider(c)}
+                    />
+                  </td>
+                  <td>
+                    <Badge
+                      value={mode === "CBS" ? "ACTIVE" : "PENDING"}
+                      label={mode}
+                    />
+                  </td>
+                  <td className="muted small" style={{ maxWidth: 220 }}>
+                    {c.base_url || <em>URL à renseigner</em>}
+                  </td>
+                  <td className="muted small">
+                    <div title={authPath}>{authPath}</div>
+                    <div title={crdPath}>{crdPath}</div>
+                  </td>
+                  <td>
+                    <Badge
+                      value={c.is_active ? "ACTIVE" : "DRAFT"}
+                      label={c.is_active ? "Oui" : "Non"}
+                    />
+                  </td>
+                  <td>
+                    <div
+                      style={{ display: "flex", gap: 6, flexWrap: "wrap" }}
+                    >
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => openEdit(c)}
+                      >
+                        Modifier
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => toggleActive.mutate(c)}
+                        disabled={toggleActive.isPending}
+                      >
+                        {c.is_active ? "Désactiver" : "Activer"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => {
+                          setTestMsg(null);
+                          testPing.mutate(c.id);
+                        }}
+                        disabled={testPing.isPending}
+                      >
+                        Test PING
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       )}

@@ -4,6 +4,7 @@ from .models import (
     AnalysisThreshold,
     CreditApplication,
     CreditDocument,
+    CreditInstructionPolicy,
     FieldVisit,
     FinancialAnalysis,
     Installment,
@@ -81,3 +82,16 @@ class AnalysisThresholdAdmin(admin.ModelAdmin):
         "haircut_financial_deposit", "haircut_financial_security",
         "haircut_other",
     ]
+
+
+@admin.register(CreditInstructionPolicy)
+class CreditInstructionPolicyAdmin(admin.ModelAdmin):
+    list_display = [
+        "tenant",
+        "collateral_coverage_mode",
+        "require_field_visit",
+        "kyc_gate",
+        "amount_approved_mode",
+        "enable_cancel_status",
+    ]
+    list_filter = ["tenant", "collateral_coverage_mode"]

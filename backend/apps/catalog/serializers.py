@@ -3,8 +3,11 @@ from rest_framework import serializers
 from .models import (
     ChecklistItem,
     CreditProduct,
+    Currency,
+    LoanPeriodicity,
     ProductCategory,
     RejectReason,
+    RepaymentMethod,
 )
 
 
@@ -24,7 +27,9 @@ class CreditProductSerializer(serializers.ModelSerializer):
             "id", "code", "label", "description", "category", "category_label",
             "client_type", "currency", "amount_min", "amount_max",
             "duration_min_months", "duration_max_months", "interest_rate",
-            "processing_fee_rate", "requires_guarantee", "is_active",
+            "processing_fee_rate", "requires_guarantee",
+            "cbs_product_code", "cbs_repayment_product_code",
+            "is_active",
         ]
         read_only_fields = ["id"]
 
@@ -42,6 +47,36 @@ class RejectReasonSerializer(serializers.ModelSerializer):
     class Meta:
         model = RejectReason
         fields = ["id", "code", "label", "description", "is_active"]
+        read_only_fields = ["id"]
+
+
+class LoanPeriodicitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = LoanPeriodicity
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "periods_per_year", "sort_order", "is_active",
+        ]
+        read_only_fields = ["id"]
+
+
+class RepaymentMethodSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RepaymentMethod
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "sort_order", "is_active",
+        ]
+        read_only_fields = ["id"]
+
+
+class CurrencySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Currency
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "sort_order", "is_active",
+        ]
         read_only_fields = ["id"]
 
 

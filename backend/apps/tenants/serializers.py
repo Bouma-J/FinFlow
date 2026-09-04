@@ -107,6 +107,30 @@ class TenantSerializer(serializers.ModelSerializer):
         return tenant
 
 
+class PublicTenantBrandingSerializer(serializers.ModelSerializer):
+    """Données publiques pour l'écran de connexion (logo + charte)."""
+
+    logo_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Tenant
+        fields = [
+            "id",
+            "code",
+            "name",
+            "logo_url",
+            "brand_primary",
+            "brand_secondary",
+            "brand_accent",
+        ]
+        read_only_fields = fields
+
+    def get_logo_url(self, obj):
+        from apps.common.storage_urls import tenant_logo_url
+
+        return tenant_logo_url(obj, self.context.get("request"))
+
+
 class AgencySerializer(serializers.ModelSerializer):
     manager_display_name = serializers.CharField(read_only=True)
 
@@ -117,6 +141,7 @@ class AgencySerializer(serializers.ModelSerializer):
             "address", "is_active",
             "manager_last_name", "manager_first_name", "manager_phone",
             "manager_display_name",
+            "cbs_point_of_service_id",
             "created_at", "updated_at",
         ]
         read_only_fields = [

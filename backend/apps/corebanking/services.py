@@ -14,6 +14,10 @@ from decimal import Decimal, InvalidOperation
 from django.db import transaction
 
 from .models import CoreBankingConnector, IntegrationLog
+from .perfect_defaults import (
+    DEFAULT_AUTH_SCOPE,
+    PERFECT_ENDPOINTS,
+)
 
 logger = logging.getLogger("finflow")
 
@@ -27,9 +31,13 @@ OP_PING = "PING"
 OP_GET_LOAN_STATUS = "GET_LOAN_STATUS"
 OP_GET_CLIENT_OUTSTANDING = "GET_CLIENT_OUTSTANDING"
 OP_GET_CLIENT_SITUATION = "GET_CLIENT_SITUATION"
+OP_SUBMIT_CREDIT = "SUBMIT_CREDIT"
 
-# Chemin Perfect API (modifiable via mapping_rules.endpoints.adh_situation).
-DEFAULT_ADH_SITUATION_PATH = "gateway-perfect/adh/situation"
+# Chemins Perfect API (modifiables via mapping_rules.endpoints).
+DEFAULT_AUTH_PATH = PERFECT_ENDPOINTS["authentification"]
+DEFAULT_ADH_SITUATION_PATH = PERFECT_ENDPOINTS["adh_situation"]
+DEFAULT_CRD_SIMPLE_PATH = PERFECT_ENDPOINTS["crd_simple"]
+DEFAULT_CRD_SITUATION_PATH = PERFECT_ENDPOINTS["crd_situation"]
 
 
 class BaseAdapter:
@@ -84,7 +92,28 @@ class SimulatedAdapter(BaseAdapter):
                 "outstanding": str(outstanding),
                 "currency": payload.get("currency") or "XOF",
                 "external_reference": f"CBS-LOAN-{loan_ref or 'NA'}",
-                "raw": {"simulated": True, "loan_ref": loan_ref},
+                "schedule": [],
+                "raw": {
+                    "simulated": True,
+                    "loan_ref": loan_ref,
+                    "responseCode": 200,
+                    "refDemande": loan_ref,
+                    "datas": (
+                        []
+                        if settled
+                        else [
+                            {
+                                "echeance": 1,
+                                "date": "2026-01-15",
+                                "montantCapital": float(outstanding),
+                                "montantInteret": 0,
+                                "montantTotal": float(outstanding),
+                                "statut": "En attente",
+                            }
+                        ]
+                    ),
+                    "context": "CREDIT SITUATION",
+                },
             }
 
         if operation == OP_GET_CLIENT_OUTSTANDING:
@@ -108,9 +137,54 @@ class SimulatedAdapter(BaseAdapter):
         if operation == OP_GET_CLIENT_SITUATION:
             return self._simulate_client_situation(payload, simulate)
 
+        if operation == OP_SUBMIT_CREDIT:
+            return self._simulate_submit_credit(payload, simulate)
+
         return {
             "status": "ACK",
             "external_reference": f"CBS-{payload.get('reference', '')}",
+        }
+
+    def _simulate_submit_credit(self, payload: dict, simulate: dict) -> dict:
+        external_id = str(payload.get("externalId") or "EXT").strip()
+        failures = {
+            str(x).strip() for x in (simulate.get("credit_fail_external_ids") or [])
+        }
+        if external_id in failures or simulate.get("credit_submit_fail"):
+            raise CoreBankingError(
+                str(
+                    simulate.get("credit_fail_message")
+                    or "Limite de crédit insuffisante !"
+                )
+            )
+        amount = payload.get("montantDemande") or 0
+        currency = payload.get("codeDevise") or "XOF"
+        num_contrat = f"CONTRAT-SIM-{external_id}"
+        raw = {
+            "responseCode": 200,
+            "message": "Opération effectuée avec succès ! (simulé)",
+            "externalId": external_id,
+            "numDemande": f"DEM-{external_id[-6:]}",
+            "refDemande": f"REF-{external_id}",
+            "numContrat": num_contrat,
+            "limitCredit": float(
+                simulate.get("credit_limit_default", max(float(amount) * 1.5, 1))
+            ),
+            "montant": float(amount),
+            "codeDevise": currency,
+            "dateOperation": str(simulate.get("credit_date") or "2026-01-15"),
+            "context": "CREDIT DE LA DEMANDE JUSQU'AU DEBLOQUAGE",
+            "simulated": True,
+        }
+        return {
+            "status": "ACK",
+            "external_reference": num_contrat,
+            "num_demande": raw["numDemande"],
+            "ref_demande": raw["refDemande"],
+            "num_contrat": num_contrat,
+            "limit_credit": raw["limitCredit"],
+            "montant": raw["montant"],
+            "raw": raw,
         }
 
     def _simulate_client_situation(self, payload: dict, simulate: dict) -> dict:
@@ -171,11 +245,18 @@ class SimulatedAdapter(BaseAdapter):
 class RestAdapter(BaseAdapter):
     """Adaptateur REST (API Perfect / gateway).
 
-    Auth : ``auth_config.access_token`` / ``token`` / ``bearer_token``,
-    ou obtention via ``auth_config.token_url`` (client_credentials / password).
+    Auth Perfect (prioritaire) :
+    - jeton statique ``auth_config.access_token`` / ``accessToken`` / ``token``, ou
+    - ``POST …/gateway-perfect/authentification`` (form-urlencoded :
+      ``username``, ``password``, ``scope=perfect``) → ``accessToken``.
+
+    Compat OAuth legacy : ``token_url`` + ``grant_type`` (client_credentials).
 
     Endpoints configurables dans ``mapping_rules.endpoints`` :
+    - ``authentification`` (défaut ``gateway-perfect/authentification``)
     - ``adh_situation`` (défaut ``gateway-perfect/adh/situation``)
+    - ``crd_simple`` (défaut ``gateway-perfect/crd/simple``)
+    - ``crd_situation`` (défaut ``gateway-perfect/crd/situation``)
     """
 
     def send(self, operation: str, payload: dict) -> dict:
@@ -186,8 +267,187 @@ class RestAdapter(BaseAdapter):
             }
         if operation == OP_GET_CLIENT_SITUATION:
             return self._adh_situation(payload)
+        if operation == OP_SUBMIT_CREDIT:
+            return self._crd_simple(payload)
+        if operation == OP_GET_LOAN_STATUS:
+            return self._crd_situation(payload)
         # Autres ops REST : non encore branchées → simulation locale.
         return SimulatedAdapter(self.connector).send(operation, payload)
+
+    def _crd_situation(self, payload: dict) -> dict:
+        """POST Perfect ``crd/situation`` → solde / échéancier crédit."""
+        import requests
+
+        ref = str(
+            payload.get("refDemande")
+            or payload.get("loan_ref")
+            or payload.get("ref_demande")
+            or ""
+        ).strip()
+        if not ref:
+            raise CoreBankingError(
+                "Référence demande crédit CBS (refDemande) manquante."
+            )
+
+        body = {"refDemande": ref}
+        for src, dest in (
+            ("codeAdherent", "codeAdherent"),
+            ("cbs_client_id", "codeAdherent"),
+            ("numManuel", "numManuel"),
+            ("numPieceIdentite", "numPieceIdentite"),
+        ):
+            value = str(payload.get(src) or "").strip()
+            if value and dest not in body:
+                body[dest] = value
+
+        url = self._build_url(
+            self._endpoint("crd_situation", DEFAULT_CRD_SITUATION_PATH)
+        )
+        token = self._resolve_bearer_token()
+        timeout = self.connector.timeout_seconds or 30
+        try:
+            resp = requests.post(
+                url,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise CoreBankingError(
+                f"Impossible de joindre le CBS (situation crédit) ({exc})."
+            ) from exc
+
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise CoreBankingError(
+                f"Réponse CBS non JSON (HTTP {resp.status_code})."
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise CoreBankingError("Réponse CBS situation crédit invalide.")
+
+        code_http = int(data.get("responseCode") or resp.status_code or 0)
+        if resp.status_code >= 400 or code_http >= 400:
+            raise CoreBankingError(
+                str(
+                    data.get("message")
+                    or f"Échec situation crédit CBS (HTTP {resp.status_code})."
+                )
+            )
+
+        settled, outstanding = _normalize_credit_schedule(data)
+        currency = (
+            str(data.get("codeDevise") or payload.get("currency") or "XOF")
+            .strip()
+            .upper()
+        )
+        external = str(
+            data.get("numContrat")
+            or data.get("refDemande")
+            or data.get("numDemande")
+            or ref
+        ).strip()
+        return {
+            "status": "ACK",
+            "settled": settled,
+            "outstanding": str(outstanding),
+            "currency": currency,
+            "external_reference": external,
+            "num_demande": str(data.get("numDemande") or ""),
+            "ref_demande": str(data.get("refDemande") or ref),
+            "num_contrat": str(data.get("numContrat") or ""),
+            "montant": data.get("montant"),
+            "schedule": data.get("datas") or [],
+            "raw": data,
+        }
+
+    def _crd_simple(self, payload: dict) -> dict:
+        import requests
+
+        required = [
+            "externalId",
+            "callbackUrl",
+            "idPointService",
+            "idPeriodicite",
+            "taux",
+            "nombreEcheance",
+            "idObjetFinancement",
+            "idGestionnaire",
+            "idProduitCrd",
+            "idProduitRemb",
+            "montantDemande",
+            "codeDevise",
+        ]
+        missing = [k for k in required if payload.get(k) in (None, "")]
+        if missing:
+            raise CoreBankingError(
+                "Payload décaissement CBS incomplet : " + ", ".join(missing)
+            )
+        if not (
+            payload.get("codeAdherent")
+            or payload.get("numManuel")
+            or payload.get("numPieceIdentite")
+        ):
+            raise CoreBankingError(
+                "Au moins un identifiant adhérent est requis "
+                "(codeAdherent, numManuel ou numPieceIdentite)."
+            )
+
+        url = self._build_url(
+            self._endpoint("crd_simple", DEFAULT_CRD_SIMPLE_PATH)
+        )
+        token = self._resolve_bearer_token()
+        timeout = self.connector.timeout_seconds or 30
+        try:
+            resp = requests.post(
+                url,
+                json=payload,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise CoreBankingError(
+                f"Impossible de joindre le CBS pour le décaissement ({exc})."
+            ) from exc
+
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise CoreBankingError(
+                f"Réponse CBS non JSON (HTTP {resp.status_code})."
+            ) from exc
+
+        if not isinstance(data, dict):
+            raise CoreBankingError("Réponse CBS décaissement invalide.")
+
+        code_http = int(data.get("responseCode") or resp.status_code or 0)
+        if resp.status_code >= 400 or code_http >= 400:
+            raise CoreBankingError(
+                str(
+                    data.get("message")
+                    or f"Échec décaissement CBS (HTTP {resp.status_code})."
+                )
+            )
+
+        num_contrat = str(data.get("numContrat") or "").strip()
+        return {
+            "status": "ACK",
+            "external_reference": num_contrat
+            or str(data.get("refDemande") or payload.get("externalId") or ""),
+            "num_demande": str(data.get("numDemande") or ""),
+            "ref_demande": str(data.get("refDemande") or ""),
+            "num_contrat": num_contrat,
+            "limit_credit": data.get("limitCredit"),
+            "montant": data.get("montant"),
+            "raw": data,
+        }
 
     def _adh_situation(self, payload: dict) -> dict:
         import requests
@@ -266,21 +526,89 @@ class RestAdapter(BaseAdapter):
         return f"{base}/{path}"
 
     def _resolve_bearer_token(self) -> str:
-        import requests
-
         auth = self.connector.auth_config or {}
-        for key in ("access_token", "token", "bearer_token"):
+        for key in ("access_token", "accessToken", "token", "bearer_token"):
             value = str(auth.get(key) or "").strip()
             if value:
                 return value
 
-        token_url = str(auth.get("token_url") or "").strip()
-        if not token_url:
-            raise CoreBankingError(
-                "Token CBS manquant : renseignez access_token (ou token) "
-                "dans l'authentification du connecteur, ou un token_url."
-            )
+        username = str(auth.get("username") or "").strip()
+        password = str(auth.get("password") or "")
+        # Flux Perfect documenté : username + password + scope=perfect.
+        if username and password:
+            return self._fetch_perfect_access_token(username, password)
 
+        token_url = str(auth.get("token_url") or "").strip()
+        if token_url:
+            return self._fetch_oauth_access_token(token_url)
+
+        raise CoreBankingError(
+            "Authentification CBS manquante : renseignez username/password "
+            "(Perfect POST …/authentification), ou un access_token / token_url."
+        )
+
+    def _auth_url(self) -> str:
+        """URL d'authentification Perfect (token_url override ou endpoint défaut)."""
+        auth = self.connector.auth_config or {}
+        explicit = str(auth.get("token_url") or "").strip()
+        if explicit:
+            return explicit
+        return self._build_url(
+            self._endpoint("authentification", DEFAULT_AUTH_PATH)
+        )
+
+    def _fetch_perfect_access_token(self, username: str, password: str) -> str:
+        """POST form-urlencoded → accessToken (doc Perfect authentification)."""
+        import requests
+
+        auth = self.connector.auth_config or {}
+        scope = str(auth.get("scope") or DEFAULT_AUTH_SCOPE).strip() or DEFAULT_AUTH_SCOPE
+        url = self._auth_url()
+        timeout = self.connector.timeout_seconds or 30
+        try:
+            resp = requests.post(
+                url,
+                data={
+                    "username": username,
+                    "password": password,
+                    "scope": scope,
+                },
+                headers={
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+                timeout=timeout,
+            )
+            payload = resp.json() if resp.content else {}
+        except (requests.RequestException, ValueError) as exc:
+            raise CoreBankingError(
+                f"Échec d'authentification Perfect ({exc})."
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise CoreBankingError("Réponse d'authentification Perfect invalide.")
+
+        token = str(
+            payload.get("accessToken")
+            or payload.get("access_token")
+            or payload.get("token")
+            or ""
+        ).strip()
+        if resp.status_code >= 400 or not token:
+            raise CoreBankingError(
+                str(
+                    payload.get("error_description")
+                    or payload.get("error")
+                    or payload.get("message")
+                    or "Impossible d'obtenir un jeton Perfect (Bad credentials ?)."
+                )
+            )
+        return token
+
+    def _fetch_oauth_access_token(self, token_url: str) -> str:
+        """Compat OAuth2 client_credentials / password (hors flux Perfect)."""
+        import requests
+
+        auth = self.connector.auth_config or {}
         timeout = self.connector.timeout_seconds or 30
         grant = str(auth.get("grant_type") or "client_credentials").strip()
         data = {"grant_type": grant}
@@ -314,7 +642,10 @@ class RestAdapter(BaseAdapter):
             ) from exc
 
         token = str(
-            payload.get("access_token") or payload.get("token") or ""
+            payload.get("access_token")
+            or payload.get("accessToken")
+            or payload.get("token")
+            or ""
         ).strip()
         if resp.status_code >= 400 or not token:
             raise CoreBankingError(
@@ -423,12 +754,87 @@ def _require_success(log: IntegrationLog, operation: str) -> dict:
     return log.response_payload or {}
 
 
-def get_loan_status(tenant_id, loan_ref, *, currency=None) -> dict:
+_PAID_STATUSES = {
+    "payee",
+    "payée",
+    "payé",
+    "paye",
+    "soldee",
+    "soldée",
+    "soldé",
+    "solde",
+    "reglee",
+    "réglée",
+    "réglé",
+    "regle",
+    "paid",
+    "settled",
+}
+
+
+def _normalize_status_token(value: str) -> str:
+    import unicodedata
+
+    raw = unicodedata.normalize("NFKD", (value or "").strip().lower())
+    return "".join(ch for ch in raw if not unicodedata.combining(ch))
+
+
+def _is_paid_schedule_status(statut: str) -> bool:
+    token = _normalize_status_token(statut)
+    if not token:
+        return False
+    if token in _PAID_STATUSES:
+        return True
+    return any(p in token for p in ("paye", "solde", "regle", "paid", "settled"))
+
+
+def _normalize_credit_schedule(data: dict) -> tuple[bool, Decimal]:
     """
-    Vérifie dans le CBS si un prêt est soldé.
+    Déduit soldé / encours depuis la réponse Perfect ``crd/situation``.
+
+    Une échéance est soldée si ``statut`` indique payée / soldée / réglée.
+    Encours = somme des ``montantTotal`` (ou capital+intérêt) non payés.
+    """
+    rows = data.get("datas")
+    if not isinstance(rows, list) or not rows:
+        # Sans échéancier : considérer non soldé sauf montant nul.
+        try:
+            montant = Decimal(str(data.get("montant") or "0"))
+        except (InvalidOperation, TypeError, ValueError):
+            montant = Decimal("0")
+        return False, montant
+
+    outstanding = Decimal("0")
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if _is_paid_schedule_status(str(row.get("statut") or "")):
+            continue
+        try:
+            if row.get("montantTotal") not in (None, ""):
+                outstanding += Decimal(str(row["montantTotal"]))
+            else:
+                outstanding += Decimal(str(row.get("montantCapital") or "0"))
+                outstanding += Decimal(str(row.get("montantInteret") or "0"))
+        except (InvalidOperation, TypeError, ValueError):
+            continue
+    return outstanding <= 0, outstanding
+
+
+def get_loan_status(
+    tenant_id,
+    loan_ref,
+    *,
+    currency=None,
+    code_adherent=None,
+    num_manuel=None,
+    num_piece_identite=None,
+) -> dict:
+    """
+    Vérifie dans le CBS si un crédit/prêt est soldé (Perfect ``crd/situation``).
 
     Retour normalisé :
-    {settled: bool, outstanding: Decimal, currency: str, raw: dict, log_id}
+    {settled, outstanding, currency, schedule, raw, log_id, …}
     """
     from apps.tenants.currency import tenant_currency
 
@@ -438,12 +844,20 @@ def get_loan_status(tenant_id, loan_ref, *, currency=None) -> dict:
             "Référence prêt CBS manquante : impossible de vérifier le solde."
         )
     currency = (currency or "").strip().upper() or tenant_currency(tenant_id)
+    op_payload = {
+        "loan_ref": loan_ref,
+        "refDemande": loan_ref,
+        "currency": currency,
+    }
+    if code_adherent:
+        op_payload["codeAdherent"] = str(code_adherent).strip()
+    if num_manuel:
+        op_payload["numManuel"] = str(num_manuel).strip()
+    if num_piece_identite:
+        op_payload["numPieceIdentite"] = str(num_piece_identite).strip()
+
     connector = resolve_active_connector(tenant_id)
-    log = send_operation(
-        connector,
-        OP_GET_LOAN_STATUS,
-        {"loan_ref": loan_ref, "currency": currency},
-    )
+    log = send_operation(connector, OP_GET_LOAN_STATUS, op_payload)
     payload = _require_success(log, OP_GET_LOAN_STATUS)
     settled = bool(payload.get("settled"))
     outstanding = _to_decimal(payload.get("outstanding", "0"), "outstanding")
@@ -451,9 +865,13 @@ def get_loan_status(tenant_id, loan_ref, *, currency=None) -> dict:
         "settled": settled,
         "outstanding": outstanding,
         "currency": payload.get("currency") or currency,
+        "schedule": payload.get("schedule") or [],
         "raw": payload.get("raw") or payload,
         "log_id": str(log.id),
         "external_reference": log.external_reference,
+        "num_demande": payload.get("num_demande") or "",
+        "ref_demande": payload.get("ref_demande") or loan_ref,
+        "num_contrat": payload.get("num_contrat") or "",
     }
 
 
@@ -492,9 +910,24 @@ def get_client_outstanding(tenant_id, cbs_client_id, *, currency=None) -> dict:
     }
 
 
-def assert_loan_settled(tenant_id, loan_ref, *, currency=None) -> dict:
+def assert_loan_settled(
+    tenant_id,
+    loan_ref,
+    *,
+    currency=None,
+    code_adherent=None,
+    num_manuel=None,
+    num_piece_identite=None,
+) -> dict:
     """Blocage strict : lève CoreBankingError si le prêt n'est pas soldé."""
-    result = get_loan_status(tenant_id, loan_ref, currency=currency)
+    result = get_loan_status(
+        tenant_id,
+        loan_ref,
+        currency=currency,
+        code_adherent=code_adherent,
+        num_manuel=num_manuel,
+        num_piece_identite=num_piece_identite,
+    )
     if not result["settled"]:
         raise CoreBankingError(
             "Main levée impossible : le prêt n'est pas soldé dans le Core Banking "

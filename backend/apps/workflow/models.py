@@ -22,6 +22,7 @@ class WorkflowDefinition(TenantScopedModel):
         CREDIT = "CREDIT", "Dossier de crédit"
         MAIN_LEVEE = "MAIN_LEVEE", "Main levée"
         DATION = "DATION", "Dation en paiement"
+        FORMALISATION = "FORMALISATION", "Formalisation de garantie"
 
     code = models.CharField("code", max_length=50)
     name = models.CharField("nom", max_length=255)

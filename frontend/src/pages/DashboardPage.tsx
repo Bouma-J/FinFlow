@@ -41,6 +41,7 @@ import {
   StatCard,
   formatMoney,
 } from "@/components/ui";
+import { useTenantBranding } from "@/hooks/useTenantBranding";
 
 const STATUS_LABELS: Record<string, string> = {
   DRAFT: "Brouillon",
@@ -300,13 +301,24 @@ function KpiSection({
   return (
     <section className="kpi-section">
       <h3 className="kpi-section-title">{title}</h3>
-      <div className="stat-grid">{children}</div>
+      <div className="stat-grid dash-kpi-grid">{children}</div>
     </section>
+  );
+}
+
+function isPresetActive(
+  filters: DashFilters,
+  key: string,
+): boolean {
+  const range = presetRange(key);
+  return (
+    filters.date_from === range.date_from && filters.date_to === range.date_to
   );
 }
 
 export function DashboardPage() {
   const { activeTenant, user } = useAuth();
+  const { tenantName, tenantCode } = useTenantBranding();
   const [filters, setFilters] = useState<DashFilters>(EMPTY_FILTERS);
 
   const scope = user?.data_scope ?? "AGENCY";
@@ -418,7 +430,11 @@ export function DashboardPage() {
       <header className="dash-hero">
         <div className="dash-hero-glow" aria-hidden />
         <div className="dash-hero-copy">
-          <p className="dash-hero-kicker">Fin Flow</p>
+          <p className="dash-hero-kicker">
+            {tenantCode
+              ? `${tenantCode} · ${tenantName}`
+              : tenantName || "Fin Flow"}
+          </p>
           <h1 className="dash-hero-title">
             {`${greeting()}, ${user?.first_name || user?.username || ""}`.trim()}
           </h1>
@@ -467,7 +483,7 @@ export function DashboardPage() {
               <button
                 key={key}
                 type="button"
-                className="dash-chip"
+                className={`dash-chip${isPresetActive(filters, key) ? " is-active" : ""}`}
                 onClick={() =>
                   setFilters((prev) => ({ ...prev, ...presetRange(key) }))
                 }
@@ -487,7 +503,7 @@ export function DashboardPage() {
             </button>
           )}
         </div>
-<div className="dash-filter-grid">
+        <div className="dash-filter-grid">
             <label className="field">
               <span>Du</span>
               <input

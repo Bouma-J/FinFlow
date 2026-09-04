@@ -6,6 +6,7 @@ import {
   PERM_CREDIT_CREATE,
   PERM_CREDITS,
   PERM_DATIONS,
+  PERM_FORMALIZATIONS,
   PERM_GUARANTEES,
   PERM_LEGAL_PARTIES,
   PERM_LITIGATION,
@@ -43,6 +44,11 @@ import {
   DationNewPage,
   DationsPage,
 } from "@/pages/DationsPage";
+import {
+  FormalizationDetailPage,
+  FormalizationNewPage,
+  FormalizationsPage,
+} from "@/pages/FormalizationsPage";
 import { CollectionsPage } from "@/pages/CollectionsPage";
 import { CollectionCaseDetailPage } from "@/pages/CollectionCaseDetailPage";
 import { LegalPartiesPage } from "@/pages/LegalPartiesPage";
@@ -62,7 +68,9 @@ import { AdminTenantsPage } from "@/pages/admin/TenantsPage";
 import { AdminConnectorsPage } from "@/pages/admin/ConnectorsPage";
 import { AdminContractsPage } from "@/pages/admin/ContractsAdminPage";
 import { AdminNotificationsPage } from "@/pages/admin/NotificationsPage";
+import { AdminCreditPolicyPage } from "@/pages/admin/CreditPolicyPage";
 import { AdminProductsPage } from "@/pages/admin/ProductsAdminPage";
+import { AdminCbsReferentialsPage } from "@/pages/admin/CbsReferentialsPage";
 import { AdminRolesPage } from "@/pages/admin/RolesPage";
 import { AdminUsersPage } from "@/pages/admin/UsersPage";
 import { AdminWorkflowPage } from "@/pages/admin/WorkflowPage";
@@ -71,6 +79,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/login/:tenantCode" element={<LoginPage />} />
       <Route
         path="/changer-mot-de-passe"
         element={
@@ -307,6 +316,32 @@ export default function App() {
           }
         />
         <Route
+          path="/formalisations"
+          element={
+            <PermissionRoute anyOf={PERM_FORMALIZATIONS}>
+              <FormalizationsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/formalisations/nouvelle"
+          element={
+            <PermissionRoute
+              anyOf={["guarantees.initiate_guaranteeformalizationrequest"]}
+            >
+              <FormalizationNewPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/formalisations/:id"
+          element={
+            <PermissionRoute anyOf={PERM_FORMALIZATIONS}>
+              <FormalizationDetailPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
           path="/recouvrement"
           element={
             <PermissionRoute anyOf={PERM_COLLECTIONS}>
@@ -388,6 +423,14 @@ export default function App() {
           }
         />
         <Route
+          path="/admin/referentiels-cbs"
+          element={
+            <AdminRoute>
+              <AdminCbsReferentialsPage />
+            </AdminRoute>
+          }
+        />
+        <Route
           path="/admin/circuits"
           element={
             <AdminRoute>
@@ -416,6 +459,14 @@ export default function App() {
           element={
             <AdminRoute>
               <AdminNotificationsPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/politique-credit"
+          element={
+            <AdminRoute>
+              <AdminCreditPolicyPage />
             </AdminRoute>
           }
         />

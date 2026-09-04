@@ -3,9 +3,9 @@ import { KeyRound, LogOut } from "lucide-react";
 import { useState, type FormEvent } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
-import logo from "@/assets/logo.jpg";
 import { api } from "@/api/client";
 import { useAuth } from "@/auth/AuthContext";
+import { useTenantBranding } from "@/hooks/useTenantBranding";
 
 function extractError(err: unknown): string {
   const data =
@@ -30,6 +30,7 @@ function extractError(err: unknown): string {
 
 export function ForceChangePasswordPage() {
   const { user, refreshUser, logout, markPasswordChanged } = useAuth();
+  const { branding, logoUrl, tenantName, tenantCode } = useTenantBranding();
   const navigate = useNavigate();
   const [currentPassword, setCurrent] = useState("");
   const [newPassword, setNew] = useState("");
@@ -81,9 +82,17 @@ export function ForceChangePasswordPage() {
     <div className="page-shell login-screen">
       <div className="login-card force-password-card">
         <div className="login-brand">
-          <img src={logo} alt="Thuin Tech" />
+          <img
+            src={logoUrl}
+            alt={branding ? tenantName : "Thuin Tech"}
+            className={branding?.logo_url ? "has-tenant-logo" : undefined}
+          />
           <h1>FIN_FLOW</h1>
-          <p>Changement de mot de passe obligatoire</p>
+          <p>
+            {tenantCode
+              ? `${tenantCode} — Changement de mot de passe`
+              : "Changement de mot de passe obligatoire"}
+          </p>
         </div>
         <div className="force-password-intro">
           <KeyRound size={18} />

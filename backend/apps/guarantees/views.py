@@ -14,10 +14,24 @@ from .models import (
     DationAsset,
     DationRequest,
     Guarantee,
+    GuaranteeFormalizationRequest,
     GuaranteeMovement,
     GuaranteeReleaseRequest,
 )
 
+from .formalization_services import (
+    add_formalization_fee,
+    advance_legal_stage,
+    cancel_formalization_request,
+    complete_formalization_request,
+    ensure_formalization_document_categories,
+    formalization_documents,
+    initiate_formalization_request,
+    remove_formalization_fee,
+    start_formalization_progress,
+    submit_formalization_request,
+    update_formalization_request,
+)
 from .process_services import (
     ProcessError,
     add_dation_asset,
@@ -53,6 +67,9 @@ from .serializers import (
     DationDocumentUploadSerializer,
     DationFeeSerializer,
     DationRequestSerializer,
+    FormalizationDocumentUploadSerializer,
+    FormalizationFeeSerializer,
+    GuaranteeFormalizationRequestSerializer,
     GuaranteeListSerializer,
     GuaranteeMovementSerializer,
     GuaranteeReleaseRequestSerializer,
@@ -77,6 +94,9 @@ class GuaranteeViewSet(AgencyScopedViewSet):
     action_perms = {
         "add_movement": ["guarantees.change_guarantee"],
         "initiate_release": ["guarantees.initiate_guaranteereleaserequest"],
+        "initiate_formalization": [
+            "guarantees.initiate_guaranteeformalizationrequest"
+        ],
     }
     filterset_fields = ["guarantee_type", "status", "client", "application", "is_insured", "agency"]
     search_fields = ["reference", "description", "owners"]
@@ -162,6 +182,36 @@ class GuaranteeViewSet(AgencyScopedViewSet):
         except ProcessError as exc:
             raise ValidationError(str(exc)) from exc
         return Response(GuaranteeReleaseRequestSerializer(req).data)
+
+    @action(detail=True, methods=["post"], url_path="initiate-formalization")
+    def initiate_formalization(self, request, pk=None):
+        """Démarre une formalisation (ne bloque pas le décaissement)."""
+        if not (
+            request.user.is_superuser
+            or request.user.has_perm(
+                "guarantees.initiate_guaranteeformalizationrequest"
+            )
+        ):
+            raise PermissionDenied(
+                "Vous n'avez pas le droit d'initier une formalisation."
+            )
+        guarantee = self.get_object()
+        fees = request.data.get("fees") or []
+        if fees and not isinstance(fees, list):
+            raise ValidationError({"fees": "Liste attendue."})
+        try:
+            req = initiate_formalization_request(
+                guarantee=guarantee,
+                user=request.user,
+                comment=request.data.get("comment", ""),
+                notary_name=request.data.get("notary_name", ""),
+                notary_reference=request.data.get("notary_reference", ""),
+                fees=fees,
+                as_draft=True,
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(req).data)
 
 
 class GuaranteeMovementViewSet(TenantScopedViewSet):
@@ -886,6 +936,348 @@ class DationRequestViewSet(TenantScopedViewSet):
     def workflow(self, request, pk=None):
         req = self.get_object()
         ct = ContentType.objects.get_for_model(DationRequest)
+        inst = (
+            WorkflowInstance.objects.filter(content_type=ct, object_id=req.pk)
+            .select_related("definition")
+            .prefetch_related("tasks", "tasks__step")
+            .order_by("-created_at")
+            .first()
+        )
+        if inst is None:
+            return Response({"instance": None})
+        from apps.workflow.serializers import WorkflowInstanceSerializer
+
+        return Response({"instance": WorkflowInstanceSerializer(inst).data})
+
+
+class GuaranteeFormalizationRequestViewSet(TenantScopedViewSet):
+    queryset = GuaranteeFormalizationRequest.objects.select_related(
+        "guarantee", "guarantee__client", "application", "agency"
+    ).prefetch_related("fees").all()
+    serializer_class = GuaranteeFormalizationRequestSerializer
+    action_perms = {
+        "create": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "update_draft": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "advance_stage": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "start": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "submit": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "cancel": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "complete": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "add_fee": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "remove_fee": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "documents": ["guarantees.view_guaranteeformalizationrequest"],
+        "ensure_categories": [
+            "guarantees.initiate_guaranteeformalizationrequest"
+        ],
+        "workflow": ["guarantees.view_guaranteeformalizationrequest"],
+    }
+    filterset_fields = [
+        "status", "legal_stage", "guarantee", "application", "agency",
+    ]
+    search_fields = [
+        "reference", "notary_name", "notary_reference",
+        "registration_number", "comment",
+    ]
+    http_method_names = ["get", "head", "options", "post", "patch"]
+
+    def _can_initiate(self, user):
+        return user.is_superuser or user.has_perm(
+            "guarantees.initiate_guaranteeformalizationrequest"
+        )
+
+    def create(self, request, *args, **kwargs):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Vous n'avez pas le droit d'initier une formalisation."
+            )
+        guarantee_id = request.data.get("guarantee")
+        if not guarantee_id:
+            raise ValidationError({"guarantee": "Obligatoire."})
+        try:
+            guarantee = Guarantee.objects.get(pk=guarantee_id)
+        except Guarantee.DoesNotExist as exc:
+            raise ValidationError(
+                {"guarantee": "Garantie introuvable."}
+            ) from exc
+
+        fees = request.data.get("fees") or []
+        if fees and not isinstance(fees, list):
+            raise ValidationError({"fees": "Liste attendue."})
+
+        as_draft_raw = request.data.get("as_draft", True)
+        if isinstance(as_draft_raw, str):
+            as_draft = as_draft_raw.strip().lower() not in {
+                "0", "false", "no",
+            }
+        else:
+            as_draft = bool(as_draft_raw)
+
+        try:
+            req = initiate_formalization_request(
+                guarantee=guarantee,
+                user=request.user,
+                comment=request.data.get("comment", ""),
+                notary_name=request.data.get("notary_name", ""),
+                notary_reference=request.data.get("notary_reference", ""),
+                fees=fees,
+                as_draft=as_draft,
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(
+            GuaranteeFormalizationRequestSerializer(req).data, status=201
+        )
+
+    @action(detail=True, methods=["post"], url_path="update-draft")
+    def update_draft(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        kwargs = {"user": request.user}
+        for key in (
+            "comment",
+            "notary_name",
+            "notary_reference",
+            "registration_number",
+            "registration_authority",
+        ):
+            if key in request.data:
+                kwargs[key] = request.data.get(key)
+        for key in (
+            "sent_to_notary_at",
+            "expected_return_date",
+            "registration_date",
+        ):
+            if key in request.data:
+                kwargs[key] = request.data.get(key)
+        try:
+            updated = update_formalization_request(req, **kwargs)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="advance-stage")
+    def advance_stage(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        legal_stage = request.data.get("legal_stage")
+        if not legal_stage:
+            raise ValidationError({"legal_stage": "Obligatoire."})
+        extra = {
+            k: request.data.get(k)
+            for k in (
+                "notary_name",
+                "notary_reference",
+                "registration_number",
+                "registration_date",
+                "registration_authority",
+            )
+            if k in request.data
+        }
+        try:
+            updated = advance_legal_stage(
+                req, legal_stage, user=request.user, **extra
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def start(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        try:
+            updated = start_formalization_progress(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def submit(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        try:
+            updated = submit_formalization_request(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        try:
+            updated = cancel_formalization_request(
+                req,
+                user=request.user,
+                comment=request.data.get("comment", ""),
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"])
+    def complete(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        try:
+            updated = complete_formalization_request(req, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["post"], url_path="add-fee")
+    def add_fee(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        try:
+            fee = add_formalization_fee(req, request.data, user=request.user)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(
+            {
+                "fee": FormalizationFeeSerializer(fee).data,
+                "formalization": GuaranteeFormalizationRequestSerializer(
+                    req
+                ).data,
+            },
+            status=201,
+        )
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path=r"remove-fee/(?P<fee_id>[^/.]+)",
+    )
+    def remove_fee(self, request, pk=None, fee_id=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        try:
+            updated = remove_formalization_fee(
+                req, fee_id, user=request.user
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(GuaranteeFormalizationRequestSerializer(updated).data)
+
+    @action(detail=True, methods=["get", "post"])
+    def documents(self, request, pk=None):
+        """Pièces GED liées au dossier de formalisation."""
+        req = self.get_object()
+        if request.method == "GET":
+            if not (
+                request.user.is_superuser
+                or request.user.has_perm(
+                    "guarantees.view_guaranteeformalizationrequest"
+                )
+            ):
+                raise PermissionDenied()
+            from apps.documents.serializers import DocumentSerializer
+
+            return Response(
+                DocumentSerializer(
+                    formalization_documents(req), many=True
+                ).data
+            )
+
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        if req.status in (
+            GuaranteeFormalizationRequest.Status.COMPLETED,
+            GuaranteeFormalizationRequest.Status.CANCELLED,
+            GuaranteeFormalizationRequest.Status.REJECTED,
+        ):
+            raise ValidationError(
+                "Impossible d'ajouter des pièces sur ce statut."
+            )
+
+        from django.contrib.contenttypes.models import ContentType
+
+        from apps.documents.models import Document, DocumentCategory
+        from apps.documents.serializers import DocumentSerializer
+
+        ensure_formalization_document_categories(req.tenant)
+        serializer = FormalizationDocumentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        upload = serializer.validated_data["file"]
+        name = (
+            (serializer.validated_data.get("name") or "").strip()
+            or upload.name
+        )
+        category_code = (
+            serializer.validated_data.get("category") or ""
+        ).strip() or "FORM_OTHER"
+
+        category = DocumentCategory.objects.filter(
+            tenant_id=req.tenant_id, code=category_code, is_active=True
+        ).first()
+        if category is None:
+            category = DocumentCategory.objects.filter(
+                tenant_id=req.tenant_id, code="FORM_OTHER"
+            ).first()
+        if category is None:
+            raise ValidationError(
+                {"category": "Catégorie documentaire introuvable."}
+            )
+
+        ct = ContentType.objects.get_for_model(GuaranteeFormalizationRequest)
+        doc = Document(
+            tenant_id=req.tenant_id,
+            category=category,
+            name=name,
+            file=upload,
+            content_type=ct,
+            object_id=req.id,
+            uploaded_by=request.user,
+        )
+        doc.mime_type = getattr(upload, "content_type", "") or ""
+        doc.save()
+        doc.compute_hash()
+        doc.save(update_fields=["mime_type", "sha256", "size_bytes"])
+        from apps.documents.quotas import bump_ged_usage
+
+        bump_ged_usage(doc.tenant_id, doc.size_bytes)
+        return Response(DocumentSerializer(doc).data, status=201)
+
+    @action(detail=True, methods=["post"], url_path="ensure-categories")
+    def ensure_categories(self, request, pk=None):
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        req = self.get_object()
+        created = ensure_formalization_document_categories(req.tenant)
+        return Response({"created": created})
+
+    @action(detail=True, methods=["get"])
+    def workflow(self, request, pk=None):
+        req = self.get_object()
+        ct = ContentType.objects.get_for_model(GuaranteeFormalizationRequest)
         inst = (
             WorkflowInstance.objects.filter(content_type=ct, object_id=req.pk)
             .select_related("definition")

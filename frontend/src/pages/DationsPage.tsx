@@ -1015,7 +1015,10 @@ export function DationDetailPage() {
   const refreshCbs = useMutation({
     mutationFn: async () =>
       (await api.post(`/dation-requests/${id}/refresh-cbs/`)).data,
-    onSuccess: () => invalidateAll(),
+    onSuccess: () => {
+      setActionError(null);
+      invalidateAll();
+    },
     onError: (e) => setActionError(errMsg(e, "Rafraîchissement CBS impossible.")),
   });
 
@@ -1075,6 +1078,12 @@ export function DationDetailPage() {
   const r = detail.data;
   const cur = r.cbs_currency || "XOF";
   const editable = r.status === "DRAFT" || r.status === "RETURNED";
+  const canCancel =
+    canInitiate &&
+    ["DRAFT", "RETURNED", "IN_APPROVAL", "BLOCKED"].includes(r.status);
+  const canRefreshCbs =
+    canInitiate &&
+    !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status);
   const myTask =
     myTasks?.results.find(
       (t) => t.target_meta?.kind === "DATION" && t.target_meta.id === r.id,
@@ -1102,16 +1111,7 @@ export function DationDetailPage() {
                 Soumettre au circuit
               </button>
             )}
-            {canInitiate && editable && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => cancel.mutate()}
-                disabled={cancel.isPending}
-              >
-                Annuler
-              </button>
-            )}
-            {canInitiate && r.status !== "COMPLETED" && r.status !== "CANCELLED" && (
+            {canRefreshCbs && (
               <button
                 className="btn btn-ghost"
                 onClick={() => refreshCbs.mutate()}
@@ -1119,6 +1119,29 @@ export function DationDetailPage() {
               >
                 <RefreshCw size={16} />
                 Rafraîchir CBS
+              </button>
+            )}
+            {canCancel && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => {
+                  const needsConfirm =
+                    r.status === "IN_APPROVAL" || r.status === "BLOCKED";
+                  if (
+                    needsConfirm &&
+                    !window.confirm(
+                      r.status === "IN_APPROVAL"
+                        ? "Annuler cette dation en cours de validation ? Le circuit sera interrompu."
+                        : "Annuler cette dation bloquée CBS ?",
+                    )
+                  ) {
+                    return;
+                  }
+                  cancel.mutate();
+                }}
+                disabled={cancel.isPending}
+              >
+                Annuler
               </button>
             )}
             {r.status === "BLOCKED" && (
@@ -1137,6 +1160,18 @@ export function DationDetailPage() {
 
       {actionError && <div className="form-error">{actionError}</div>}
 
+      {r.status === "BLOCKED" && (
+        <div className="form-error">
+          Dossier bloqué côté CBS. Utilisez « Rafraîchir CBS » ou « Retenter
+          CBS », ou annulez la demande.
+        </div>
+      )}
+      {r.status === "IN_APPROVAL" && !myTask && (
+        <div className="muted small" style={{ marginBottom: 12 }}>
+          Dossier en circuit de validation. Vous pouvez encore l&apos;annuler si
+          besoin.
+        </div>
+      )}
       <div className="detail-grid">
         <Card title="Règlement">
           <dl className="def-list two">

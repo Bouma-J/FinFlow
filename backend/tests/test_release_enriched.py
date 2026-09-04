@@ -29,7 +29,17 @@ CBS_SETTLED = {
     "currency": "XAF",
     "raw": {},
     "log_id": "x",
+    "schedule": [],
 }
+
+_cbs_assert = patch(
+    "apps.guarantees.process_services.assert_loan_settled",
+    return_value=CBS_SETTLED,
+)
+_cbs_get = patch(
+    "apps.guarantees.process_services.get_loan_status",
+    return_value=CBS_SETTLED,
+)
 
 
 @pytest.fixture
@@ -102,12 +112,10 @@ def _attach_demande(api, req_id):
     assert r.status_code == 201, r.content
 
 
-@patch(
-    "apps.guarantees.process_services.assert_loan_settled",
-    return_value=CBS_SETTLED,
-)
+@_cbs_get
+@_cbs_assert
 def test_initiate_draft_and_busy(
-    _cbs, tenant_a, client_a, agent, ml_circuit
+    _assert, _get, tenant_a, client_a, agent, ml_circuit
 ):
     with tenant_context(tenant_a.id):
         g = _guarantee(tenant_a, client_a)
@@ -129,12 +137,10 @@ def test_initiate_draft_and_busy(
             )
 
 
-@patch(
-    "apps.guarantees.process_services.assert_loan_settled",
-    return_value=CBS_SETTLED,
-)
+@_cbs_get
+@_cbs_assert
 def test_submit_requires_demande_and_acte(
-    _cbs, api, tenant_a, client_a, agent, ml_circuit
+    _assert, _get, api, tenant_a, client_a, agent, ml_circuit
 ):
     with tenant_context(tenant_a.id):
         g = _guarantee(tenant_a, client_a)
@@ -159,12 +165,10 @@ def test_submit_requires_demande_and_acte(
         assert req.status == GuaranteeReleaseRequest.Status.IN_APPROVAL
 
 
-@patch(
-    "apps.guarantees.process_services.assert_loan_settled",
-    return_value=CBS_SETTLED,
-)
+@_cbs_get
+@_cbs_assert
 def test_complete_requires_signed_acte(
-    _cbs, api, tenant_a, client_a, agent, ml_circuit
+    _assert, _get, api, tenant_a, client_a, agent, ml_circuit
 ):
     with tenant_context(tenant_a.id):
         g = _guarantee(tenant_a, client_a)
@@ -191,11 +195,9 @@ def test_complete_requires_signed_acte(
         assert g.status == Guarantee.Status.RELEASED
 
 
-@patch(
-    "apps.guarantees.process_services.assert_loan_settled",
-    return_value=CBS_SETTLED,
-)
-def test_api_generate_acte(_cbs, api, tenant_a, client_a, agent, ml_circuit):
+@_cbs_get
+@_cbs_assert
+def test_api_generate_acte(_assert, _get, api, tenant_a, client_a, agent, ml_circuit):
     with tenant_context(tenant_a.id):
         g = _guarantee(tenant_a, client_a)
         req = initiate_release_request(

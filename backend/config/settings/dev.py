@@ -18,3 +18,11 @@ EMAIL_BACKEND = env(
 
 # Exécution synchrone des tâches Celery en dev (pas besoin de broker)
 CELERY_TASK_ALWAYS_EAGER = True
+
+# Cache mémoire locale : login / throttle sans Redis obligatoire
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "finflow-dev",
+    }
+}

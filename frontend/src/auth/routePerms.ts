@@ -16,6 +16,10 @@ export const PERM_DATIONS = [
   "guarantees.view_dationrequest",
   "guarantees.initiate_dationrequest",
 ] as const;
+export const PERM_FORMALIZATIONS = [
+  "guarantees.view_guaranteeformalizationrequest",
+  "guarantees.initiate_guaranteeformalizationrequest",
+] as const;
 export const PERM_COLLECTIONS = ["collections.view_collectioncase"] as const;
 export const PERM_LEGAL_PARTIES = ["collections.view_legalparty"] as const;
 export const PERM_LITIGATION = ["collections.view_litigationfile"] as const;

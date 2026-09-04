@@ -14,15 +14,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Redirige les appels vers nginx (conteneur frontend) qui route ensuite
-      // vers le backend Django. On passe par nginx car le backend Docker
-      // n'expose pas le port 8000 sur l'hôte.
-      // Pour cibler un runserver local : VITE_API_TARGET=http://127.0.0.1:8000
+      // Dev local : API Django sur :8000.
+      // Docker / autre cible : VITE_API_TARGET=http://localhost:8080
       ...Object.fromEntries(
         ["/api", "/media", "/django-admin", "/static"].map((path) => [
           path,
           {
-            target: process.env.VITE_API_TARGET || "http://localhost",
+            target: process.env.VITE_API_TARGET || "http://127.0.0.1:8000",
             changeOrigin: true,
           },
         ]),

@@ -1,16 +1,21 @@
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.db.models.deletion import ProtectedError
-from rest_framework import status
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.audit.models import AuditLog
-from apps.common.permissions import HasModelPermission
+from apps.common.permissions import HasModelPermission, MustChangePasswordGate
 from apps.common.tenancy import get_current_tenant_id
-from apps.common.viewsets import AgencyScopedViewSet, TenantScopedReadOnlyViewSet, TenantScopedViewSet
+from apps.common.viewsets import (
+    AgencyScopedViewSet,
+    TenantContextMixin,
+    TenantScopedReadOnlyViewSet,
+    TenantScopedViewSet,
+)
 from apps.workflow.models import ApprovalTask, WorkflowInstance
 from apps.workflow.services import WorkflowError
 
@@ -18,6 +23,7 @@ from .models import (
     AnalysisThreshold,
     CreditApplication,
     CreditDocument,
+    CreditInstructionPolicy,
     FieldVisit,
     FinancialAnalysis,
     Loan,
@@ -27,12 +33,14 @@ from .serializers import (
     CreditApplicationListSerializer,
     CreditApplicationSerializer,
     CreditDocumentSerializer,
+    CreditInstructionPolicySerializer,
     FieldVisitSerializer,
     FinancialAnalysisSerializer,
     LoanSerializer,
     SimulationSerializer,
 )
 from .services import (
+    cancel_application,
     cancel_disbursement_request,
     cancel_submission,
     compute_amortization_schedule,
@@ -59,6 +67,8 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
         "simulate": ["credits.view_creditapplication"],
         "timeline": ["credits.view_creditapplication"],
         "collateral_summary": ["credits.view_creditapplication"],
+        "readiness": ["credits.view_creditapplication"],
+        "cancel": ["credits.change_creditapplication"],
         "renewable_guarantees": ["credits.view_creditapplication"],
         "renew_guarantee": [
             "credits.change_creditapplication",
@@ -202,6 +212,27 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
         return Response(build_collateral_summary(application))
 
     @action(detail=True, methods=["get"])
+    def readiness(self, request, pk=None):
+        """Checklist de readiness avant soumission (selon politique filiale)."""
+        from .instruction_policy import build_readiness
+
+        application = self.get_object()
+        return Response(build_readiness(application))
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        """Annulation formelle du dossier (statut CANCELLED), si politique active."""
+        application = self.get_object()
+        self._assert_is_creator(
+            application, request.user, "annuler ce dossier"
+        )
+        try:
+            cancel_application(application, request.user)
+        except WorkflowError as exc:
+            raise ValidationError(str(exc))
+        return Response(self.get_serializer(application).data)
+
+    @action(detail=True, methods=["get"])
     def timeline(self, request, pk=None):
         """Chronologie (piste d'audit) des évènements clés du dossier."""
         application = self.get_object()
@@ -292,16 +323,24 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
 
     @action(detail=True, methods=["post"])
     def disburse(self, request, pk=None):
-        """Valide / exécute le décaissement (prêt + échéancier, avant CBS).
+        """Valide / exécute le décaissement (push CBS Perfect + prêt local).
 
         Réservé aux utilisateurs disposant du droit
         ``credits.disburse_creditapplication`` (Responsable des opérations,
         Administrateur filiale, etc.).
+
+        Body optionnel :
+        - ``core_banking_reference`` : surcharge manuelle de la réf. CBS
+        - ``skip_cbs`` : true (superuser) pour forcer le mode local sans Perfect
         """
         application = self.get_object()
         cbs_ref = (request.data.get("core_banking_reference") or "").strip()
+        skip_cbs = bool(request.data.get("skip_cbs")) and (
+            request.user.is_superuser
+            or getattr(request.user, "is_group_level", False)
+        )
         try:
-            loan = disburse_application(application)
+            loan = disburse_application(application, skip_cbs=skip_cbs)
         except WorkflowError as exc:
             raise ValidationError(str(exc))
         if cbs_ref:
@@ -376,6 +415,8 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
             first_due_date=data.get("first_due_date"),
             savings_rate=data.get("savings_rate") or 0,
             mechanism=data.get("mechanism") or "DEGRESSIVE",
+            tenant_id=getattr(request.user, "tenant_id", None)
+            or request.headers.get("X-Tenant-Id"),
         )
         total = sum(row["total"] for row in schedule)
         total_savings = sum(row["savings"] for row in schedule)
@@ -499,6 +540,67 @@ class AnalysisThresholdViewSet(TenantScopedViewSet):
         tenant_id = get_current_tenant_id()
         th = AnalysisThreshold.for_tenant(tenant_id)
         return Response(AnalysisThresholdSerializer(th).data)
+
+
+class CreditInstructionPolicyViewSet(TenantContextMixin, viewsets.ViewSet):
+    """
+    Politique d'instruction crédit de la filiale active.
+
+    - GET  /api/v1/credit-instruction-policy/current/
+    - PATCH /api/v1/credit-instruction-policy/current/
+    """
+
+    permission_classes = [IsAuthenticated, MustChangePasswordGate]
+
+    def _resolve_tenant_id(self, request):
+        tenant_id = get_current_tenant_id()
+        if not tenant_id and getattr(request.user, "tenant_id", None):
+            tenant_id = request.user.tenant_id
+        return tenant_id
+
+    def _can_manage(self, user) -> bool:
+        return bool(
+            user.is_superuser
+            or getattr(user, "is_group_level", False)
+            or user.is_staff
+            or user.has_perm("credits.change_creditinstructionpolicy")
+        )
+
+    @action(detail=False, methods=["get", "patch"])
+    def current(self, request):
+        tenant_id = self._resolve_tenant_id(request)
+        if not tenant_id:
+            return Response(
+                {
+                    "detail": (
+                        "Sélectionnez une filiale pour paramétrer "
+                        "la politique d'instruction."
+                    )
+                },
+                status=400,
+            )
+        policy = CreditInstructionPolicy.for_tenant(tenant_id)
+        if policy.pk is None:
+            policy.tenant_id = tenant_id
+            policy.save()
+
+        if request.method == "GET":
+            if not (
+                request.user.has_perm("credits.view_creditinstructionpolicy")
+                or self._can_manage(request.user)
+            ):
+                return Response({"detail": "Droit insuffisant."}, status=403)
+            return Response(CreditInstructionPolicySerializer(policy).data)
+
+        if not self._can_manage(request.user):
+            return Response({"detail": "Droit insuffisant."}, status=403)
+
+        serializer = CreditInstructionPolicySerializer(
+            policy, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class FieldVisitViewSet(TenantScopedViewSet):

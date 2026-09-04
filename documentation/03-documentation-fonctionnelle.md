@@ -65,6 +65,7 @@ Règles clés :
 - Analyses / visites : ajout et édition uniquement dans la fenêtre de contribution (initiateur ou tâche PENDING) ; gel ensuite.
 - Garanties / cautions : rattachement possible jusqu’à l’avant-décaissement (y compris après approbation, ex. juridique).
 - Décaissement : initiation (`initiate_disburse_*`) puis validation (`disburse_*`) ; conditions suspensives levées ; création prêt + échéancier.
+- **Politique d'instruction** (par filiale) : couverture garanties (alerte / blocage soumission / blocage approbation), visite obligatoire, analyse défavorable, checklist produit, KYC à la création ou soumission, bornes produit à l'enregistrement ou soumission, montant approuvé (instruction ou décision), readiness UI, annulation formelle `CANCELLED`, garanties pendant le circuit — écran **Administration → Politique crédit**.
 
 ### Analyse financière
 Plusieurs analyses possibles ; une seule **référence** (`is_reference`).  

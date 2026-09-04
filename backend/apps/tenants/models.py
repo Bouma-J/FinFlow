@@ -95,6 +95,12 @@ class Agency(BaseModel):
     manager_phone = models.CharField(
         "téléphone du chef d'agence", max_length=50, blank=True
     )
+    cbs_point_of_service_id = models.CharField(
+        "identifiant point de service CBS (idPointService)",
+        max_length=64,
+        blank=True,
+        help_text="Code Perfect / CBS du point de service de l'agence.",
+    )
 
     class Meta:
         verbose_name = "agence"

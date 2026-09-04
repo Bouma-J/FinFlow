@@ -13,5 +13,12 @@ DEFAULT_TENANT_ROLES = (
 
 
 def bootstrap_tenant(tenant):
-    """Crée les rôles métier par défaut et synchronise leurs packs RBAC."""
+    """Crée les rôles métier, référentiels catalogue, packs RBAC et connecteur Perfect."""
+    from apps.catalog.defaults import ensure_catalog_defaults
+    from apps.corebanking.perfect_defaults import ensure_perfect_connector
+    from apps.workflow.defaults import ensure_process_workflows
+
     ensure_default_role_packs(tenant)
+    ensure_catalog_defaults(tenant)
+    ensure_perfect_connector(tenant, demo=False)
+    ensure_process_workflows(tenant)

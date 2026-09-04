@@ -11,6 +11,7 @@ import axios from "axios";
 
 import { api, tokenStore } from "@/api/client";
 import type { CurrentUser } from "@/api/types";
+import { rememberLoginTenantCode } from "@/hooks/brandingTheme";
 
 export class MfaRequiredError extends Error {
   code = "mfa_required" as const;
@@ -94,6 +95,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!data.is_group_level && data.tenant) {
       tokenStore.setTenant(data.tenant);
       setActiveTenantState(data.tenant);
+      if (data.tenant_branding?.code) {
+        rememberLoginTenantCode(data.tenant_branding.code);
+      }
     }
   }, []);
 

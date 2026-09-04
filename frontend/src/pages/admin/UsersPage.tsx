@@ -22,6 +22,7 @@ const EMPTY = {
   email: "",
   phone: "",
   employee_id: "",
+  cbs_id: "",
   tenant: "",
   agency: "",
   agency_ids: [] as string[],
@@ -112,6 +113,7 @@ export function AdminUsersPage() {
             email: payload.email,
             phone: payload.phone,
             employee_id: payload.employee_id,
+            cbs_id: payload.cbs_id,
             tenant: payload.tenant || activeTenant,
             ...(payload.agency ? { agency: payload.agency } : {}),
             agency_ids: payload.agency_ids,
@@ -126,6 +128,7 @@ export function AdminUsersPage() {
         email: payload.email,
         phone: payload.phone,
         employee_id: payload.employee_id,
+        cbs_id: payload.cbs_id,
         tenant: payload.is_group_level ? null : payload.tenant || null,
         agency: payload.is_group_level ? null : payload.agency || null,
         agency_ids:
@@ -388,8 +391,9 @@ export function AdminUsersPage() {
               />
               <span>
                 <Shield size={14} style={{ verticalAlign: "middle", marginRight: 4 }} />
-                Administrateur filiale — tous les droits d&apos;administration
-                de la filiale sélectionnée
+                Administrateur filiale — menus d&apos;administration{" "}
+                <em>et</em> fonctionnalités métier (clients, dossiers de crédit,
+                garanties, etc.), exclusivement sur la filiale sélectionnée
               </span>
             </label>
           )}
@@ -470,6 +474,24 @@ export function AdminUsersPage() {
               <input
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              <span>Matricule</span>
+              <input
+                value={form.employee_id}
+                onChange={(e) =>
+                  setForm({ ...form, employee_id: e.target.value })
+                }
+                placeholder="Optionnel"
+              />
+            </label>
+            <label className="field">
+              <span>ID CBS (idGestionnaire)</span>
+              <input
+                value={form.cbs_id}
+                onChange={(e) => setForm({ ...form, cbs_id: e.target.value })}
+                placeholder="Optionnel — mapping Perfect"
               />
             </label>
             {!form.is_group_level && !form.as_filiale_admin && (
@@ -627,8 +649,9 @@ export function AdminUsersPage() {
           {form.as_filiale_admin && (
             <p className="muted small" style={{ marginTop: 8 }}>
               Le rôle <strong>Administrateur filiale</strong> sera attribué
-              automatiquement. Accès à toute la filiale — aucune agence à
-              sélectionner.
+              automatiquement (paramétrage + opérations métier). Périmètre :{" "}
+              <strong>toute la filiale</strong> uniquement — aucune agence à
+              sélectionner, aucune donnée des autres filiales.
             </p>
           )}
 
@@ -652,6 +675,25 @@ export function AdminUsersPage() {
                 onChange={(e) =>
                   setEditing({ ...editing, email: e.target.value })
                 }
+              />
+            </label>
+            <label className="field">
+              <span>Matricule</span>
+              <input
+                value={editing.employee_id ?? ""}
+                onChange={(e) =>
+                  setEditing({ ...editing, employee_id: e.target.value })
+                }
+              />
+            </label>
+            <label className="field">
+              <span>ID CBS (idGestionnaire)</span>
+              <input
+                value={editing.cbs_id ?? ""}
+                onChange={(e) =>
+                  setEditing({ ...editing, cbs_id: e.target.value })
+                }
+                placeholder="Optionnel"
               />
             </label>
             <label className="field">
@@ -766,6 +808,8 @@ export function AdminUsersPage() {
                   id: editing.id,
                   data: {
                     email: editing.email,
+                    employee_id: editing.employee_id,
+                    cbs_id: editing.cbs_id,
                     agency: editing.agency,
                     data_scope: editing.data_scope,
                     agency_ids: editing.agencies_detail.map((a) => a.id),

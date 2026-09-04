@@ -139,7 +139,7 @@ class UserSerializer(serializers.ModelSerializer):
             "id", "username", "email", "first_name", "last_name",
             "tenant", "agency", "agencies_detail", "agency_ids",
             "data_scope", "is_group_level", "is_staff", "employee_id",
-            "phone", "mfa_enabled", "must_change_password", "is_active",
+            "cbs_id", "phone", "mfa_enabled", "must_change_password", "is_active",
             "groups", "group_ids",
             "date_joined", "last_login",
         ]
@@ -249,7 +249,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         default=False,
         help_text=(
             "Si vrai (admin Groupe uniquement) : crée un administrateur "
-            "filiale (is_staff, périmètre TENANT, rôle Administrateur filiale)."
+            "filiale (is_staff, data_scope TENANT, rôle Administrateur filiale "
+            "= menus d'administration + fonctionnalités métier, "
+            "exclusivement sur cette filiale)."
         ),
     )
     password_delivery = serializers.ChoiceField(
@@ -273,7 +275,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
         fields = [
             "id", "username", "email", "first_name", "last_name",
             "tenant", "agency", "agency_ids", "data_scope",
-            "is_group_level", "employee_id", "phone",
+            "is_group_level", "employee_id", "cbs_id", "phone",
             "is_active", "group_ids", "as_filiale_admin",
             "password_delivery", "password", "password_confirm",
             "email_sent", "password_delivery_mode",
@@ -408,6 +410,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
                 last_name=validated_data.get("last_name", ""),
                 phone=validated_data.get("phone", ""),
                 employee_id=validated_data.get("employee_id", ""),
+                cbs_id=validated_data.get("cbs_id", ""),
                 agency_ids=agencies,
                 send_credentials=send_mail,
                 must_change_password=True,
@@ -469,6 +472,9 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
     )
     employee_id = serializers.CharField(
         required=False, allow_blank=True, default="", max_length=50
+    )
+    cbs_id = serializers.CharField(
+        required=False, allow_blank=True, default="", max_length=64
     )
     tenant = serializers.UUIDField(required=False)
     agency = serializers.UUIDField(required=False, allow_null=True)
@@ -561,6 +567,7 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
             last_name=validated_data.get("last_name", ""),
             phone=validated_data.get("phone", ""),
             employee_id=validated_data.get("employee_id", ""),
+            cbs_id=validated_data.get("cbs_id", ""),
             agency_ids=validated_data.get("agency_objs") or [],
             send_credentials=send_mail,
             must_change_password=True,

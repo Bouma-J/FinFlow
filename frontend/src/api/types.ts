@@ -64,6 +64,7 @@ export interface Agency {
   manager_first_name: string;
   manager_phone: string;
   manager_display_name?: string;
+  cbs_point_of_service_id?: string;
 }
 
 export interface TenantOfficer {
@@ -99,6 +100,7 @@ export interface AdminUser {
   is_active: boolean;
   must_change_password?: boolean;
   employee_id: string;
+  cbs_id?: string;
   phone: string;
   groups: Role[];
 }
@@ -137,6 +139,17 @@ export interface ProductCategory {
   is_active: boolean;
 }
 
+export interface CbsCatalogItem {
+  id: string;
+  code: string;
+  label: string;
+  description?: string;
+  cbs_code: string;
+  periods_per_year?: number;
+  sort_order?: number;
+  is_active: boolean;
+}
+
 export interface NotificationSettings {
   id: string;
   enabled: boolean;
@@ -160,6 +173,41 @@ export interface NotificationSettings {
   smtp_configured: boolean;
   effective_from_email: string;
   updated_at: string;
+}
+
+export interface CreditInstructionPolicy {
+  id: string;
+  collateral_coverage_mode: "ALERT" | "BLOCK_SUBMIT" | "BLOCK_APPROVE";
+  require_field_visit: boolean;
+  allow_unfavorable_analysis_submit: boolean;
+  require_product_checklist: boolean;
+  match_product_client_type: boolean;
+  kyc_gate: "ON_SUBMIT" | "ON_CREATE";
+  product_bounds_gate: "ON_SUBMIT" | "ON_SAVE";
+  amount_approved_mode: "ALLOW" | "FORBID";
+  show_readiness_checklist: boolean;
+  enable_cancel_status: boolean;
+  allow_collateral_during_approval: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CreditReadinessCheck {
+  key: string;
+  label: string;
+  ok: boolean;
+  blocking: boolean;
+  message: string;
+}
+
+export interface CreditReadiness {
+  ready: boolean;
+  show_checklist: boolean;
+  checks: CreditReadinessCheck[];
+  policy: Omit<
+    CreditInstructionPolicy,
+    "id" | "created_at" | "updated_at"
+  >;
 }
 
 export interface NotificationLog {
@@ -343,6 +391,49 @@ export interface DationRequest {
   status_display: string;
   comment: string;
   resulting_guarantee: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FormalizationFee {
+  id: string;
+  fee_type: string;
+  fee_type_display: string;
+  label: string;
+  amount: string;
+  payer: "CLIENT" | "INSTITUTION" | string;
+  payer_display: string;
+  fee_date: string | null;
+  recoverable: boolean;
+  notes: string;
+  created_at: string;
+}
+
+export interface GuaranteeFormalizationRequest {
+  id: string;
+  reference: string;
+  guarantee: string;
+  guarantee_reference: string;
+  client?: string;
+  client_display: string;
+  application: string | null;
+  agency: string | null;
+  status: string;
+  status_display: string;
+  legal_stage: string;
+  legal_stage_display: string;
+  notary_name: string;
+  notary_reference: string;
+  sent_to_notary_at: string | null;
+  expected_return_date: string | null;
+  registration_number: string;
+  registration_date: string | null;
+  registration_authority: string;
+  fees?: FormalizationFee[];
+  fees_client_total?: string | null;
+  fees_institution_total?: string | null;
+  comment: string;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
@@ -560,6 +651,8 @@ export interface CreditProduct {
   amount_min: string;
   amount_max: string;
   interest_rate: string;
+  cbs_product_code?: string;
+  cbs_repayment_product_code?: string;
   is_active: boolean;
 }
 
@@ -627,14 +720,29 @@ export interface CreditApplication {
   extra_fees?: CreditApplicationFee[];
   fees_breakdown?: FeesBreakdown | null;
   periodicity: string;
+  periodicity_label?: string;
   duration_months: number;
   first_due_date: string | null;
   last_due_date: string | null;
   repayment_mechanism: string;
+  repayment_mechanism_label?: string;
   purpose_type: string;
   purpose: string;
   request_letter_scan: string | null;
   currency: string;
+  currency_label?: string;
+  cbs_refs?: {
+    periodicity?: { code?: string; label?: string; cbs_code?: string };
+    repayment_method?: { code?: string; label?: string; cbs_code?: string };
+    currency?: { code?: string; label?: string; cbs_code?: string };
+    product_cbs_code?: string;
+    product_repayment_cbs_code?: string;
+    manager_cbs_id?: string;
+    client_adherent_id?: string;
+    point_of_service_id?: string;
+    warnings?: string[];
+    ready_for_cbs?: boolean;
+  };
   // Plan de financement
   project_total_cost: string | null;
   personal_contribution: string | null;
@@ -971,6 +1079,7 @@ export const CREDIT_LABELS = {
   periodicity: {
     DAILY: "Journalier",
     WEEKLY: "Hebdomadaire",
+    BIMONTHLY: "Bimensuelle",
     MONTHLY: "Mensuelle",
     QUARTERLY: "Trimestrielle",
     SEMIANNUAL: "Semestrielle",
@@ -1031,8 +1140,7 @@ export interface FieldVisit {
   visited_by_display: string | null;
   visitor_role: string;
   can_edit: boolean;
-  latitude: string | null;
-  longitude: string | null;
+  geo_coordinates: string;
   report: string;
   created_at?: string;
 }
@@ -1098,7 +1206,7 @@ export interface ApprovalTask {
 
 export interface MyDossierRow {
   id: string;
-  target_kind?: "CREDIT" | "MAIN_LEVEE" | "DATION" | string;
+  target_kind?: "CREDIT" | "MAIN_LEVEE" | "DATION" | "FORMALISATION" | string;
   detail_path?: string;
   reference: string;
   client_display: string;
@@ -1160,6 +1268,7 @@ export const WORKFLOW_LABELS = {
     CREDIT: "Dossier de crédit",
     MAIN_LEVEE: "Main levée",
     DATION: "Dation en paiement",
+    FORMALISATION: "Formalisation de garantie",
   } as Record<string, string>,
   condition_status: {
     PENDING: "En attente de levée",
@@ -1269,6 +1378,12 @@ export interface Guarantee {
   // Suivi
   status: string;
   last_valuation_date: string | null;
+  registration_number?: string;
+  registration_date?: string | null;
+  registration_authority?: string;
+  formalized_at?: string | null;
+  open_formalization_id?: string | null;
+  has_open_formalization?: boolean;
   photos?: GuaranteePhoto[];
   documents?: GuaranteeDocument[];
   renewed_from?: string | null;

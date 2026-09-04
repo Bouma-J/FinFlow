@@ -15,7 +15,11 @@ from apps.common.tenancy import get_current_tenant_id, is_group_context
 from apps.common.viewsets import TenantContextMixin
 
 from .models import Agency, Tenant
-from .serializers import AgencySerializer, TenantSerializer
+from .serializers import (
+    AgencySerializer,
+    PublicTenantBrandingSerializer,
+    TenantSerializer,
+)
 from .services import bootstrap_tenant
 
 
@@ -30,8 +34,8 @@ class TenantViewSet(TenantContextMixin, viewsets.ModelViewSet):
     ordering_fields = ["code", "name", "created_at"]
 
     def get_permissions(self):
-        if self.action == "logo":
-            # Les <img> du navigateur n'envoient pas le JWT.
+        if self.action in ("logo", "branding"):
+            # Logo / charte pour l'écran de connexion (sans JWT).
             return [AllowAny()]
         if self.action in ("retrieve", "current"):
             return [IsAuthenticated()]
@@ -87,6 +91,28 @@ class TenantViewSet(TenantContextMixin, viewsets.ModelViewSet):
         )
         response["Cache-Control"] = "public, max-age=3600"
         return response
+
+    @action(detail=False, methods=["get"], url_path="branding")
+    def branding(self, request):
+        """
+        Charte publique d'une filiale (écran de connexion).
+
+        Query : ``?code=FIL01`` — uniquement les filiales actives.
+        """
+        code = (request.query_params.get("code") or "").strip()
+        if not code:
+            raise ValidationError(
+                {"code": "Indiquez le code filiale (?code=…)."}
+            )
+        tenant = Tenant.objects.filter(code__iexact=code, is_active=True).first()
+        if tenant is None:
+            raise Http404("Filiale introuvable ou inactive.")
+        return Response(
+            PublicTenantBrandingSerializer(
+                tenant, context={"request": request}
+            ).data
+        )
+
     @action(detail=True, methods=["post"], url_path="bootstrap")
     def bootstrap_defaults(self, request, pk=None):
         """Crée les rôles par défaut pour une filiale existante."""

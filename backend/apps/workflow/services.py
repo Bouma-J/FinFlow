@@ -199,7 +199,12 @@ def _sync_target_status(instance):
     if target is None:
         return
     from apps.credits.models import CreditApplication
-    from apps.guarantees.models import DationRequest, GuaranteeReleaseRequest
+    from apps.guarantees.formalization_services import complete_formalization_request
+    from apps.guarantees.models import (
+        DationRequest,
+        GuaranteeFormalizationRequest,
+        GuaranteeReleaseRequest,
+    )
     from apps.guarantees.process_services import (
         complete_dation_request,
         complete_release_request,
@@ -215,8 +220,16 @@ def _sync_target_status(instance):
         if new_status:
             target.status = new_status
             if new_status == CreditApplication.Status.APPROVED:
+                from apps.credits.instruction_policy import get_instruction_policy
+                from apps.credits.models import CreditInstructionPolicy
+
                 target.decision_date = timezone.now().date()
-                if target.amount_approved is None:
+                policy = get_instruction_policy(target.tenant_id)
+                forbid_early = (
+                    policy.amount_approved_mode
+                    == CreditInstructionPolicy.AmountApprovedMode.FORBID
+                )
+                if target.amount_approved is None or forbid_early:
                     target.amount_approved = (
                         target.amount_proposed or target.amount_requested
                     )
@@ -257,6 +270,26 @@ def _sync_target_status(instance):
             target.status = DationRequest.Status.APPROVED
             target.save(update_fields=["status", "updated_at"])
             complete_dation_request(target)
+            return
+        new_status = mapping.get(instance.status)
+        if new_status:
+            target.status = new_status
+            target.save(update_fields=["status", "updated_at"])
+        return
+
+    if isinstance(target, GuaranteeFormalizationRequest):
+        mapping = {
+            WorkflowInstance.Status.REJECTED: (
+                GuaranteeFormalizationRequest.Status.REJECTED
+            ),
+            WorkflowInstance.Status.RETURNED: (
+                GuaranteeFormalizationRequest.Status.RETURNED
+            ),
+        }
+        if instance.status == WorkflowInstance.Status.APPROVED:
+            target.status = GuaranteeFormalizationRequest.Status.APPROVED
+            target.save(update_fields=["status", "updated_at"])
+            complete_formalization_request(target)
             return
         new_status = mapping.get(instance.status)
         if new_status:
@@ -402,6 +435,11 @@ def _complete_workflow(instance):
         application.save(update_fields=["status", "updated_at"])
         return instance
 
+    if application:
+        from apps.credits.instruction_policy import assert_coverage_for_approval
+
+        assert_coverage_for_approval(application)
+
     instance.status = WorkflowInstance.Status.APPROVED
     instance.save(update_fields=["status", "updated_at"])
     _sync_target_status(instance)
@@ -441,6 +479,10 @@ def try_finalize_approval(application):
     )
     if instance is None:
         return None
+
+    from apps.credits.instruction_policy import assert_coverage_for_approval
+
+    assert_coverage_for_approval(application)
 
     instance.status = WorkflowInstance.Status.APPROVED
     instance.save(update_fields=["status", "updated_at"])

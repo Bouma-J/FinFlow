@@ -17,7 +17,7 @@ FIN_FLOW est une plateforme **SaaS multi-filiales** destinée aux institutions d
 | Acteur | Rôle |
 |--------|------|
 | **Administrateur Groupe** | Crée filiales, consolide, paramètre transverse |
-| **Administrateur filiale** | Utilisateurs, rôles, produits, circuits, CBS |
+| **Administrateur filiale** | Paramétrage (utilisateurs, rôles, produits, circuits, CBS) **et** opérations métier (clients, dossiers, garanties, recouvrement…), **uniquement** sur sa filiale |
 | **Chargé / analyste crédit** | Clients, dossiers, analyses, soumission |
 | **Responsable d’agence / comité** | Validation / rejet / renvoi selon le circuit |
 | **Client emprunteur** | Hors système (données saisies par l’institution) |

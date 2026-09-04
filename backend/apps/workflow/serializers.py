@@ -71,7 +71,11 @@ class ApprovalTaskSerializer(serializers.ModelSerializer):
         if target is None:
             return None
         from apps.credits.models import CreditApplication
-        from apps.guarantees.models import DationRequest, GuaranteeReleaseRequest
+        from apps.guarantees.models import (
+            DationRequest,
+            GuaranteeFormalizationRequest,
+            GuaranteeReleaseRequest,
+        )
 
         if isinstance(target, CreditApplication):
             return {
@@ -93,6 +97,13 @@ class ApprovalTaskSerializer(serializers.ModelSerializer):
                 "id": str(target.id),
                 "reference": target.reference,
                 "detail_path": f"/dations/{target.id}",
+            }
+        if isinstance(target, GuaranteeFormalizationRequest):
+            return {
+                "kind": "FORMALISATION",
+                "id": str(target.id),
+                "reference": target.reference,
+                "detail_path": f"/formalisations/{target.id}",
             }
         return {
             "kind": target.__class__.__name__,

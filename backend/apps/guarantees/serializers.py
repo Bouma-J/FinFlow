@@ -5,6 +5,7 @@ from rest_framework import serializers
 from .models import (
     Guarantee,
     GuaranteeDocument,
+    GuaranteeFormalizationRequest,
     GuaranteeJewelryItem,
     GuaranteeMovement,
     GuaranteePhoto,
@@ -13,6 +14,7 @@ from .models import (
     DationAsset,
     DationFee,
     DationRequest,
+    FormalizationFee,
 )
 
 
@@ -112,6 +114,7 @@ class GuaranteeListSerializer(serializers.ModelSerializer):
         source="renewed_from.reference", read_only=True, default=None
     )
     surety_display = serializers.SerializerMethodField()
+    open_formalization_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Guarantee
@@ -120,6 +123,9 @@ class GuaranteeListSerializer(serializers.ModelSerializer):
             "pledge_category", "client", "application",
             "belongs_to_applicant", "surety", "surety_display",
             "current_value", "ltv_ratio", "status",
+            "registration_number", "registration_date",
+            "registration_authority", "formalized_at",
+            "open_formalization_id",
             "renewed_from_reference", "created_at",
         ]
         read_only_fields = fields
@@ -128,6 +134,22 @@ class GuaranteeListSerializer(serializers.ModelSerializer):
         if not obj.surety_id:
             return None
         return getattr(obj.surety, "display_name", None) or str(obj.surety)
+
+    def get_open_formalization_id(self, obj):
+        open_statuses = (
+            GuaranteeFormalizationRequest.Status.DRAFT,
+            GuaranteeFormalizationRequest.Status.IN_PROGRESS,
+            GuaranteeFormalizationRequest.Status.IN_APPROVAL,
+            GuaranteeFormalizationRequest.Status.RETURNED,
+            GuaranteeFormalizationRequest.Status.APPROVED,
+        )
+        req = (
+            obj.formalization_requests.filter(status__in=open_statuses)
+            .order_by("-created_at")
+            .only("id")
+            .first()
+        )
+        return str(req.id) if req else None
 
 
 class GuaranteeSerializer(serializers.ModelSerializer):
@@ -142,6 +164,7 @@ class GuaranteeSerializer(serializers.ModelSerializer):
         source="renewed_from.reference", read_only=True, default=None
     )
     surety_display = serializers.SerializerMethodField()
+    open_formalization_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Guarantee
@@ -179,11 +202,17 @@ class GuaranteeSerializer(serializers.ModelSerializer):
             "status", "last_valuation_date", "photos", "documents",
             "movements",
             "jewelry_items", "renewed_from", "renewed_from_reference",
+            "registration_number", "registration_date",
+            "registration_authority", "formalized_at",
+            "open_formalization_id",
             "created_at",
         ]
         read_only_fields = [
             "id", "status", "current_value", "ltv_ratio",
             "renewed_from", "renewed_from_reference", "surety_display",
+            "registration_number", "registration_date",
+            "registration_authority", "formalized_at",
+            "open_formalization_id",
             "created_at",
         ]
 
@@ -191,6 +220,22 @@ class GuaranteeSerializer(serializers.ModelSerializer):
         if not obj.surety_id:
             return None
         return getattr(obj.surety, "display_name", None) or str(obj.surety)
+
+    def get_open_formalization_id(self, obj):
+        open_statuses = (
+            GuaranteeFormalizationRequest.Status.DRAFT,
+            GuaranteeFormalizationRequest.Status.IN_PROGRESS,
+            GuaranteeFormalizationRequest.Status.IN_APPROVAL,
+            GuaranteeFormalizationRequest.Status.RETURNED,
+            GuaranteeFormalizationRequest.Status.APPROVED,
+        )
+        req = (
+            obj.formalization_requests.filter(status__in=open_statuses)
+            .order_by("-created_at")
+            .only("id")
+            .first()
+        )
+        return str(req.id) if req else None
 
     def validate(self, attrs):
         belongs = attrs.get(
@@ -631,3 +676,136 @@ class DationRequestSerializer(serializers.ModelSerializer):
     def get_settlement(self, obj):
         data = obj.compute_settlement()
         return {k: (str(v) if hasattr(v, "quantize") else v) for k, v in data.items()}
+
+
+class FormalizationFeeSerializer(serializers.ModelSerializer):
+    fee_type_display = serializers.CharField(
+        source="get_fee_type_display", read_only=True
+    )
+    payer_display = serializers.CharField(
+        source="get_payer_display", read_only=True
+    )
+
+    class Meta:
+        model = FormalizationFee
+        fields = [
+            "id",
+            "fee_type",
+            "fee_type_display",
+            "label",
+            "amount",
+            "payer",
+            "payer_display",
+            "fee_date",
+            "recoverable",
+            "notes",
+            "created_at",
+        ]
+        read_only_fields = fields
+
+
+class FormalizationDocumentUploadSerializer(serializers.Serializer):
+    file = serializers.FileField()
+    name = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    category = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=50,
+        help_text="Code GED (ex. FORM_ACTE_SIGNE). Défaut : FORM_OTHER.",
+    )
+
+
+class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True
+    )
+    legal_stage_display = serializers.CharField(
+        source="get_legal_stage_display", read_only=True
+    )
+    client_display = serializers.SerializerMethodField()
+    guarantee_reference = serializers.CharField(
+        source="guarantee.reference", read_only=True, default=None
+    )
+    fees = FormalizationFeeSerializer(many=True, read_only=True)
+    acte_file_url = serializers.SerializerMethodField()
+    acte_signed_file_url = serializers.SerializerMethodField()
+    registration_proof_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = GuaranteeFormalizationRequest
+        fields = [
+            "id",
+            "reference",
+            "guarantee",
+            "guarantee_reference",
+            "application",
+            "agency",
+            "status",
+            "status_display",
+            "legal_stage",
+            "legal_stage_display",
+            "notary_name",
+            "notary_reference",
+            "sent_to_notary_at",
+            "expected_return_date",
+            "registration_number",
+            "registration_date",
+            "registration_authority",
+            "acte_file",
+            "acte_file_url",
+            "acte_signed_file",
+            "acte_signed_file_url",
+            "registration_proof",
+            "registration_proof_url",
+            "fees",
+            "fees_client_total",
+            "fees_institution_total",
+            "comment",
+            "client_display",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "reference",
+            "status",
+            "status_display",
+            "legal_stage_display",
+            "fees",
+            "fees_client_total",
+            "fees_institution_total",
+            "acte_file_url",
+            "acte_signed_file_url",
+            "registration_proof_url",
+            "client_display",
+            "guarantee_reference",
+            "completed_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def get_client_display(self, obj):
+        client = obj.guarantee.client if obj.guarantee_id else None
+        return getattr(client, "display_name", str(client)) if client else ""
+
+    def get_acte_file_url(self, obj):
+        if not obj.acte_file:
+            return None
+        from apps.common.storage_urls import file_download_url
+
+        return file_download_url(obj.acte_file)
+
+    def get_acte_signed_file_url(self, obj):
+        if not obj.acte_signed_file:
+            return None
+        from apps.common.storage_urls import file_download_url
+
+        return file_download_url(obj.acte_signed_file)
+
+    def get_registration_proof_url(self, obj):
+        if not obj.registration_proof:
+            return None
+        from apps.common.storage_urls import file_download_url
+
+        return file_download_url(obj.registration_proof)

@@ -279,6 +279,8 @@ DEFAULT_FROM_EMAIL = env(
 )
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", default="http://localhost")
+# URL publique de l'API (callbacks CBS Perfect). Ex. https://api.filiale.example
+PUBLIC_API_BASE_URL = env("PUBLIC_API_BASE_URL", default="")
 
 # ---------------------------------------------------------------------------
 # Réglages métier FIN_FLOW

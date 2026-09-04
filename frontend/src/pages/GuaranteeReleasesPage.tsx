@@ -5,14 +5,16 @@ import {
   FileUp,
   Gavel,
   Plus,
+  Receipt,
   RefreshCw,
   ShieldCheck,
   ShieldOff,
+  Trash2,
   Unlock,
   UserRound,
 } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useMemo, useState, type FormEvent, useEffect } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type {
@@ -23,6 +25,7 @@ import type {
   Paginated,
   ReleaseClientContext,
   ReleaseClientCredit,
+  ReleaseFee,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
@@ -38,6 +41,14 @@ import {
   formatDate,
   formatMoney,
 } from "@/components/ui";
+
+const RELEASE_FEE_TYPES = [
+  { value: "NOTARY", label: "Notaire / acte" },
+  { value: "REGISTRATION", label: "Radiation / publicité" },
+  { value: "BAILIFF", label: "Huissier" },
+  { value: "ADMIN", label: "Frais administratifs" },
+  { value: "OTHER", label: "Divers" },
+];
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -133,10 +144,13 @@ export function GuaranteeReleasesPage() {
 
 export function GuaranteeReleaseNewPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const { user } = useAuth();
-  const [clientId, setClientId] = useState("");
+  const [clientId, setClientId] = useState(searchParams.get("client") || "");
   const [cbsClientId, setCbsClientId] = useState("");
-  const [guaranteeId, setGuaranteeId] = useState("");
+  const [guaranteeId, setGuaranteeId] = useState(
+    searchParams.get("guarantee") || "",
+  );
   const [selectedCreditKey, setSelectedCreditKey] = useState("");
   const [requestDate, setRequestDate] = useState(todayISO());
   const [releaseFees, setReleaseFees] = useState("");
@@ -155,6 +169,21 @@ export function GuaranteeReleaseNewPage() {
     enabled: !!clientId,
     retry: false,
   });
+
+  useEffect(() => {
+    if (!context.data) return;
+    if (context.data.cbs_client_id && !cbsClientId) {
+      setCbsClientId(context.data.cbs_client_id);
+    }
+    const gParam = searchParams.get("guarantee");
+    if (
+      gParam &&
+      !guaranteeId &&
+      context.data.guarantees.some((g) => g.id === gParam)
+    ) {
+      setGuaranteeId(gParam);
+    }
+  }, [context.data, cbsClientId, guaranteeId, searchParams]);
 
   const selectedCredit: ReleaseClientCredit | null = useMemo(() => {
     const credits = context.data?.credits ?? [];
@@ -631,6 +660,11 @@ export function GuaranteeReleaseDetailPage() {
   const [demandeFile, setDemandeFile] = useState<File | null>(null);
   const [signedFile, setSignedFile] = useState<File | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [feeType, setFeeType] = useState("NOTARY");
+  const [feeAmount, setFeeAmount] = useState("");
+  const [feePayer, setFeePayer] = useState("CLIENT");
+  const [feeLabel, setFeeLabel] = useState("");
+  const [draftComment, setDraftComment] = useState("");
 
   const detail = useQuery({
     queryKey: ["guarantee-release", id],
@@ -713,6 +747,52 @@ export function GuaranteeReleaseDetailPage() {
     onError: (e) => setActionError(errMsg(e, "Annulation impossible.")),
   });
 
+  const refreshCbs = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/guarantee-releases/${id}/refresh-cbs/`)).data,
+    onSuccess: () => {
+      setActionError(null);
+      invalidateAll();
+    },
+    onError: (e) =>
+      setActionError(errMsg(e, "Rafraîchissement CBS impossible.")),
+  });
+
+  const addFee = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post(`/guarantee-releases/${id}/add-fee/`, {
+          fee_type: feeType,
+          label: feeLabel,
+          amount: feeAmount,
+          payer: feePayer,
+        })
+      ).data,
+    onSuccess: () => {
+      setFeeAmount("");
+      setFeeLabel("");
+      invalidateAll();
+    },
+    onError: (e) => setActionError(errMsg(e, "Ajout de frais impossible.")),
+  });
+
+  const removeFee = useMutation({
+    mutationFn: async (feeId: string) =>
+      (await api.post(`/guarantee-releases/${id}/remove-fee/${feeId}/`)).data,
+    onSuccess: () => invalidateAll(),
+  });
+
+  const updateDraft = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post(`/guarantee-releases/${id}/update-draft/`, {
+          comment: draftComment || detail.data?.comment || "",
+        })
+      ).data,
+    onSuccess: () => invalidateAll(),
+    onError: (e) => setActionError(errMsg(e, "Mise à jour impossible.")),
+  });
+
   const generateActe = useMutation({
     mutationFn: async () =>
       (await api.post(`/guarantee-releases/${id}/generate-acte/`)).data,
@@ -760,6 +840,9 @@ export function GuaranteeReleaseDetailPage() {
   const r = detail.data;
   const cur = r.cbs_currency || "XOF";
   const editable = r.status === "DRAFT" || r.status === "RETURNED";
+  const canCancel =
+    canInitiate &&
+    ["DRAFT", "RETURNED", "IN_APPROVAL", "BLOCKED"].includes(r.status);
   const canUploadDocs = !["COMPLETED", "CANCELLED", "REJECTED"].includes(
     r.status,
   );
@@ -770,6 +853,11 @@ export function GuaranteeReleaseDetailPage() {
     ) ?? null;
   const canDepositSigned =
     Boolean(r.can_deposit_signed_acte) || canInitiate || Boolean(myTask);
+  const fees: ReleaseFee[] = r.fees ?? [];
+  const schedule = Array.isArray(r.cbs_raw?.datas)
+    ? (r.cbs_raw.datas as Array<Record<string, unknown>>)
+    : [];
+
   return (
     <div>
       <PageHeader
@@ -791,7 +879,17 @@ export function GuaranteeReleaseDetailPage() {
                 Soumettre au circuit
               </button>
             )}
-            {canInitiate && editable && (
+            {canInitiate && !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) && (
+              <button
+                className="btn btn-ghost"
+                onClick={() => refreshCbs.mutate()}
+                disabled={refreshCbs.isPending}
+              >
+                <RefreshCw size={16} />
+                Rafraîchir CBS
+              </button>
+            )}
+            {canCancel && (
               <button
                 className="btn btn-ghost"
                 onClick={() => cancel.mutate()}
@@ -841,7 +939,7 @@ export function GuaranteeReleaseDetailPage() {
               </dd>
             </div>
             <div>
-              <dt>Réf. prêt CBS</dt>
+              <dt>Réf. demande CBS</dt>
               <dd>
                 <code>{r.cbs_loan_reference || "—"}</code>
               </dd>
@@ -849,17 +947,28 @@ export function GuaranteeReleaseDetailPage() {
             <div>
               <dt>Soldé CBS</dt>
               <dd>
-                {r.cbs_settled == null ? "—" : r.cbs_settled ? "Oui" : "Non"}
+                {r.cbs_settled == null ? (
+                  "—"
+                ) : r.cbs_settled ? (
+                  <Badge value="ACTIVE" label="Oui" />
+                ) : (
+                  <Badge value="WARN" label="Non" />
+                )}
               </dd>
             </div>
             <div>
-              <dt>Frais</dt>
+              <dt>Encours CBS</dt>
+              <dd>{formatMoney(r.cbs_outstanding, cur)}</dd>
+            </div>
+            <div>
+              <dt>Vérifié le</dt>
               <dd>
-                {formatMoney(
-                  r.release_fees ?? r.fees_client_total ?? null,
-                  cur,
-                )}
+                {r.cbs_checked_at ? formatDate(r.cbs_checked_at) : "—"}
               </dd>
+            </div>
+            <div>
+              <dt>Frais client</dt>
+              <dd>{formatMoney(r.fees_client_total ?? r.release_fees, cur)}</dd>
             </div>
             <div>
               <dt>Acte</dt>
@@ -879,7 +988,165 @@ export function GuaranteeReleaseDetailPage() {
               <dd>{r.has_signed_acte ? "Déposé" : "Manquant"}</dd>
             </div>
           </dl>
+          {editable && canInitiate && (
+            <div className="form-grid" style={{ marginTop: 12 }}>
+              <label className="field full-span">
+                <span>Commentaire</span>
+                <textarea
+                  rows={2}
+                  value={draftComment || r.comment || ""}
+                  onChange={(e) => setDraftComment(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={updateDraft.isPending}
+                onClick={() => updateDraft.mutate()}
+              >
+                Enregistrer le commentaire
+              </button>
+            </div>
+          )}
+          {!editable && r.comment && (
+            <p className="muted small" style={{ marginTop: 12 }}>
+              {r.comment}
+            </p>
+          )}
         </Card>
+
+        <Card title="Frais">
+          {fees.length === 0 ? (
+            <p className="muted small">Aucun frais enregistré.</p>
+          ) : (
+            <ul className="link-list">
+              {fees.map((f) => (
+                <li key={f.id}>
+                  <span>
+                    <Receipt size={14} /> {f.fee_type_display}
+                    {f.label ? ` — ${f.label}` : ""}
+                    <em className="muted small"> · {f.payer_display}</em>
+                  </span>
+                  <span className="row-actions">
+                    <span className="num">{formatMoney(f.amount, cur)}</span>
+                    {editable && canInitiate && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => removeFee.mutate(f.id)}
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {editable && canInitiate && (
+            <div className="form-grid" style={{ marginTop: 12 }}>
+              <label className="field">
+                <span>Type</span>
+                <select
+                  value={feeType}
+                  onChange={(e) => setFeeType(e.target.value)}
+                >
+                  {RELEASE_FEE_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Montant</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={feeAmount}
+                  onChange={(e) => setFeeAmount(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Payeur</span>
+                <select
+                  value={feePayer}
+                  onChange={(e) => setFeePayer(e.target.value)}
+                >
+                  <option value="CLIENT">Client</option>
+                  <option value="INSTITUTION">Institution</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Libellé</span>
+                <input
+                  value={feeLabel}
+                  onChange={(e) => setFeeLabel(e.target.value)}
+                />
+              </label>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={!feeAmount || addFee.isPending}
+                onClick={() => addFee.mutate()}
+              >
+                <Plus size={14} />
+                Ajouter frais
+              </button>
+            </div>
+          )}
+        </Card>
+
+        {schedule.length > 0 && (
+          <Card title="Échéancier CBS (crd/situation)">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Date</th>
+                  <th>Capital</th>
+                  <th>Intérêt</th>
+                  <th>Total</th>
+                  <th>Statut</th>
+                </tr>
+              </thead>
+              <tbody>
+                {schedule.map((row, idx) => (
+                  <tr key={idx}>
+                    <td>{String(row.echeance ?? idx + 1)}</td>
+                    <td>{String(row.date ?? "—")}</td>
+                    <td className="num">
+                      {formatMoney(
+                        row.montantCapital != null
+                          ? String(row.montantCapital)
+                          : null,
+                        cur,
+                      )}
+                    </td>
+                    <td className="num">
+                      {formatMoney(
+                        row.montantInteret != null
+                          ? String(row.montantInteret)
+                          : null,
+                        cur,
+                      )}
+                    </td>
+                    <td className="num">
+                      {formatMoney(
+                        row.montantTotal != null
+                          ? String(row.montantTotal)
+                          : null,
+                        cur,
+                      )}
+                    </td>
+                    <td>{String(row.statut ?? "—")}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Card>
+        )}
 
         <Card title="1. Demande client">
           <p className="muted small">

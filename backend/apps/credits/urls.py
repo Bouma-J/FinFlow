@@ -4,6 +4,7 @@ from .views import (
     AnalysisThresholdViewSet,
     CreditApplicationViewSet,
     CreditDocumentViewSet,
+    CreditInstructionPolicyViewSet,
     FieldVisitViewSet,
     FinancialAnalysisViewSet,
     LoanViewSet,
@@ -14,6 +15,11 @@ router.register("credit-applications", CreditApplicationViewSet, basename="credi
 router.register("credit-documents", CreditDocumentViewSet, basename="credit-document")
 router.register("financial-analyses", FinancialAnalysisViewSet, basename="financial-analysis")
 router.register("analysis-thresholds", AnalysisThresholdViewSet, basename="analysis-threshold")
+router.register(
+    "credit-instruction-policy",
+    CreditInstructionPolicyViewSet,
+    basename="credit-instruction-policy",
+)
 router.register("field-visits", FieldVisitViewSet, basename="field-visit")
 router.register("loans", LoanViewSet, basename="loan")
 

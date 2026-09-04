@@ -31,6 +31,8 @@ export function AdminProductsPage() {
     duration_min_months: 3,
     duration_max_months: 36,
     interest_rate: "12.5",
+    cbs_product_code: "",
+    cbs_repayment_product_code: "",
   });
   const [error, setError] = useState<string | null>(null);
 
@@ -241,6 +243,29 @@ export function AdminProductsPage() {
                       duration_max_months: Number(e.target.value),
                     })
                   }
+                />
+              </label>
+              <label className="field">
+                <span>Code produit CBS (idProduitCrd)</span>
+                <input
+                  value={prod.cbs_product_code}
+                  onChange={(e) =>
+                    setProd({ ...prod, cbs_product_code: e.target.value })
+                  }
+                  placeholder="CRED-CONSO"
+                />
+              </label>
+              <label className="field">
+                <span>Produit remboursement CBS (idProduitRemb)</span>
+                <input
+                  value={prod.cbs_repayment_product_code}
+                  onChange={(e) =>
+                    setProd({
+                      ...prod,
+                      cbs_repayment_product_code: e.target.value,
+                    })
+                  }
+                  placeholder="COMPTE-COURANT"
                 />
               </label>
             </div>

@@ -31,6 +31,7 @@ import {
 import { api } from "@/api/client";
 import type {
   Agency,
+  CbsCatalogItem,
   ChecklistItem,
   Client,
   CreditApplication,
@@ -41,18 +42,27 @@ import type {
 import { ClientAutocomplete } from "@/components/ClientAutocomplete";
 import { useAuth } from "@/auth/AuthContext";
 
-const PERIODICITY = [
+const PERIODICITY_FALLBACK = [
   { value: "DAILY", label: "Journalier" },
   { value: "WEEKLY", label: "Hebdomadaire" },
+  { value: "BIMONTHLY", label: "Bimensuelle" },
   { value: "MONTHLY", label: "Mensuelle" },
   { value: "QUARTERLY", label: "Trimestrielle" },
   { value: "SEMIANNUAL", label: "Semestrielle" },
   { value: "ANNUAL", label: "Annuelle" },
 ];
-const MECHANISM = [
+const MECHANISM_FALLBACK = [
   { value: "DEGRESSIVE", label: "Amortissement dégressif" },
   { value: "IN_FINE", label: "In fine (capital à terme)" },
   { value: "BULLET", label: "Remboursement unique (bullet)" },
+];
+const CURRENCIES_FALLBACK = [
+  { value: "XOF", label: "F CFA (XOF)" },
+  { value: "XAF", label: "F CFA (XAF)" },
+  { value: "EUR", label: "Euro (EUR)" },
+  { value: "USD", label: "Dollar US (USD)" },
+  { value: "GNF", label: "Franc guinéen (GNF)" },
+  { value: "MAD", label: "Dirham marocain (MAD)" },
 ];
 const TAX_REGIME = [
   { value: "SYNTHETIC", label: "Impôt synthétique" },
@@ -68,14 +78,6 @@ const CATCHMENT = [
 const PREMISES = [
   { value: "OWNER", label: "Propriétaire" },
   { value: "TENANT", label: "Locataire" },
-];
-const CURRENCIES = [
-  { value: "XOF", label: "F CFA (XOF)" },
-  { value: "XAF", label: "F CFA (XAF)" },
-  { value: "EUR", label: "Euro (EUR)" },
-  { value: "USD", label: "Dollar US (USD)" },
-  { value: "GNF", label: "Franc guinéen (GNF)" },
-  { value: "MAD", label: "Dirham marocain (MAD)" },
 ];
 
 const TEXT_KEYS = [
@@ -219,6 +221,7 @@ const REQUIRED_FIELDS: { key: string; label: string }[] = [
 const PERIODS_PER_YEAR: Record<string, number> = {
   DAILY: 360,
   WEEKLY: 52,
+  BIMONTHLY: 24,
   MONTHLY: 12,
   QUARTERLY: 4,
   SEMIANNUAL: 2,
@@ -229,9 +232,10 @@ function computeLastDueDate(
   firstDue: string,
   periodicity: string,
   durationMonths: number,
+  periodsPerYearMap: Record<string, number> = PERIODS_PER_YEAR,
 ): string {
   if (!firstDue || !periodicity || !durationMonths) return "";
-  const perYear = PERIODS_PER_YEAR[periodicity];
+  const perYear = periodsPerYearMap[periodicity];
   if (!perYear) return "";
   const count = Math.max(1, Math.ceil((durationMonths / 12) * perYear));
   const steps = count - 1;
@@ -239,6 +243,7 @@ function computeLastDueDate(
   if (Number.isNaN(d.getTime())) return "";
   if (periodicity === "DAILY") d.setDate(d.getDate() + steps);
   else if (periodicity === "WEEKLY") d.setDate(d.getDate() + steps * 7);
+  else if (periodicity === "BIMONTHLY") d.setDate(d.getDate() + steps * 15);
   else {
     const monthsMap: Record<string, number> = {
       MONTHLY: 1,
@@ -246,7 +251,8 @@ function computeLastDueDate(
       SEMIANNUAL: 6,
       ANNUAL: 12,
     };
-    d.setMonth(d.getMonth() + steps * monthsMap[periodicity]);
+    const months = monthsMap[periodicity] ?? Math.max(1, Math.round(12 / perYear));
+    d.setMonth(d.getMonth() + steps * months);
   }
   return d.toISOString().slice(0, 10);
 }
@@ -270,7 +276,7 @@ export function CreditApplicationForm({
   onCancel: () => void;
 }) {
   const qc = useQueryClient();
-  const { user } = useAuth();
+  const { user, activeTenant } = useAuth();
   const isEdit = !!initial;
   const [client, setClient] = useState(initial?.client ?? "");
   const [text, setText] = useState<TextState>(
@@ -324,6 +330,71 @@ export function CreditApplicationForm({
       (await api.get<Paginated<Agency>>("/agencies/", { params: { page_size: 100 } }))
         .data,
   });
+
+  const { data: periodicities } = useQuery({
+    queryKey: ["loan-periodicities", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/loan-periodicities/", {
+          params: { is_active: true, page_size: 100 },
+        })
+      ).data,
+  });
+
+  const { data: repaymentMethods } = useQuery({
+    queryKey: ["repayment-methods", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/repayment-methods/", {
+          params: { is_active: true, page_size: 100 },
+        })
+      ).data,
+  });
+
+  const { data: currencies } = useQuery({
+    queryKey: ["currencies", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/currencies/", {
+          params: { is_active: true, page_size: 100 },
+        })
+      ).data,
+  });
+
+  const periodicityOptions = useMemo(() => {
+    const rows = periodicities?.results ?? [];
+    if (!rows.length) return PERIODICITY_FALLBACK;
+    return rows.map((r) => ({
+      value: r.code,
+      label: r.cbs_code ? `${r.label} (${r.cbs_code})` : r.label,
+    }));
+  }, [periodicities]);
+
+  const mechanismOptions = useMemo(() => {
+    const rows = repaymentMethods?.results ?? [];
+    if (!rows.length) return MECHANISM_FALLBACK;
+    return rows.map((r) => ({
+      value: r.code,
+      label: r.cbs_code ? `${r.label} → ${r.cbs_code}` : r.label,
+    }));
+  }, [repaymentMethods]);
+
+  const currencyOptions = useMemo(() => {
+    const rows = currencies?.results ?? [];
+    if (!rows.length) return CURRENCIES_FALLBACK;
+    return rows.map((r) => ({
+      value: r.code,
+      label: r.cbs_code ? `${r.label} (${r.cbs_code})` : r.label,
+    }));
+  }, [currencies]);
+
+  const periodsPerYear = useMemo(() => {
+    const map: Record<string, number> = { ...PERIODS_PER_YEAR };
+    for (const row of periodicities?.results ?? []) {
+      if (row.periods_per_year) map[row.code] = row.periods_per_year;
+    }
+    return map;
+  }, [periodicities]);
 
   const { data: selectedClient } = useQuery({
     queryKey: ["client", client],
@@ -456,8 +527,9 @@ export function CreditApplicationForm({
         text.first_due_date,
         text.periodicity,
         Number(text.duration_months),
+        periodsPerYear,
       ),
-    [text.first_due_date, text.periodicity, text.duration_months],
+    [text.first_due_date, text.periodicity, text.duration_months, periodsPerYear],
   );
 
   const mutation = useMutation({
@@ -673,7 +745,7 @@ export function CreditApplicationForm({
             )}
             <Text label="Montant demandé" type="number" value={text.amount_requested} onChange={set("amount_requested")} required />
             <Text label="Montant proposé" type="number" value={text.amount_proposed} onChange={set("amount_proposed")} />
-            <Select label="Devise" value={text.currency} onChange={set("currency")} options={CURRENCIES} placeholder={null} />
+            <Select label="Devise" value={text.currency} onChange={set("currency")} options={currencyOptions} placeholder={null} />
             <Text label="Taux d'intérêt (%) — annuel" type="number" value={text.interest_rate} onChange={set("interest_rate")} />
             <Text label="Frais de dossier (%)" type="number" value={text.fees_rate} onChange={set("fees_rate")} />
             <Text label="Taux d'épargne obligatoire (%)" type="number" value={text.mandatory_savings_rate} onChange={set("mandatory_savings_rate")} />
@@ -787,14 +859,14 @@ export function CreditApplicationForm({
                 </div>
               )}
             </div>
-            <Select label="Périodicité" value={text.periodicity} onChange={set("periodicity")} options={PERIODICITY} placeholder={null} />
+            <Select label="Périodicité" value={text.periodicity} onChange={set("periodicity")} options={periodicityOptions} placeholder={null} />
             <Text label="Durée du crédit (mois)" type="number" value={text.duration_months} onChange={set("duration_months")} required />
             <Text label="Date de première échéance" type="date" value={text.first_due_date} onChange={set("first_due_date")} />
             <label className="field">
               <span>Date de dernière échéance (auto)</span>
               <input value={lastDue || "—"} readOnly className="readonly" />
             </label>
-            <Select label="Mécanisme de remboursement" value={text.repayment_mechanism} onChange={set("repayment_mechanism")} options={MECHANISM} />
+            <Select label="Mécanisme de remboursement" value={text.repayment_mechanism} onChange={set("repayment_mechanism")} options={mechanismOptions} />
             <Select
               label="Objet du financement"
               value={text.purpose_type}

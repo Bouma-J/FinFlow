@@ -1,4 +1,4 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   Calculator,
   CalendarClock,
@@ -11,7 +11,13 @@ import {
 import { useMemo, useState, type FormEvent, type ReactNode } from "react";
 
 import { api } from "@/api/client";
-import { CREDIT_LABELS, type SimulationResult } from "@/api/types";
+import {
+  CREDIT_LABELS,
+  type CbsCatalogItem,
+  type Paginated,
+  type SimulationResult,
+} from "@/api/types";
+import { useAuth } from "@/auth/AuthContext";
 import { Card, PageHeader, formatMoney } from "@/components/ui";
 import { useTenantBranding } from "@/hooks/useTenantBranding";
 import { exportSimulationPdf } from "@/utils/exportSimulationPdf";
@@ -31,9 +37,9 @@ function roundStep(n: number) {
   return Math.round(n / 10) * 10;
 }
 
-const PERIODICITIES = Object.keys(CREDIT_LABELS.periodicity);
+const PERIODICITY_FALLBACK = Object.keys(CREDIT_LABELS.periodicity);
 /** Mécanismes proposés à la saisie (CONSTANT conservé en lecture seule historique). */
-const MECHANISMS = ["DEGRESSIVE", "IN_FINE", "BULLET"] as const;
+const MECHANISM_FALLBACK = ["DEGRESSIVE", "IN_FINE", "BULLET"] as const;
 
 function todayISO() {
   const d = new Date();
@@ -93,6 +99,54 @@ function parseAmountInput(display: string) {
 export function SimulatorPage() {
   const [form, setForm] = useState<SimForm>(DEFAULT_FORM);
   const { tenantName, branding } = useTenantBranding();
+  const { activeTenant } = useAuth();
+
+  const { data: periodicities } = useQuery({
+    queryKey: ["loan-periodicities", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/loan-periodicities/", {
+          params: { is_active: true, page_size: 100 },
+        })
+      ).data,
+  });
+  const { data: repaymentMethods } = useQuery({
+    queryKey: ["repayment-methods", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/repayment-methods/", {
+          params: { is_active: true, page_size: 100 },
+        })
+      ).data,
+  });
+
+  const periodicityOptions = useMemo(() => {
+    const rows = periodicities?.results ?? [];
+    if (!rows.length) {
+      return PERIODICITY_FALLBACK.map((key) => ({
+        value: key,
+        label: CREDIT_LABELS.periodicity[key] || key,
+      }));
+    }
+    return rows.map((r) => ({
+      value: r.code,
+      label: r.cbs_code ? `${r.label} (${r.cbs_code})` : r.label,
+    }));
+  }, [periodicities]);
+
+  const mechanismOptions = useMemo(() => {
+    const rows = repaymentMethods?.results ?? [];
+    if (!rows.length) {
+      return MECHANISM_FALLBACK.map((key) => ({
+        value: key,
+        label: CREDIT_LABELS.repayment_mechanism[key] || key,
+      }));
+    }
+    return rows.map((r) => ({
+      value: r.code,
+      label: r.cbs_code ? `${r.label} → ${r.cbs_code}` : r.label,
+    }));
+  }, [repaymentMethods]);
 
   const sim = useMutation({
     mutationFn: async () => {
@@ -139,9 +193,13 @@ export function SimulatorPage() {
   const result = sim.data;
   const hasSavings = Boolean(result && num(result.total_savings) > 0);
   const periodLabel =
-    CREDIT_LABELS.periodicity[form.periodicity] || form.periodicity;
+    periodicityOptions.find((o) => o.value === form.periodicity)?.label ||
+    CREDIT_LABELS.periodicity[form.periodicity] ||
+    form.periodicity;
   const mechanismLabel =
-    CREDIT_LABELS.repayment_mechanism[form.mechanism] || form.mechanism;
+    mechanismOptions.find((o) => o.value === form.mechanism)?.label ||
+    CREDIT_LABELS.repayment_mechanism[form.mechanism] ||
+    form.mechanism;
 
   const installmentLabel = useMemo(() => {
     if (form.mechanism === "BULLET") return "Échéance unique (institution)";
@@ -232,9 +290,9 @@ export function SimulatorPage() {
                     setForm({ ...form, periodicity: e.target.value })
                   }
                 >
-                  {PERIODICITIES.map((key) => (
-                    <option key={key} value={key}>
-                      {CREDIT_LABELS.periodicity[key]}
+                  {periodicityOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
                     </option>
                   ))}
                 </select>
@@ -247,9 +305,9 @@ export function SimulatorPage() {
                     setForm({ ...form, mechanism: e.target.value })
                   }
                 >
-                  {MECHANISMS.map((key) => (
-                    <option key={key} value={key}>
-                      {CREDIT_LABELS.repayment_mechanism[key]}
+                  {mechanismOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
                     </option>
                   ))}
                 </select>

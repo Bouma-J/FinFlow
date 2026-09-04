@@ -21,7 +21,7 @@ class UserAdmin(BaseUserAdmin):
         ("FIN_FLOW", {
             "fields": (
                 "tenant", "agency", "is_group_level",
-                "employee_id", "phone", "mfa_enabled",
+                "employee_id", "cbs_id", "phone", "mfa_enabled",
             )
         }),
     )

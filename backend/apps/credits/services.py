@@ -56,12 +56,23 @@ def _add_periods(base, periodicity, n):
         return base + timedelta(days=n)
     if periodicity == "WEEKLY":
         return base + timedelta(weeks=n)
+    if periodicity == "BIMONTHLY":
+        # Deux échéances par mois ≈ 15 jours calendaires.
+        return base + timedelta(days=15 * n)
     return base + relativedelta(months=_PERIOD_MONTHS.get(periodicity, 1) * n)
 
 
-def period_count(duration_months, periodicity):
+def period_count(duration_months, periodicity, tenant_id=None):
     """Nombre d'échéances (toujours arrondi à l'entier supérieur)."""
-    per_year = _PERIODS_PER_YEAR.get(periodicity, 12)
+    per_year = _PERIODS_PER_YEAR.get(periodicity)
+    if tenant_id is not None:
+        from apps.catalog.cbs_resolve import resolve_periodicity_periods_per_year
+
+        per_year = resolve_periodicity_periods_per_year(
+            tenant_id, periodicity, default=per_year or 12
+        )
+    elif per_year is None:
+        per_year = 12
     raw = Decimal(duration_months) / Decimal(12) * Decimal(per_year)
     return max(1, math.ceil(raw))
 
@@ -75,6 +86,7 @@ def compute_amortization_schedule(
     first_due_date=None,
     savings_rate=0,
     mechanism="DEGRESSIVE",
+    tenant_id=None,
 ):
     """
     Échéancier d'amortissement aligné sur la base core banking (ACT/365,
@@ -103,7 +115,13 @@ def compute_amortization_schedule(
     savings_rate = Decimal(savings_rate or 0)
     mechanism = (mechanism or RepaymentMechanism.DEGRESSIVE).upper()
     per_year = _PERIODS_PER_YEAR.get(periodicity, 12)
-    count = int(period_count(duration_months, periodicity))
+    if tenant_id is not None:
+        from apps.catalog.cbs_resolve import resolve_periodicity_periods_per_year
+
+        per_year = resolve_periodicity_periods_per_year(
+            tenant_id, periodicity, default=per_year
+        )
+    count = int(period_count(duration_months, periodicity, tenant_id=tenant_id))
     period_rate = annual_rate / Decimal(100) / Decimal(per_year)
     daily_rate = annual_rate / Decimal(100) / Decimal(365)
     savings_flat = _round_step(principal * savings_rate / Decimal(100))
@@ -205,12 +223,18 @@ def submit_application(application, user):
     from apps.clients.models import Client
 
     from .analysis_validation import assert_analysis_ready_for_submission
+    from .instruction_policy import (
+        assert_policy_submit_gates,
+        assert_product_bounds,
+    )
     from .models import FinancialAnalysis
     from .risk import risk_level_from_analysis
 
     client = application.client
     if client is None:
         raise WorkflowError("Un client est obligatoire avant soumission.")
+
+    # KYC : toujours exigé à la soumission (même si aussi contrôlé à la création).
     if client.kyc_status != Client.KycStatus.VALIDATED:
         raise WorkflowError(
             "Le KYC du client doit être validé avant soumission du dossier."
@@ -225,28 +249,13 @@ def submit_application(application, user):
     amount = application.amount_requested
     if amount is None:
         raise WorkflowError("Le montant demandé est obligatoire.")
-    if product.amount_min is not None and amount < product.amount_min:
-        raise WorkflowError(
-            f"Le montant demandé ({amount}) est inférieur au minimum du produit "
-            f"({product.amount_min})."
-        )
-    if product.amount_max is not None and amount > product.amount_max:
-        raise WorkflowError(
-            f"Le montant demandé ({amount}) dépasse le maximum du produit "
-            f"({product.amount_max})."
-        )
-
     duration = application.duration_months
     if duration is None:
         raise WorkflowError("La durée demandée est obligatoire.")
-    if duration < product.duration_min_months or duration > product.duration_max_months:
-        raise WorkflowError(
-            f"La durée ({duration} mois) doit être entre "
-            f"{product.duration_min_months} et {product.duration_max_months} mois "
-            f"pour ce produit."
-        )
 
+    assert_product_bounds(application)
     reference = assert_analysis_ready_for_submission(application)
+    assert_policy_submit_gates(application)
     if not reference.is_reference:
         # Garantit qu'il existe toujours une référence explicite.
         FinancialAnalysis.objects.filter(application=application).update(
@@ -358,6 +367,58 @@ def cancel_submission(application, user=None):
     return application
 
 
+@transaction.atomic
+def cancel_application(application, user=None):
+    """Annule formellement un dossier (statut CANCELLED) si la politique l'autorise."""
+    from .instruction_policy import get_instruction_policy
+    from .models import CreditInstructionPolicy
+
+    policy = get_instruction_policy(application.tenant_id)
+    if not policy.enable_cancel_status:
+        raise WorkflowError(
+            "L'annulation formelle du dossier n'est pas activée pour cette filiale."
+        )
+
+    if application.status in (
+        CreditApplication.Status.DISBURSED,
+        CreditApplication.Status.CLOSED,
+        CreditApplication.Status.CANCELLED,
+    ):
+        raise WorkflowError(
+            "Ce dossier ne peut plus être annulé dans son statut actuel."
+        )
+
+    # Annule un éventuel circuit en cours.
+    content_type = ContentType.objects.get_for_model(CreditApplication)
+    instances = WorkflowInstance.all_tenants.filter(
+        content_type=content_type,
+        object_id=application.pk,
+        status__in=[
+            WorkflowInstance.Status.IN_PROGRESS,
+            WorkflowInstance.Status.AWAITING_CONDITIONS,
+        ],
+    )
+    for instance in instances:
+        instance.tasks.filter(status=ApprovalTask.Status.PENDING).update(
+            status=ApprovalTask.Status.SKIPPED
+        )
+        instance.status = WorkflowInstance.Status.CANCELLED
+        instance.save(update_fields=["status", "updated_at"])
+
+    application.status = CreditApplication.Status.CANCELLED
+    application.save(update_fields=["status", "updated_at"])
+
+    from apps.audit.events import CANCELLED, log_workflow_event
+
+    log_workflow_event(
+        application,
+        CANCELLED,
+        detail="Annulation formelle du dossier.",
+        user=user,
+    )
+    return application
+
+
 def _assert_disbursement_prerequisites(application):
     """Contrôles communs avant demande ou exécution du décaissement."""
     from apps.contracts.services import missing_required_contracts
@@ -436,11 +497,12 @@ def cancel_disbursement_request(application):
 
 
 @transaction.atomic
-def disburse_application(application, disburse_date=None):
-    """Crée le prêt et l'échéancier après approbation (avant intégration CBS).
+def disburse_application(application, disburse_date=None, *, skip_cbs=False):
+    """Crée le prêt et l'échéancier après approbation, avec push CBS Perfect.
 
-    Accepte un dossier approuvé / contrat généré (décision directe opérations)
-    ou une demande déjà initiée (``DISBURSEMENT_PENDING``).
+    1. Prérequis métier (réserves, contrats)
+    2. Soumission CBS ``crd/simple`` (sauf ``skip_cbs`` / mode LOCAL)
+    3. Création locale ``Loan`` + échéancier + refs CBS
 
     Le capital du prêt = montant accordé (référence). Les frais ne sont pas
     soustraits ici : le CBS les prélève sur le montant décaissé.
@@ -457,37 +519,63 @@ def disburse_application(application, disburse_date=None):
 
     _assert_disbursement_prerequisites(application)
 
+    cbs_result = None
+    if not skip_cbs:
+        try:
+            from apps.corebanking.disbursement import submit_credit_to_cbs
+            from apps.corebanking.services import CoreBankingError
+
+            cbs_result = submit_credit_to_cbs(application)
+        except CoreBankingError as exc:
+            raise WorkflowError(str(exc)) from exc
+
     disburse_date = disburse_date or date.today()
     from .amounts import reference_amount
 
     principal = reference_amount(application) or application.amount_requested
-    # Capital décaissé = montant accordé (référence). Les frais sont prélevés
-    # par le CBS sur ce montant ; on ne les soustrait pas ici.
     rate = application.interest_rate or application.product.interest_rate
     periodicity = application.periodicity
     savings_rate = application.mandatory_savings_rate or 0
     mechanism = application.repayment_mechanism or "DEGRESSIVE"
-    # 1re échéance : celle du dossier si renseignée, sinon une période après le
-    # décaissement (reportée au 1er jour ouvrable).
     first_due = application.first_due_date or _next_business_day(
         _add_periods(disburse_date, periodicity, 1)
     )
 
-    loan = Loan.objects.create(
-        application=application,
-        principal=principal,
-        interest_rate=rate,
-        mandatory_savings_rate=savings_rate,
-        duration_months=application.duration_months,
-        disbursed_at=disburse_date,
-        first_due_date=first_due,
-    )
+    loan_kwargs = {
+        "tenant_id": application.tenant_id,
+        "application": application,
+        "principal": principal,
+        "interest_rate": rate,
+        "mandatory_savings_rate": savings_rate,
+        "duration_months": application.duration_months,
+        "disbursed_at": disburse_date,
+        "first_due_date": first_due,
+    }
+    if cbs_result:
+        loan_kwargs.update(
+            {
+                "core_banking_reference": (
+                    cbs_result.get("num_contrat")
+                    or cbs_result.get("ref_demande")
+                    or ""
+                )[:100],
+                "cbs_external_id": str(cbs_result.get("external_id") or "")[:100],
+                "cbs_demande_number": str(cbs_result.get("num_demande") or "")[:100],
+                "cbs_demande_ref": str(cbs_result.get("ref_demande") or "")[:100],
+                "cbs_contract_number": str(cbs_result.get("num_contrat") or "")[:100],
+                "cbs_disbursement_status": "SUBMITTED",
+                "cbs_disbursement_payload": cbs_result.get("raw") or {},
+            }
+        )
+
+    loan = Loan.objects.create(**loan_kwargs)
 
     schedule = compute_amortization_schedule(
         principal, rate, application.duration_months,
         periodicity=periodicity, start_date=disburse_date,
         first_due_date=first_due, savings_rate=savings_rate,
         mechanism=mechanism,
+        tenant_id=application.tenant_id,
     )
     Installment.objects.bulk_create([
         Installment(

@@ -22,6 +22,7 @@ def credit_file_path(instance, filename):
 class Periodicity(models.TextChoices):
     DAILY = "DAILY", "Journalier"
     WEEKLY = "WEEKLY", "Hebdomadaire"
+    BIMONTHLY = "BIMONTHLY", "Bimensuelle"
     MONTHLY = "MONTHLY", "Mensuelle"
     QUARTERLY = "QUARTERLY", "Trimestrielle"
     SEMIANNUAL = "SEMIANNUAL", "Semestrielle"
@@ -134,6 +135,7 @@ class ESCategory(models.TextChoices):
 _PERIODS_PER_YEAR = {
     Periodicity.DAILY: 360,
     Periodicity.WEEKLY: 52,
+    Periodicity.BIMONTHLY: 24,
     Periodicity.MONTHLY: 12,
     Periodicity.QUARTERLY: 4,
     Periodicity.SEMIANNUAL: 2,
@@ -141,11 +143,17 @@ _PERIODS_PER_YEAR = {
 }
 
 
-def compute_last_due_date(first_due_date, periodicity, duration_months):
+def compute_last_due_date(first_due_date, periodicity, duration_months, tenant_id=None):
     """Calcule la date de dernière échéance selon la périodicité et la durée."""
     if not (first_due_date and periodicity and duration_months):
         return None
     per_year = _PERIODS_PER_YEAR.get(periodicity)
+    if tenant_id is not None:
+        from apps.catalog.cbs_resolve import resolve_periodicity_periods_per_year
+
+        per_year = resolve_periodicity_periods_per_year(
+            tenant_id, periodicity, default=per_year or 12
+        )
     if not per_year:
         return None
     count = max(1, math.ceil(duration_months / 12 * per_year))
@@ -154,13 +162,19 @@ def compute_last_due_date(first_due_date, periodicity, duration_months):
         return first_due_date + timedelta(days=steps)
     if periodicity == Periodicity.WEEKLY:
         return first_due_date + timedelta(weeks=steps)
+    if periodicity == Periodicity.BIMONTHLY:
+        # Deux échéances par mois ≈ 15 jours calendaires.
+        return first_due_date + timedelta(days=15 * steps)
     months_map = {
         Periodicity.MONTHLY: 1,
         Periodicity.QUARTERLY: 3,
         Periodicity.SEMIANNUAL: 6,
         Periodicity.ANNUAL: 12,
     }
-    return first_due_date + relativedelta(months=months_map[periodicity] * steps)
+    months = months_map.get(periodicity)
+    if months is None:
+        months = max(1, round(12 / int(per_year)))
+    return first_due_date + relativedelta(months=months * steps)
 
 
 class CreditApplication(TenantScopedModel, AuthoredModel):
@@ -220,8 +234,10 @@ class CreditApplication(TenantScopedModel, AuthoredModel):
         help_text="% du capital prélevé en épargne à chaque échéance (0 = non applicable).",
     )
     periodicity = models.CharField(
-        "périodicité", max_length=15, choices=Periodicity.choices,
+        "périodicité",
+        max_length=32,
         default=Periodicity.MONTHLY,
+        help_text="Code du référentiel LoanPeriodicity (ex. MONTHLY).",
     )
     duration_months = models.PositiveIntegerField("durée (mois)")
     first_due_date = models.DateField("date de première échéance", null=True, blank=True)
@@ -230,8 +246,16 @@ class CreditApplication(TenantScopedModel, AuthoredModel):
         help_text="Calculée automatiquement.",
     )
     repayment_mechanism = models.CharField(
-        "mécanisme de remboursement", max_length=20,
-        choices=RepaymentMechanism.choices, blank=True,
+        "mécanisme de remboursement",
+        max_length=32,
+        blank=True,
+        help_text="Code du référentiel RepaymentMethod (ex. DEGRESSIVE).",
+    )
+    currency = models.CharField(
+        "devise",
+        max_length=8,
+        default="XOF",
+        help_text="Code du référentiel Currency (ex. XOF).",
     )
     purpose_type = models.CharField(
         "objet du financement", max_length=20, choices=PurposeType.choices, blank=True
@@ -241,7 +265,6 @@ class CreditApplication(TenantScopedModel, AuthoredModel):
         "scan de la lettre de demande", upload_to=credit_file_path,
         max_length=255, blank=True,
     )
-    currency = models.CharField("devise", max_length=3, default="XOF")
 
     # ------------------------------------------------------------------ #
     # Plan de financement
@@ -464,7 +487,10 @@ class CreditApplication(TenantScopedModel, AuthoredModel):
             self.reference = self._generate_reference()
         # La dernière échéance est toujours dérivée des conditions.
         self.last_due_date = compute_last_due_date(
-            self.first_due_date, self.periodicity, self.duration_months
+            self.first_due_date,
+            self.periodicity,
+            self.duration_months,
+            tenant_id=self.tenant_id,
         )
         # Quotité financée = montant de référence / coût total du projet.
         from .amounts import reference_amount
@@ -688,6 +714,108 @@ class AnalysisThreshold(TenantScopedModel):
         if obj is not None:
             return obj
         return cls(tenant_id=tenant_id, **DEFAULT_THRESHOLDS)
+
+
+class CreditInstructionPolicy(TenantScopedModel):
+    """Politique d'instruction crédit paramétrable par filiale.
+
+    Les défauts reproduisent le comportement historique (souple) :
+    alertes sans blocage couverture, visite optionnelle, analyse
+    défavorable soumissible, etc.
+    """
+
+    class CoverageMode(models.TextChoices):
+        ALERT = "ALERT", "Alerte uniquement"
+        BLOCK_SUBMIT = "BLOCK_SUBMIT", "Bloquer la soumission"
+        BLOCK_APPROVE = "BLOCK_APPROVE", "Bloquer l'approbation finale"
+
+    class AmountApprovedMode(models.TextChoices):
+        ALLOW = "ALLOW", "Saisissable dès l'instruction"
+        FORBID = "FORBID", "Uniquement à la décision du circuit"
+
+    class KycGate(models.TextChoices):
+        ON_SUBMIT = "ON_SUBMIT", "À la soumission uniquement"
+        ON_CREATE = "ON_CREATE", "Dès la création du dossier"
+
+    class BoundsGate(models.TextChoices):
+        ON_SUBMIT = "ON_SUBMIT", "À la soumission uniquement"
+        ON_SAVE = "ON_SAVE", "À chaque enregistrement"
+
+    collateral_coverage_mode = models.CharField(
+        "contrôle couverture garanties",
+        max_length=20,
+        choices=CoverageMode.choices,
+        default=CoverageMode.ALERT,
+    )
+    require_field_visit = models.BooleanField(
+        "visite terrain obligatoire avant soumission",
+        default=False,
+    )
+    allow_unfavorable_analysis_submit = models.BooleanField(
+        "autoriser la soumission si analyse défavorable",
+        default=True,
+    )
+    require_product_checklist = models.BooleanField(
+        "exiger les pièces obligatoires du produit",
+        default=False,
+    )
+    match_product_client_type = models.BooleanField(
+        "contrôler la cohérence type client / produit",
+        default=False,
+    )
+    kyc_gate = models.CharField(
+        "exigence KYC",
+        max_length=20,
+        choices=KycGate.choices,
+        default=KycGate.ON_SUBMIT,
+    )
+    product_bounds_gate = models.CharField(
+        "contrôle bornes produit (montant / durée)",
+        max_length=20,
+        choices=BoundsGate.choices,
+        default=BoundsGate.ON_SUBMIT,
+    )
+    amount_approved_mode = models.CharField(
+        "saisie du montant approuvé",
+        max_length=20,
+        choices=AmountApprovedMode.choices,
+        default=AmountApprovedMode.ALLOW,
+    )
+    show_readiness_checklist = models.BooleanField(
+        "afficher la checklist de readiness avant soumission",
+        default=True,
+    )
+    enable_cancel_status = models.BooleanField(
+        "autoriser l'annulation formelle du dossier (CANCELLED)",
+        default=False,
+    )
+    allow_collateral_during_approval = models.BooleanField(
+        "autoriser le rattachement de garanties pendant le circuit",
+        default=False,
+    )
+
+    class Meta:
+        verbose_name = "politique d'instruction crédit"
+        verbose_name_plural = "politiques d'instruction crédit"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant"],
+                name="unique_credit_instruction_policy_per_tenant",
+            )
+        ]
+
+    def __str__(self):
+        return f"Politique instruction — {self.tenant_id}"
+
+    @classmethod
+    def for_tenant(cls, tenant_id):
+        """Politique persistée de la filiale, ou défauts non persistés."""
+        if not tenant_id:
+            return cls()
+        obj = cls.all_tenants.filter(tenant_id=tenant_id).first()
+        if obj is not None:
+            return obj
+        return cls(tenant_id=tenant_id)
 
 
 class FinancialAnalysis(TenantScopedModel, AuthoredModel):
@@ -1363,6 +1491,7 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
                 first_due_date=app.first_due_date,
                 savings_rate=0,
                 mechanism=app.repayment_mechanism or "DEGRESSIVE",
+                tenant_id=app.tenant_id,
             )
         except Exception:
             return None
@@ -1519,8 +1648,12 @@ class FieldVisit(TenantScopedModel):
         "profil de l'auteur", max_length=150, blank=True,
         help_text="Rôle/profil de l'auteur figé au moment de la visite.",
     )
-    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
-    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    geo_coordinates = models.CharField(
+        "coordonnées géographiques",
+        max_length=120,
+        blank=True,
+        help_text="Ex. 5.359952, -4.008256 (collé depuis Maps).",
+    )
     report = models.TextField("compte rendu", blank=True)
 
     class Meta:
@@ -1558,6 +1691,28 @@ class Loan(TenantScopedModel):
 
     # Référence dans le Core Banking de la filiale
     core_banking_reference = models.CharField(max_length=100, blank=True)
+    cbs_external_id = models.CharField(
+        "identifiant externe CBS (externalId)", max_length=100, blank=True
+    )
+    cbs_demande_number = models.CharField(
+        "n° demande CBS (numDemande)", max_length=100, blank=True
+    )
+    cbs_demande_ref = models.CharField(
+        "réf. demande CBS (refDemande)", max_length=100, blank=True
+    )
+    cbs_contract_number = models.CharField(
+        "n° contrat CBS (numContrat)", max_length=100, blank=True
+    )
+    cbs_disbursement_status = models.CharField(
+        "statut décaissement CBS",
+        max_length=40,
+        blank=True,
+        default="",
+        help_text="SUBMITTED / CONFIRMED / FAILED / … (callbacks Perfect).",
+    )
+    cbs_disbursement_payload = models.JSONField(
+        "dernier payload CBS décaissement", default=dict, blank=True
+    )
 
     class Meta:
         verbose_name = "prêt"

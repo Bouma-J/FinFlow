@@ -1,6 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, Plus, Save, Trash2, X } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import {
+  Building2,
+  Image,
+  MapPin,
+  Palette,
+  Plus,
+  Save,
+  Trash2,
+  Users,
+  X,
+} from "lucide-react";
+import {
+  useState,
+  type CSSProperties,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 
 import { api } from "@/api/client";
 import type { Agency, Paginated, Tenant, TenantOfficer } from "@/api/types";
@@ -72,6 +87,35 @@ function cleanOfficers(items: OfficerDraft[]) {
       phone: o.phone.trim(),
     }))
     .filter((o) => o.title || o.last_name || o.first_name || o.phone);
+}
+
+function FormBlock({
+  icon: Icon,
+  title,
+  description,
+  children,
+}: {
+  icon: typeof Building2;
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="tenant-form-block">
+      <header className="tenant-form-block-head">
+        <span className="tenant-form-block-icon">
+          <Icon size={17} />
+        </span>
+        <div>
+          <h3 className="tenant-form-block-title">{title}</h3>
+          {description && (
+            <p className="tenant-form-block-desc">{description}</p>
+          )}
+        </div>
+      </header>
+      <div className="tenant-form-block-body">{children}</div>
+    </section>
+  );
 }
 
 export function AdminTenantsPage() {
@@ -179,13 +223,15 @@ export function AdminTenantsPage() {
 
   if (!user?.is_group_level) {
     return (
-      <div>
+      <div className="page-shell">
         <PageHeader
           icon={Building2}
           title="Filiales"
           subtitle="Réservé aux administrateurs Groupe"
         />
-        <p className="muted">Vous n&apos;avez pas accès à la gestion des filiales.</p>
+        <p className="muted">
+          Vous n&apos;avez pas accès à la gestion des filiales.
+        </p>
       </div>
     );
   }
@@ -199,9 +245,9 @@ export function AdminTenantsPage() {
       zone: t.zone,
       currency: t.currency,
       timezone: t.timezone,
-      address: t.address,
-      phone: t.phone,
-      email: t.email,
+      address: t.address ?? "",
+      phone: t.phone ?? "",
+      email: t.email ?? "",
       is_active: t.is_active,
       brand_primary: t.brand_primary,
       brand_secondary: t.brand_secondary,
@@ -209,10 +255,19 @@ export function AdminTenantsPage() {
     });
     setOfficers(fromOfficers(t.officers));
     setLogoFile(null);
+    setShowForm(false);
+    setError(null);
+  }
+
+  function resetCreateForm() {
+    setForm({ ...EMPTY_TENANT });
+    setOfficers([]);
+    setLogoFile(null);
+    setError(null);
   }
 
   return (
-    <div>
+    <div className="page-shell tenants-admin-page">
       <PageHeader
         icon={Building2}
         title="Filiales"
@@ -220,13 +275,10 @@ export function AdminTenantsPage() {
         actions={
           <button
             className="btn btn-primary"
+            type="button"
             onClick={() => {
               setShowForm((s) => !s);
-              if (!showForm) {
-                setForm({ ...EMPTY_TENANT });
-                setOfficers([]);
-                setLogoFile(null);
-              }
+              if (!showForm) resetCreateForm();
             }}
           >
             {showForm ? <X /> : <Plus />}
@@ -237,12 +289,19 @@ export function AdminTenantsPage() {
 
       {showForm && (
         <form
-          className="inline-form"
+          className="tenant-compose-form"
           onSubmit={(e: FormEvent) => {
             e.preventDefault();
             createTenant.mutate();
           }}
         >
+          <div className="tenant-compose-head">
+            <h2>Nouvelle filiale</h2>
+            <p className="muted">
+              Renseignez l&apos;identité, la charte graphique et les
+              responsables avant de créer la filiale.
+            </p>
+          </div>
           <TenantFields
             form={form}
             setForm={setForm}
@@ -251,55 +310,79 @@ export function AdminTenantsPage() {
           />
           <OfficersEditor officers={officers} setOfficers={setOfficers} />
           {error && <div className="form-error">{error}</div>}
-          <button className="btn btn-primary" disabled={createTenant.isPending}>
-            Créer la filiale
-          </button>
+          <div className="tenant-compose-actions">
+            <button
+              type="button"
+              className="btn btn-ghost"
+              onClick={() => {
+                setShowForm(false);
+                resetCreateForm();
+              }}
+            >
+              Annuler
+            </button>
+            <button
+              className="btn btn-primary"
+              disabled={createTenant.isPending}
+            >
+              <Plus size={16} />
+              {createTenant.isPending ? "Création…" : "Créer la filiale"}
+            </button>
+          </div>
         </form>
       )}
 
-      <div className="detail-grid stacked">
+      <div className="tenants-admin-layout">
         <Card title="Filiales">
           {tenants.isLoading || !tenants.data ? (
             <Spinner />
           ) : tenants.data.results.length === 0 ? (
             <EmptyState message="Aucune filiale." />
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Code</th>
-                  <th>Raison sociale</th>
-                  <th>Pays</th>
-                  <th>Devise</th>
-                  <th>Statut</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {tenants.data.results.map((t) => (
-                  <tr key={t.id}>
-                    <td>{t.code}</td>
-                    <td>{t.name}</td>
-                    <td>{t.country}</td>
-                    <td>{t.currency}</td>
-                    <td>
-                      <Badge
-                        value={t.is_active ? "success" : "muted"}
-                        label={t.is_active ? "Active" : "Inactive"}
-                      />
-                    </td>
-                    <td>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => openEdit(t)}
-                      >
-                        Configurer
-                      </button>
-                    </td>
+            <div className="table-scroll">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Code</th>
+                    <th>Raison sociale</th>
+                    <th>Pays</th>
+                    <th>Devise</th>
+                    <th>Statut</th>
+                    <th></th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {tenants.data.results.map((t) => (
+                    <tr
+                      key={t.id}
+                      className={selectedId === t.id ? "is-selected" : undefined}
+                    >
+                      <td>
+                        <code>{t.code}</code>
+                      </td>
+                      <td>{t.name}</td>
+                      <td>{t.country}</td>
+                      <td>{t.currency}</td>
+                      <td>
+                        <Badge
+                          value={t.is_active ? "success" : "muted"}
+                          label={t.is_active ? "Active" : "Inactive"}
+                        />
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => openEdit(t)}
+                        >
+                          Configurer
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
 
@@ -311,14 +394,14 @@ export function AdminTenantsPage() {
           {!selected ? (
             <p className="muted">Sélectionnez une filiale à configurer.</p>
           ) : (
-            <>
+            <div className="tenant-config-stack">
               {selected.logo_url && (
                 <div className="tenant-logo-preview">
                   <img src={selected.logo_url} alt="Logo filiale" />
                 </div>
               )}
               <form
-                className="stack"
+                className="tenant-compose-form embedded"
                 onSubmit={(e: FormEvent) => {
                   e.preventDefault();
                   updateTenant.mutate({
@@ -338,136 +421,166 @@ export function AdminTenantsPage() {
                 />
                 <OfficersEditor officers={officers} setOfficers={setOfficers} />
                 {error && <div className="form-error">{error}</div>}
-                <button
-                  className="btn btn-primary btn-sm"
-                  disabled={updateTenant.isPending}
-                >
-                  <Save />
-                  Enregistrer
-                </button>
-              </form>
-
-              <hr
-                style={{
-                  margin: "20px 0",
-                  border: "none",
-                  borderTop: "1px solid var(--border)",
-                }}
-              />
-
-              <h4 className="card-subtitle">Agences</h4>
-              {agencies.isLoading ? (
-                <Spinner />
-              ) : (
-                <ul className="workflow-steps">
-                  {(agencies.data?.results ?? []).map((a) => (
-                    <li key={a.id}>
-                      {a.code} — {a.name}
-                      {a.region && (
-                        <span className="muted small"> ({a.region})</span>
-                      )}
-                      {(a.manager_last_name || a.manager_first_name) && (
-                        <span className="muted small">
-                          {" "}
-                          — Chef :{" "}
-                          {`${a.manager_first_name} ${a.manager_last_name}`.trim()}
-                          {a.manager_phone ? ` (${a.manager_phone})` : ""}
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                  {(agencies.data?.results.length ?? 0) === 0 && (
-                    <li className="muted">Aucune agence.</li>
-                  )}
-                </ul>
-              )}
-              <form
-                className="stack"
-                style={{ marginTop: 12 }}
-                onSubmit={(e: FormEvent) => {
-                  e.preventDefault();
-                  createAgency.mutate();
-                }}
-              >
-                <div className="form-grid two-col">
-                  <label className="field">
-                    <span>Code agence *</span>
-                    <input
-                      value={agencyForm.code}
-                      onChange={(e) =>
-                        setAgencyForm({ ...agencyForm, code: e.target.value })
-                      }
-                      required
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Nom agence *</span>
-                    <input
-                      value={agencyForm.name}
-                      onChange={(e) =>
-                        setAgencyForm({ ...agencyForm, name: e.target.value })
-                      }
-                      required
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Région</span>
-                    <input
-                      value={agencyForm.region}
-                      onChange={(e) =>
-                        setAgencyForm({
-                          ...agencyForm,
-                          region: e.target.value,
-                        })
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Nom du chef d&apos;agence</span>
-                    <input
-                      value={agencyForm.manager_last_name}
-                      onChange={(e) =>
-                        setAgencyForm({
-                          ...agencyForm,
-                          manager_last_name: e.target.value,
-                        })
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Prénom du chef d&apos;agence</span>
-                    <input
-                      value={agencyForm.manager_first_name}
-                      onChange={(e) =>
-                        setAgencyForm({
-                          ...agencyForm,
-                          manager_first_name: e.target.value,
-                        })
-                      }
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Téléphone du chef d&apos;agence</span>
-                    <input
-                      value={agencyForm.manager_phone}
-                      onChange={(e) =>
-                        setAgencyForm({
-                          ...agencyForm,
-                          manager_phone: e.target.value,
-                        })
-                      }
-                    />
-                  </label>
+                <div className="tenant-compose-actions">
+                  <button
+                    className="btn btn-primary"
+                    disabled={updateTenant.isPending}
+                  >
+                    <Save size={16} />
+                    {updateTenant.isPending
+                      ? "Enregistrement…"
+                      : "Enregistrer la filiale"}
+                  </button>
                 </div>
-                <button
-                  className="btn btn-primary btn-sm"
-                  disabled={createAgency.isPending}
-                >
-                  <Plus />
-                  Ajouter l&apos;agence
-                </button>
               </form>
-            </>
+
+              <section className="tenant-form-block">
+                <header className="tenant-form-block-head">
+                  <span className="tenant-form-block-icon">
+                    <MapPin size={17} />
+                  </span>
+                  <div>
+                    <h3 className="tenant-form-block-title">Agences</h3>
+                    <p className="tenant-form-block-desc">
+                      Points de vente rattachés à cette filiale.
+                    </p>
+                  </div>
+                </header>
+                <div className="tenant-form-block-body">
+                  {agencies.isLoading ? (
+                    <Spinner />
+                  ) : (
+                    <ul className="tenant-agency-list">
+                      {(agencies.data?.results ?? []).map((a) => (
+                        <li key={a.id}>
+                          <strong>
+                            {a.code} — {a.name}
+                          </strong>
+                          {a.region && (
+                            <span className="muted small"> ({a.region})</span>
+                          )}
+                          {(a.manager_last_name || a.manager_first_name) && (
+                            <div className="muted small">
+                              Chef :{" "}
+                              {`${a.manager_first_name} ${a.manager_last_name}`.trim()}
+                              {a.manager_phone ? ` · ${a.manager_phone}` : ""}
+                            </div>
+                          )}
+                        </li>
+                      ))}
+                      {(agencies.data?.results.length ?? 0) === 0 && (
+                        <li className="muted">Aucune agence.</li>
+                      )}
+                    </ul>
+                  )}
+
+                  <form
+                    className="tenant-agency-form"
+                    onSubmit={(e: FormEvent) => {
+                      e.preventDefault();
+                      createAgency.mutate();
+                    }}
+                  >
+                    <p className="tenant-form-subtitle">Ajouter une agence</p>
+                    <div className="form-grid two-col">
+                      <label className="field">
+                        <span>Code agence *</span>
+                        <input
+                          value={agencyForm.code}
+                          onChange={(e) =>
+                            setAgencyForm({
+                              ...agencyForm,
+                              code: e.target.value,
+                            })
+                          }
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Nom agence *</span>
+                        <input
+                          value={agencyForm.name}
+                          onChange={(e) =>
+                            setAgencyForm({
+                              ...agencyForm,
+                              name: e.target.value,
+                            })
+                          }
+                          required
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Région</span>
+                        <input
+                          value={agencyForm.region}
+                          onChange={(e) =>
+                            setAgencyForm({
+                              ...agencyForm,
+                              region: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Adresse</span>
+                        <input
+                          value={agencyForm.address}
+                          onChange={(e) =>
+                            setAgencyForm({
+                              ...agencyForm,
+                              address: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Nom du chef d&apos;agence</span>
+                        <input
+                          value={agencyForm.manager_last_name}
+                          onChange={(e) =>
+                            setAgencyForm({
+                              ...agencyForm,
+                              manager_last_name: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Prénom du chef d&apos;agence</span>
+                        <input
+                          value={agencyForm.manager_first_name}
+                          onChange={(e) =>
+                            setAgencyForm({
+                              ...agencyForm,
+                              manager_first_name: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Téléphone du chef d&apos;agence</span>
+                        <input
+                          value={agencyForm.manager_phone}
+                          onChange={(e) =>
+                            setAgencyForm({
+                              ...agencyForm,
+                              manager_phone: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={createAgency.isPending}
+                    >
+                      <Plus size={15} />
+                      Ajouter l&apos;agence
+                    </button>
+                  </form>
+                </div>
+              </section>
+            </div>
           )}
         </Card>
       </div>
@@ -490,47 +603,57 @@ function OfficersEditor({
     );
 
   return (
-    <div className="field" style={{ gridColumn: "1 / -1", marginTop: 8 }}>
-      <span>Responsables de la filiale</span>
-      <p className="muted small" style={{ margin: "4px 0 10px" }}>
-        Ajoutez au besoin les responsables (DG, Directeur d&apos;exploitation,
-        etc.).
-      </p>
-      {officers.map((o, idx) => (
-        <div key={idx} className="officer-row">
-          <input
-            placeholder="Intitulé du poste *"
-            value={o.title}
-            onChange={(e) => update(idx, { title: e.target.value })}
-          />
-          <input
-            placeholder="Nom *"
-            value={o.last_name}
-            onChange={(e) => update(idx, { last_name: e.target.value })}
-          />
-          <input
-            placeholder="Prénom"
-            value={o.first_name}
-            onChange={(e) => update(idx, { first_name: e.target.value })}
-          />
-          <input
-            placeholder="Téléphone"
-            value={o.phone}
-            onChange={(e) => update(idx, { phone: e.target.value })}
-          />
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() =>
-              setOfficers((arr) => arr.filter((_, i) => i !== idx))
-            }
-            title="Retirer"
-            aria-label="Retirer"
-          >
-            <Trash2 size={14} />
-          </button>
-        </div>
-      ))}
+    <FormBlock
+      icon={Users}
+      title="Responsables"
+      description="DG, directeur d'exploitation, ou autres postes clés (optionnel)."
+    >
+      {officers.length === 0 && (
+        <p className="muted small" style={{ marginTop: 0 }}>
+          Aucun responsable saisi pour le moment.
+        </p>
+      )}
+      <div className="officer-list">
+        {officers.map((o, idx) => (
+          <div key={idx} className="officer-row">
+            <input
+              placeholder="Intitulé du poste *"
+              value={o.title}
+              onChange={(e) => update(idx, { title: e.target.value })}
+              aria-label="Intitulé du poste"
+            />
+            <input
+              placeholder="Nom *"
+              value={o.last_name}
+              onChange={(e) => update(idx, { last_name: e.target.value })}
+              aria-label="Nom"
+            />
+            <input
+              placeholder="Prénom"
+              value={o.first_name}
+              onChange={(e) => update(idx, { first_name: e.target.value })}
+              aria-label="Prénom"
+            />
+            <input
+              placeholder="Téléphone"
+              value={o.phone}
+              onChange={(e) => update(idx, { phone: e.target.value })}
+              aria-label="Téléphone"
+            />
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() =>
+                setOfficers((arr) => arr.filter((_, i) => i !== idx))
+              }
+              title="Retirer"
+              aria-label="Retirer"
+            >
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
       <button
         type="button"
         className="btn btn-ghost btn-sm"
@@ -539,7 +662,7 @@ function OfficersEditor({
         <Plus size={14} />
         Ajouter un responsable
       </button>
-    </div>
+    </FormBlock>
   );
 }
 
@@ -557,121 +680,193 @@ function TenantFields({
   codeReadOnly?: boolean;
 }) {
   return (
-    <div className="page-shell form-grid two-col">
-      <label className="field">
-        <span>Code filiale *</span>
-        <input
-          value={form.code}
-          onChange={(e) => setForm({ ...form, code: e.target.value })}
-          required
-          readOnly={codeReadOnly}
-        />
-      </label>
-      <label className="field">
-        <span>Raison sociale *</span>
-        <input
-          value={form.name}
-          onChange={(e) => setForm({ ...form, name: e.target.value })}
-          required
-        />
-      </label>
-      <label className="field">
-        <span>Pays *</span>
-        <input
-          value={form.country}
-          onChange={(e) => setForm({ ...form, country: e.target.value })}
-          required
-        />
-      </label>
-      <label className="field">
-        <span>Zone / région</span>
-        <input
-          value={form.zone}
-          onChange={(e) => setForm({ ...form, zone: e.target.value })}
-        />
-      </label>
-      <label className="field">
-        <span>Devise</span>
-        <input
-          value={form.currency}
-          onChange={(e) => setForm({ ...form, currency: e.target.value })}
-        />
-      </label>
-      <label className="field">
-        <span>Fuseau horaire</span>
-        <input
-          value={form.timezone}
-          onChange={(e) => setForm({ ...form, timezone: e.target.value })}
-        />
-      </label>
-      <label className="field">
-        <span>Adresse</span>
-        <input
-          value={form.address}
-          onChange={(e) => setForm({ ...form, address: e.target.value })}
-        />
-      </label>
-      <label className="field">
-        <span>Téléphone</span>
-        <input
-          value={form.phone}
-          onChange={(e) => setForm({ ...form, phone: e.target.value })}
-        />
-      </label>
-      <label className="field">
-        <span>Email</span>
-        <input
-          type="email"
-          value={form.email}
-          onChange={(e) => setForm({ ...form, email: e.target.value })}
-        />
-      </label>
-      <label className="field">
-        <span>Logo</span>
-        <input
-          type="file"
-          accept="image/*"
-          onChange={(e) => setLogoFile(e.target.files?.[0] ?? null)}
-        />
-        {logoFile && <span className="muted small">{logoFile.name}</span>}
-      </label>
-      <label className="field color-field">
-        <span>Couleur principale</span>
-        <input
-          type="color"
-          value={form.brand_primary}
-          onChange={(e) => setForm({ ...form, brand_primary: e.target.value })}
-        />
-        <input value={form.brand_primary} readOnly className="color-hex" />
-      </label>
-      <label className="field color-field">
-        <span>Couleur secondaire</span>
-        <input
-          type="color"
-          value={form.brand_secondary}
-          onChange={(e) =>
-            setForm({ ...form, brand_secondary: e.target.value })
-          }
-        />
-        <input value={form.brand_secondary} readOnly className="color-hex" />
-      </label>
-      <label className="field color-field">
-        <span>Couleur d&apos;accent</span>
-        <input
-          type="color"
-          value={form.brand_accent}
-          onChange={(e) => setForm({ ...form, brand_accent: e.target.value })}
-        />
-        <input value={form.brand_accent} readOnly className="color-hex" />
-      </label>
-      <label className="field checkbox">
-        <input
-          type="checkbox"
-          checked={form.is_active}
-          onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
-        />
-        <span>Filiale active</span>
-      </label>
+    <div className="tenant-fields">
+      <FormBlock
+        icon={Building2}
+        title="Identité"
+        description="Code unique, raison sociale et localisation."
+      >
+        <div className="form-grid two-col">
+          <label className="field">
+            <span>Code filiale *</span>
+            <input
+              value={form.code}
+              onChange={(e) => setForm({ ...form, code: e.target.value })}
+              required
+              readOnly={codeReadOnly}
+            />
+          </label>
+          <label className="field">
+            <span>Raison sociale *</span>
+            <input
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Pays *</span>
+            <input
+              value={form.country}
+              onChange={(e) => setForm({ ...form, country: e.target.value })}
+              required
+            />
+          </label>
+          <label className="field">
+            <span>Zone / région</span>
+            <input
+              value={form.zone}
+              onChange={(e) => setForm({ ...form, zone: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Devise</span>
+            <input
+              value={form.currency}
+              onChange={(e) => setForm({ ...form, currency: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Fuseau horaire</span>
+            <input
+              value={form.timezone}
+              onChange={(e) => setForm({ ...form, timezone: e.target.value })}
+            />
+          </label>
+          <label className="field checkbox tenant-active-field">
+            <input
+              type="checkbox"
+              checked={form.is_active}
+              onChange={(e) =>
+                setForm({ ...form, is_active: e.target.checked })
+              }
+            />
+            <span>Filiale active</span>
+          </label>
+        </div>
+      </FormBlock>
+
+      <FormBlock
+        icon={MapPin}
+        title="Coordonnées"
+        description="Adresse et contacts de la filiale."
+      >
+        <div className="form-grid two-col">
+          <label className="field full-span">
+            <span>Adresse</span>
+            <input
+              value={form.address}
+              onChange={(e) => setForm({ ...form, address: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Téléphone</span>
+            <input
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
+            />
+          </label>
+          <label className="field">
+            <span>Email</span>
+            <input
+              type="email"
+              value={form.email}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+            />
+          </label>
+        </div>
+      </FormBlock>
+
+      <FormBlock
+        icon={Palette}
+        title="Charte graphique"
+        description="Logo et couleurs appliquées à toute l'interface de la filiale."
+      >
+        <div className="tenant-brand-layout">
+          <div className="form-grid two-col tenant-brand-fields">
+            <label className="field full-span">
+              <span>
+                <Image size={14} style={{ verticalAlign: "-2px" }} /> Logo
+              </span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => setLogoFile(e.target.files?.[0] ?? null)}
+              />
+              {logoFile && (
+                <span className="muted small">{logoFile.name}</span>
+              )}
+            </label>
+            <label className="field color-field">
+              <span>Couleur principale</span>
+              <input
+                type="color"
+                value={form.brand_primary}
+                onChange={(e) =>
+                  setForm({ ...form, brand_primary: e.target.value })
+                }
+              />
+              <input
+                value={form.brand_primary}
+                readOnly
+                className="color-hex"
+              />
+            </label>
+            <label className="field color-field">
+              <span>Couleur secondaire</span>
+              <input
+                type="color"
+                value={form.brand_secondary}
+                onChange={(e) =>
+                  setForm({ ...form, brand_secondary: e.target.value })
+                }
+              />
+              <input
+                value={form.brand_secondary}
+                readOnly
+                className="color-hex"
+              />
+            </label>
+            <label className="field color-field">
+              <span>Couleur d&apos;accent</span>
+              <input
+                type="color"
+                value={form.brand_accent}
+                onChange={(e) =>
+                  setForm({ ...form, brand_accent: e.target.value })
+                }
+              />
+              <input value={form.brand_accent} readOnly className="color-hex" />
+            </label>
+          </div>
+          <aside
+            className="tenant-brand-preview"
+            style={
+              {
+                "--preview-primary": form.brand_primary,
+                "--preview-secondary": form.brand_secondary,
+                "--preview-accent": form.brand_accent,
+              } as CSSProperties
+            }
+          >
+            <div className="tenant-brand-preview-bar" />
+            <div className="tenant-brand-preview-body">
+              <strong>{form.name || "Aperçu filiale"}</strong>
+              <span className="muted small">
+                {form.code || "CODE"} · {form.country || "Pays"}
+              </span>
+              <div className="tenant-brand-preview-swatches">
+                <span style={{ background: form.brand_primary }} title="Principale" />
+                <span
+                  style={{ background: form.brand_secondary }}
+                  title="Secondaire"
+                />
+                <span style={{ background: form.brand_accent }} title="Accent" />
+              </div>
+            </div>
+          </aside>
+        </div>
+      </FormBlock>
     </div>
   );
 }

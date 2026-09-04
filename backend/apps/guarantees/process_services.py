@@ -62,17 +62,42 @@ def _next_reference(prefix: str, model, tenant_id) -> str:
     return f"{prefix}-{today}-{count:04d}"
 
 
+def _loan_cbs_ref(loan) -> str:
+    """Préfère refDemande Perfect, puis références contrat / legacy."""
+    if loan is None:
+        return ""
+    return (
+        (getattr(loan, "cbs_demande_ref", None) or "").strip()
+        or (getattr(loan, "core_banking_reference", None) or "").strip()
+        or (getattr(loan, "cbs_contract_number", None) or "").strip()
+        or (getattr(loan, "cbs_demande_number", None) or "").strip()
+    )
+
+
+def _client_cbs_ids(client) -> dict:
+    if client is None:
+        return {}
+    return {
+        "code_adherent": (getattr(client, "cbs_client_id", None) or "").strip(),
+        "num_manuel": (getattr(client, "cbs_account_number", None) or "").strip(),
+        "num_piece_identite": (getattr(client, "national_id", None) or "").strip(),
+    }
+
+
 def _resolve_loan_ref(guarantee, loan=None, cbs_loan_reference="") -> tuple:
-    """Retourne (loan, cbs_ref)."""
+    """Retourne (loan, cbs_ref) — refDemande Perfect prioritaire."""
     ref = (cbs_loan_reference or "").strip()
     resolved_loan = loan
     if resolved_loan is None and guarantee.application_id:
         resolved_loan = getattr(guarantee.application, "loan", None)
-    if not ref and resolved_loan is not None:
-        ref = (resolved_loan.core_banking_reference or "").strip()
-    if not ref and guarantee.application_id:
-        app = guarantee.application
-        ref = (getattr(app, "client_account_number", None) or "").strip()
+        if resolved_loan is None:
+            from apps.credits.models import Loan
+
+            resolved_loan = Loan.objects.filter(
+                application_id=guarantee.application_id
+            ).first()
+    if not ref:
+        ref = _loan_cbs_ref(resolved_loan)
     return resolved_loan, ref
 
 
@@ -195,16 +220,24 @@ def initiate_release_request(
     loan_obj, loan_ref = _resolve_loan_ref(guarantee, loan, cbs_loan_reference)
     if not loan_ref:
         raise ProcessError(
-            "Référence prêt CBS manquante : sélectionnez un crédit soldé "
-            "ou renseignez la référence CBS."
+            "Référence demande crédit CBS (refDemande) manquante : "
+            "composez la main levée depuis Mains levées → Nouvelle et "
+            "sélectionnez un crédit soldé."
         )
     currency = tenant_currency(guarantee.tenant_id)
     if guarantee.application_id and getattr(guarantee.application, "currency", None):
         currency = guarantee.application.currency
 
+    client_ids = _client_cbs_ids(guarantee.client)
+    if cbs_client_id:
+        client_ids["code_adherent"] = cbs_client_id.strip()
+
     try:
         cbs = assert_loan_settled(
-            guarantee.tenant_id, loan_ref, currency=currency
+            guarantee.tenant_id,
+            loan_ref,
+            currency=currency,
+            **client_ids,
         )
     except CoreBankingError as exc:
         raise ProcessError(str(exc)) from exc
@@ -218,7 +251,7 @@ def initiate_release_request(
 
     parsed_date = _parse_release_date(request_date)
     cbs_id = (
-        cbs_client_id
+        client_ids.get("code_adherent")
         or getattr(guarantee.client, "cbs_client_id", "")
         or ""
     ).strip()
@@ -306,11 +339,16 @@ def refresh_release_cbs(request: GuaranteeReleaseRequest, *, user=None):
     ):
         raise ProcessError("Impossible de rafraîchir le CBS sur ce statut.")
     currency = request.cbs_currency or tenant_currency(request.tenant_id)
+    client = getattr(request.guarantee, "client", None)
+    client_ids = _client_cbs_ids(client)
+    if request.cbs_client_id:
+        client_ids["code_adherent"] = request.cbs_client_id.strip()
     try:
-        cbs = assert_loan_settled(
+        cbs = get_loan_status(
             request.tenant_id,
             request.cbs_loan_reference,
             currency=currency,
+            **client_ids,
         )
     except CoreBankingError as exc:
         raise ProcessError(str(exc)) from exc
@@ -335,6 +373,12 @@ def submit_release_request(request: GuaranteeReleaseRequest, *, user=None):
             "Seuls les dossiers brouillon ou retournés peuvent être soumis."
         )
     refresh_release_cbs(request, user=user)
+    if not request.cbs_settled:
+        raise ProcessError(
+            "Main levée impossible : le prêt n'est pas soldé dans le Core Banking "
+            f"(encours restant : {request.cbs_outstanding} "
+            f"{request.cbs_currency or ''})."
+        )
     if not has_client_demande(request):
         raise ProcessError(
             "La demande de main levée du client doit être jointe avant soumission."
@@ -614,13 +658,13 @@ def release_client_context(*, client, tenant_id=None) -> dict:
     }
 
     credits = []
+    client_ids = _client_cbs_ids(client)
     for app in apps:
         loan = loans_by_app.get(app.pk)
         currency = getattr(app, "currency", None) or tenant_currency(tid)
-        loan_ref = ""
-        if loan and loan.core_banking_reference:
-            loan_ref = loan.core_banking_reference.strip()
-        elif getattr(app, "client_account_number", None):
+        loan_ref = _loan_cbs_ref(loan)
+        if not loan_ref and getattr(app, "client_account_number", None):
+            # Dernier recours legacy (hors Perfect refDemande).
             loan_ref = (app.client_account_number or "").strip()
 
         cbs_info = {
@@ -633,7 +677,9 @@ def release_client_context(*, client, tenant_id=None) -> dict:
         }
         if loan_ref:
             try:
-                cbs = get_loan_status(tid, loan_ref, currency=currency)
+                cbs = get_loan_status(
+                    tid, loan_ref, currency=currency, **client_ids
+                )
                 cbs_info.update(
                     {
                         "cbs_settled": cbs["settled"],
@@ -712,11 +758,15 @@ def complete_release_request(request: GuaranteeReleaseRequest):
 
     guarantee = request.guarantee
     currency = request.cbs_currency or tenant_currency(request.tenant_id)
+    client_ids = _client_cbs_ids(getattr(guarantee, "client", None))
+    if request.cbs_client_id:
+        client_ids["code_adherent"] = request.cbs_client_id.strip()
     try:
         cbs = assert_loan_settled(
             request.tenant_id,
             request.cbs_loan_reference,
             currency=currency,
+            **client_ids,
         )
     except CoreBankingError as exc:
         request.status = GuaranteeReleaseRequest.Status.BLOCKED

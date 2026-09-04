@@ -273,6 +273,24 @@ class Guarantee(TenantScopedModel, AuthoredModel):
     )
     last_valuation_date = models.DateField(null=True, blank=True)
 
+    # Traçabilité constitution juridique (complétée à la clôture formalisation).
+    # La formalisation est parallèle : elle ne bloque pas le décaissement.
+    registration_number = models.CharField(
+        "n° d'enregistrement / publicité", max_length=100, blank=True
+    )
+    registration_date = models.DateField(
+        "date d'enregistrement", null=True, blank=True
+    )
+    registration_authority = models.CharField(
+        "organisme d'enregistrement",
+        max_length=255,
+        blank=True,
+        help_text="Ex. conservation foncière, greffe, RCCM…",
+    )
+    formalized_at = models.DateTimeField(
+        "formalisation clôturée le", null=True, blank=True
+    )
+
     class Meta:
         verbose_name = "garantie"
         verbose_name_plural = "garanties"
@@ -424,6 +442,7 @@ class GuaranteeMovement(TenantScopedModel):
         REALIZATION = "REALIZATION", "Réalisation"
         TRANSFER = "TRANSFER", "Transfert"
         RENEWAL = "RENEWAL", "Reconduction"
+        FORMALIZATION = "FORMALIZATION", "Formalisation"
 
     guarantee = models.ForeignKey(
         Guarantee,
@@ -969,6 +988,214 @@ class DationFee(TenantScopedModel):
     class Meta:
         verbose_name = "frais de dation"
         verbose_name_plural = "frais de dation"
+        ordering = ["fee_date", "created_at"]
+
+    def __str__(self):
+        return self.label or self.get_fee_type_display()
+
+
+def formalization_acte_upload_path(instance, filename):
+    return (
+        f"formalizations/{instance.tenant_id}/{instance.id}/"
+        f"{safe_filename(filename)}"
+    )
+
+
+class GuaranteeFormalizationRequest(TenantScopedModel, AuthoredModel):
+    """
+    Constitution / formalisation juridique d'une garantie.
+
+    Processus parallèle au crédit : ne bloque pas le décaissement.
+    Le collatéral reste utilisable (garantie ACTIVE) pendant la formalisation.
+
+    Deux axes :
+    - ``status`` : cycle dossier (brouillon, en cours, validation, clôture)
+    - ``legal_stage`` : avancement chez le notaire / enregistrement
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = "DRAFT", "Brouillon"
+        IN_PROGRESS = "IN_PROGRESS", "En cours"
+        IN_APPROVAL = "IN_APPROVAL", "En validation"
+        APPROVED = "APPROVED", "Approuvée"
+        REJECTED = "REJECTED", "Rejetée"
+        RETURNED = "RETURNED", "Retournée"
+        COMPLETED = "COMPLETED", "Clôturée"
+        CANCELLED = "CANCELLED", "Annulée"
+
+    class LegalStage(models.TextChoices):
+        NOT_SENT = "NOT_SENT", "Non soumis chez le notaire"
+        AT_NOTARY = "AT_NOTARY", "Chez le notaire"
+        AWAITING_SIGNATURE = "AWAITING_SIGNATURE", "En attente de signature"
+        SIGNED = "SIGNED", "Acte signé"
+        PENDING_REGISTRATION = (
+            "PENDING_REGISTRATION",
+            "Enregistrement / publicité en cours",
+        )
+        REGISTERED = "REGISTERED", "Enregistré"
+        DONE = "DONE", "Formalisation terminée"
+
+    reference = models.CharField("référence", max_length=30, blank=True, db_index=True)
+    guarantee = models.ForeignKey(
+        Guarantee,
+        on_delete=models.PROTECT,
+        related_name="formalization_requests",
+        verbose_name="garantie",
+    )
+    application = models.ForeignKey(
+        "credits.CreditApplication",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="formalization_requests",
+        verbose_name="dossier",
+    )
+    agency = models.ForeignKey(
+        "tenants.Agency",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="formalization_requests",
+        verbose_name="agence",
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.DRAFT,
+        db_index=True,
+    )
+    legal_stage = models.CharField(
+        "étape juridique",
+        max_length=30,
+        choices=LegalStage.choices,
+        default=LegalStage.NOT_SENT,
+        db_index=True,
+    )
+    notary_name = models.CharField("notaire / étude", max_length=255, blank=True)
+    notary_reference = models.CharField(
+        "référence dossier notaire", max_length=100, blank=True
+    )
+    sent_to_notary_at = models.DateField(
+        "transmis au notaire le", null=True, blank=True
+    )
+    expected_return_date = models.DateField(
+        "retour prévu", null=True, blank=True
+    )
+    registration_number = models.CharField(
+        "n° d'enregistrement", max_length=100, blank=True
+    )
+    registration_date = models.DateField(
+        "date d'enregistrement", null=True, blank=True
+    )
+    registration_authority = models.CharField(
+        "organisme", max_length=255, blank=True
+    )
+    acte_file = models.FileField(
+        "projet / acte",
+        upload_to=formalization_acte_upload_path,
+        blank=True,
+        null=True,
+    )
+    acte_signed_file = models.FileField(
+        "acte signé",
+        upload_to=formalization_acte_upload_path,
+        blank=True,
+        null=True,
+    )
+    registration_proof = models.FileField(
+        "preuve d'enregistrement",
+        upload_to=formalization_acte_upload_path,
+        blank=True,
+        null=True,
+    )
+    fees_client_total = models.DecimalField(
+        "frais client",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    fees_institution_total = models.DecimalField(
+        "frais institution",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+    )
+    comment = models.TextField("commentaire", blank=True)
+    completed_at = models.DateTimeField("clôturée le", null=True, blank=True)
+
+    class Meta:
+        verbose_name = "formalisation de garantie"
+        verbose_name_plural = "formalisations de garantie"
+        ordering = ["-created_at"]
+        permissions = [
+            (
+                "initiate_guaranteeformalizationrequest",
+                "Peut initier une formalisation de garantie",
+            ),
+        ]
+
+    def __str__(self):
+        return self.reference or f"Formalisation {self.pk}"
+
+    def fees_total(self, payer=None):
+        qs = self.fees.all()
+        if payer is not None:
+            qs = qs.filter(payer=payer)
+        total = Decimal("0")
+        for fee in qs:
+            total += fee.amount or Decimal("0")
+        return total
+
+    def apply_fees_snapshot(self, *, persist=True):
+        self.fees_client_total = self.fees_total("CLIENT")
+        self.fees_institution_total = self.fees_total("INSTITUTION")
+        if persist and self.pk:
+            self.save(
+                update_fields=[
+                    "fees_client_total",
+                    "fees_institution_total",
+                    "updated_at",
+                ]
+            )
+
+
+class FormalizationFee(TenantScopedModel):
+    """Frais associés à une formalisation de garantie."""
+
+    class FeeType(models.TextChoices):
+        NOTARY = "NOTARY", "Notaire / acte"
+        REGISTRATION = "REGISTRATION", "Enregistrement / publicité"
+        BAILIFF = "BAILIFF", "Huissier"
+        ADMIN = "ADMIN", "Frais administratifs"
+        OTHER = "OTHER", "Divers"
+
+    class Payer(models.TextChoices):
+        CLIENT = "CLIENT", "Client"
+        INSTITUTION = "INSTITUTION", "Institution"
+
+    formalization = models.ForeignKey(
+        GuaranteeFormalizationRequest,
+        on_delete=models.CASCADE,
+        related_name="fees",
+        verbose_name="formalisation",
+    )
+    fee_type = models.CharField(
+        max_length=20, choices=FeeType.choices, default=FeeType.OTHER
+    )
+    label = models.CharField("libellé", max_length=255, blank=True)
+    amount = models.DecimalField("montant", max_digits=18, decimal_places=2)
+    payer = models.CharField(
+        max_length=20, choices=Payer.choices, default=Payer.CLIENT
+    )
+    fee_date = models.DateField("date", null=True, blank=True)
+    recoverable = models.BooleanField("récupérable", default=True)
+    notes = models.TextField("notes", blank=True)
+
+    class Meta:
+        verbose_name = "frais de formalisation"
+        verbose_name_plural = "frais de formalisation"
         ordering = ["fee_date", "created_at"]
 
     def __str__(self):

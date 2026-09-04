@@ -30,11 +30,20 @@ Avant d’appeler le CBS, renseigner les **références croisées** :
 
 | Objet | Champ | Usage |
 |-------|-------|--------|
-| Client | `cbs_client_id` | Matricule client CBS (dation, encours) |
-| Client | `cbs_account_number` | Compte principal (informatif / futur mapping) |
+| Client | `cbs_client_id` | Matricule client CBS (dation, encours, décaissement `codeAdherent`) |
+| Client | `cbs_account_number` | Compte / `numManuel` pour décaissement |
+| Agence | `cbs_point_of_service_id` | `idPointService` Perfect |
+| Produit | `cbs_product_code` (/ `cbs_repayment_product_code`) | `idProduitCrd` (override `idProduitRemb`) |
+| Utilisateur | `cbs_id` (sinon `employee_id`) | `idGestionnaire` |
+| Périodicité | `LoanPeriodicity.cbs_code` | `idPeriodicite` |
+| Méthode remboursement | `RepaymentMethod.cbs_code` | `idProduitRemb` |
+| Devise | `Currency.cbs_code` | `codeDevise` |
 | Prêt / dossier | `core_banking_reference` (loan) | Réf. prêt CBS (solde, main levée) |
+| Prêt | `cbs_*` (demande, contrat, statut) | Références renvoyées par `crd/simple` |
 | Main levée | `cbs_loan_reference` | Réf. prêt contrôlée au CBS |
 | Dation | `cbs_client_id` | Encours total client au CBS |
+
+UI : **Administration → Référentiels CBS** (`/admin/referentiels-cbs`).
 
 Sans matricule / référence prêt, les contrôles CBS lèvent une erreur explicite.
 
@@ -82,13 +91,16 @@ Content-Type: application/json
   "is_active": true,
   "certificate_reference": "vault:cbs-fil01-mtls",
   "auth_config": {
-    "username": "finflow_svc",
-    "password": "***",
-    "token_url": "https://cbs.filiale.example/oauth/token",
-    "client_id": "finflow",
-    "client_secret": "***"
+    "username": "VOTRE_USER",
+    "password": "VOTRE_PASS",
+    "scope": "perfect"
   },
   "mapping_rules": {
+    "endpoints": {
+      "authentification": "gateway-perfect/authentification",
+      "adh_situation": "gateway-perfect/adh/situation",
+      "crd_simple": "gateway-perfect/crd/simple"
+    },
     "simulate": {
       "loan_settled_default": true,
       "loan_outstanding_default": "100000",
@@ -108,6 +120,8 @@ Content-Type: application/json
 
 Notes :
 - `auth_config` est **write-only** (jamais renvoyé en lecture API).
+- Authentification Perfect : `POST {base_url}/gateway-perfect/authentification` en `application/x-www-form-urlencoded` (`username`, `password`, `scope=perfect`) → `accessToken`, puis `Authorization: Bearer …` sur les autres appels.
+- Jeton statique optionnel : `auth_config.access_token` (bypass de `/authentification`).
 - `mapping_rules` est libre (JSON) : simulation, mapping de champs, codes produit CBS, etc.
 - `certificate_reference` : pointeur vers un certificat (coffre / volume monté), pas le certificat lui-même.
 
@@ -160,26 +174,96 @@ FIN_FLOW parle au CBS via un **contrat métier interne**. L’adaptateur traduit
 | `PING` | `{}` | `{ status: "ACK", external_reference }` | Test connecteur |
 | `GET_LOAN_STATUS` | `{ loan_ref, currency? }` | `{ settled, outstanding, currency, raw, external_reference }` | Main levée, contrôle solde |
 | `GET_CLIENT_OUTSTANDING` | `{ cbs_client_id, currency? }` | `{ total_outstanding, currency, breakdown[], raw, … }` | Dation (preview + initiation) |
+| `GET_CLIENT_SITUATION` | `{ codeAdherent? / numManuel? / numPieceIdentite? }` | `{ raw, … }` (situation adhérent Perfect) | Import client CBS |
+| `SUBMIT_CREDIT` | corps Perfect `crd/simple` | `{ num_demande, ref_demande, num_contrat, limit_credit, montant, raw, … }` | Décaissement dossier |
 
-Constantes : `OP_PING`, `OP_GET_LOAN_STATUS`, `OP_GET_CLIENT_OUTSTANDING` dans `services.py`.
+Constantes : `OP_*` dans `services.py`.
 
-### Extension du catalogue (production)
+### 5.1 Décaissement — `SUBMIT_CREDIT` (Perfect `POST …/crd/simple`)
 
-Pour le décaissement / création de prêt CBS (exigence cahier §3.7), ajouter par exemple :
-- `CREATE_LOAN` / `DISBURSE`
+Après validation du dossier, l’action **Décaisser / Valider le décaissement** appelle le CBS **avant** de créer le prêt local.
+
+| Élément | Détail |
+|---------|--------|
+| Endpoint | `POST {base_url}/{mapping_rules.endpoints.crd_simple}` (défaut `gateway-perfect/crd/simple`) |
+| Auth | `Authorization: Bearer {accessToken}` — jeton via `POST …/authentification` (username/password/scope=perfect) ou `auth_config.access_token` |
+| Orchestration | `apps.corebanking.disbursement.submit_credit_to_cbs` |
+| Idempotence | `disburse:{application_id}` |
+| Callback | `POST /api/v1/cbs/callbacks/crd/{application_id}/` |
+
+**Mapping dossier → payload**
+
+| Champ Perfect | Source FIN_FLOW |
+|---------------|-----------------|
+| `externalId` | `application.reference` |
+| `callbackUrl` | `{PUBLIC_API_BASE_URL}/api/v1/cbs/callbacks/crd/{id}/` |
+| `idPointService` | `agency.cbs_point_of_service_id` ou `mapping_rules.disbursement.defaults` |
+| `codeAdherent` / `numManuel` / `numPieceIdentite` | `client.cbs_client_id` / `cbs_account_number` / `national_id` (au moins un) |
+| `idPeriodicite` | `MONTHLY` → `MENSUEL`, etc. |
+| `taux` | taux dossier / produit |
+| `nombreEcheance` | durée × périodicité |
+| `idObjetFinancement` | `purpose_type` mappé (ex. `CONSUMPTION` → `CONSOMMATION`) |
+| `idGestionnaire` | `mapping_rules.disbursement.defaults.idGestionnaire` |
+| `idProduitCrd` | `product.cbs_product_code` (sinon `product.code`) |
+| `idProduitRemb` | `product.cbs_repayment_product_code` ou défaut connecteur |
+| `montantDemande` | montant de référence (accordé) |
+| `codeDevise` | devise dossier |
+
+**Modes** (`mapping_rules.disbursement.mode`) :
+
+- `LOCAL` — simulation (démo / UAT) via `SimulatedAdapter` ; aucun HTTP Perfect
+- `CBS` — appel REST réel (`RestAdapter._crd_simple`)
+
+Échec CBS (`responseCode` ≥ 400, ex. limite insuffisante) → le décaissement est **bloqué** (pas de prêt local).
+
+Références CBS stockées sur `Loan` : `cbs_external_id`, `cbs_demande_number`, `cbs_demande_ref`, `cbs_contract_number`, `cbs_disbursement_status`, `core_banking_reference`.
+
+Exemple `mapping_rules` (défauts Perfect — `perfect_defaults.py`) :
+
+```json
+{
+  "provider": "perfect",
+  "force_simulate": false,
+  "endpoints": {
+    "authentification": "gateway-perfect/authentification",
+    "adh_situation": "gateway-perfect/adh/situation",
+    "crd_simple": "gateway-perfect/crd/simple"
+  },
+  "disbursement": {
+    "mode": "CBS",
+    "callback_secret": "optionnel",
+    "defaults": {
+      "idPointService": "PS01",
+      "idGestionnaire": "GEST01",
+      "idProduitRemb": "COMPTE-COURANT"
+    },
+    "periodicity_map": {
+      "BIMONTHLY": "BIMENSUEL",
+      "MONTHLY": "MENSUEL"
+    },
+    "purpose_map": {
+      "CONSUMPTION": "CONSOMMATION",
+      "EQUIPMENT": "EQUIPEMENT"
+    }
+  }
+}
+```
+
+Chaque nouvelle filiale reçoit automatiquement ce connecteur via `bootstrap_tenant` → `ensure_perfect_connector` (idempotent). Renseigner ensuite `base_url`, `auth_config.username` / `password`.
+
+Variable d’environnement : `PUBLIC_API_BASE_URL` (URL publique de l’API pour le callback Perfect).
+
+### Extension du catalogue (suite)
+
+Opérations encore à brancher selon besoins filiale :
 - `CREATE_CLIENT` / `UPDATE_CLIENT`
 - `GET_SCHEDULE`
-
-Puis :
-1. Implémenter dans l’adaptateur réel.
-2. Appeler `send_operation(..., idempotency_key=f"disburse:{application_id}")` depuis le flux décaissement.
-3. Documenter le mapping filiale dans `mapping_rules` + ce guide.
 
 ---
 
 ## 6. Mode simulation (démo / UAT sans CBS réel)
 
-Tant que `get_adapter()` renvoie `SimulatedAdapter`, **aucun appel réseau** n’est effectué. Le comportement se pilote via `mapping_rules.simulate` :
+Si `mapping_rules.force_simulate` est vrai, ou si l’URL est vide, `get_adapter()` renvoie `SimulatedAdapter` (**aucun appel réseau**). Le comportement se pilote via `mapping_rules.simulate` :
 
 | Clé | Effet |
 |-----|--------|
@@ -189,25 +273,21 @@ Tant que `get_adapter()` renvoie `SimulatedAdapter`, **aucun appel réseau** n�
 | Préfixe `UNSOLDE-` / `UNSETTLED-` | Convention recette : ref prêt forcée « ouverte » |
 | `client_outstanding_default` | Encours client par défaut |
 | `client_outstanding_by_id` | Override par matricule |
+| `credit_submit_fail` | Simule un refus de décaissement |
+| `credit_fail_external_ids` | Liste d’`externalId` refusés |
 
 Exemple recette main levée **refusée** : utiliser une référence prêt `UNSOLDE-TEST-01`.
 
 ---
 
-## 7. Brancher un CBS réel (développement adaptateur)
+## 7. Brancher un CBS réel (REST Perfect)
 
-Point d’extension unique :
+`get_adapter()` sélectionne déjà `RestAdapter` lorsque `protocol=REST`, `base_url` est renseignée et `force_simulate` est faux.
 
-```python
-# backend/apps/corebanking/services.py
-def get_adapter(connector: CoreBankingConnector) -> BaseAdapter:
-    # Aujourd'hui :
-    return SimulatedAdapter(connector)
-    # Cible :
-    # if connector.protocol == "REST":
-    #     return RestCbsAdapter(connector)
-    # …
-```
+Opérations REST implémentées :
+- `GET_CLIENT_SITUATION` → `adh/situation`
+- `SUBMIT_CREDIT` → `crd/simple`
+- `GET_LOAN_STATUS` → `crd/situation` (échéancier → soldé / encours pour main levée)
 
 ### 7.1 Contrat d’un adaptateur
 
@@ -224,13 +304,15 @@ def send(self, operation: str, payload: dict) -> dict:
 
 ### 7.2 Checklist REST typique
 
-1. Authentification (`auth_config` : Basic, Bearer, OAuth2 client-credentials).
+1. Authentification Perfect : `username` / `password` / `scope=perfect` →
+   `POST {base_url}/gateway-perfect/authentification` (form-urlencoded) →
+   `accessToken` dans `Authorization: Bearer …`.
 2. mTLS si exigé (`certificate_reference` + montage secret K8s).
 3. Timeouts = `connector.timeout_seconds`.
-4. Mapping champs via `mapping_rules.field_map`.
-5. Codes HTTP métier → exceptions claires.
-6. Ne jamais logger `password` / `client_secret` en clair.
-7. Tests unitaires adaptateur + test_operation PING sur environnement CBS de recette.
+4. Renseigner codes produit / point de service / gestionnaire (UI admin + `mapping_rules`).
+5. Exposer `PUBLIC_API_BASE_URL` pour les callbacks Perfect.
+6. Ne jamais logger `password` / Bearer en clair.
+7. Tests unitaires + `test_operation` PING / SUBMIT_CREDIT sur l’environnement de recette.
 
 ### 7.3 SOAP / SFTP / BATCH
 
@@ -266,10 +348,12 @@ Le journal et l’idempotence restent identiques quelle que soit la transport.
 | Preview **dation** | `preview_dation_cbs` → `get_client_outstanding` | Affiche créance CBS |
 | Initiation **dation** | `assert_client_outstanding_for_dation` | Encours **> 0** (seuil paramétrable) |
 | Retry ML / dation bloquée | Actions `retry_cbs` | Relance le contrôle |
+| **Décaissement** dossier | `submit_credit_to_cbs` → `SUBMIT_CREDIT` / `crd/simple` | Succès CBS requis (sauf `skip_cbs`) |
 
-Fichier métier : `backend/apps/guarantees/process_services.py`.
+Fichier métier garanties : `backend/apps/guarantees/process_services.py`.  
+Décaissement : `backend/apps/corebanking/disbursement.py` + `disburse_application`.
 
-**Décaissement** : FIN_FLOW enregistre le prêt au **montant accordé** ; les frais sont affichés dans FIN_FLOW mais **prélevés par le CBS**. La transmission automatique `CREATE_LOAN`/`DISBURSE` est le prochain branchement adaptateur (cf. §5).
+**Décaissement** : FIN_FLOW pousse la demande Perfect, puis enregistre le prêt local au **montant accordé** ; les frais sont affichés dans FIN_FLOW mais **prélevés par le CBS**.
 
 ---
 

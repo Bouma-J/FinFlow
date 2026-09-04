@@ -4,6 +4,7 @@ import {
   Ban,
   Banknote,
   Briefcase,
+  Cable,
   CalendarClock,
   Check,
   ChevronDown,
@@ -57,6 +58,7 @@ import {
   type ApprovalCondition,
   type Client,
   type CreditApplication,
+  type CreditReadiness,
   type FieldVisit,
   type FinancialAnalysis,
   type GeneratedContract,
@@ -423,6 +425,7 @@ function ScorePanel({
 const PERIODS_PER_YEAR: Record<string, number> = {
   DAILY: 360,
   WEEKLY: 52,
+  BIMONTHLY: 24,
   MONTHLY: 12,
   QUARTERLY: 4,
   SEMIANNUAL: 2,
@@ -465,6 +468,7 @@ function addPeriods(base: Date, periodicity: string, n: number): Date {
   const r = new Date(base);
   if (periodicity === "DAILY") r.setDate(r.getDate() + n);
   else if (periodicity === "WEEKLY") r.setDate(r.getDate() + n * 7);
+  else if (periodicity === "BIMONTHLY") r.setDate(r.getDate() + n * 15);
   else {
     const m: Record<string, number> = {
       MONTHLY: 1,
@@ -1160,8 +1164,7 @@ function FieldVisitsCard({
   const [open, setOpen] = useState(false);
   const [visitDate, setVisitDate] = useState("");
   const [report, setReport] = useState("");
-  const [latitude, setLatitude] = useState("");
-  const [longitude, setLongitude] = useState("");
+  const [geoCoordinates, setGeoCoordinates] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const { data: visits } = useQuery({
@@ -1182,8 +1185,7 @@ function FieldVisitsCard({
           application: appId,
           visit_date: visitDate,
           report,
-          latitude: latitude || null,
-          longitude: longitude || null,
+          geo_coordinates: geoCoordinates.trim(),
         })
       ).data,
     onSuccess: () => {
@@ -1191,8 +1193,7 @@ function FieldVisitsCard({
       setOpen(false);
       setVisitDate("");
       setReport("");
-      setLatitude("");
-      setLongitude("");
+      setGeoCoordinates("");
       setError(null);
     },
     onError: () => setError("Enregistrement de la visite impossible."),
@@ -1228,14 +1229,14 @@ function FieldVisitsCard({
                 </span>
               </div>
               {v.report && <p className="prose">{v.report}</p>}
-              {(v.latitude || v.longitude) && (
+              {v.geo_coordinates?.trim() && (
                 <a
                   className="muted small"
-                  href={`https://maps.google.com/?q=${v.latitude},${v.longitude}`}
+                  href={`https://maps.google.com/?q=${encodeURIComponent(v.geo_coordinates.trim())}`}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  <MapPin size={12} /> {v.latitude}, {v.longitude}
+                  <MapPin size={12} /> {v.geo_coordinates.trim()}
                 </a>
               )}
             </div>
@@ -1266,19 +1267,11 @@ function FieldVisitsCard({
               />
             </label>
             <label className="field">
-              <span>Latitude</span>
+              <span>Coordonnées géographiques</span>
               <input
-                type="number"
-                value={latitude}
-                onChange={(e) => setLatitude(e.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Longitude</span>
-              <input
-                type="number"
-                value={longitude}
-                onChange={(e) => setLongitude(e.target.value)}
+                value={geoCoordinates}
+                onChange={(e) => setGeoCoordinates(e.target.value)}
+                placeholder="ex. 5.359952, -4.008256"
               />
             </label>
           </div>
@@ -1624,6 +1617,17 @@ export function CreditApplicationDetailPage() {
     enabled: !!id,
   });
 
+  const { data: readiness } = useQuery({
+    queryKey: ["credit-readiness", id],
+    queryFn: async () =>
+      (
+        await api.get<CreditReadiness>(
+          `/credit-applications/${id}/readiness/`,
+        )
+      ).data,
+    enabled: !!id,
+  });
+
   const { data: guarantees } = useQuery({
     queryKey: ["guarantees", id],
     queryFn: async () =>
@@ -1708,6 +1712,7 @@ export function CreditApplicationDetailPage() {
       qc.invalidateQueries({ queryKey: ["credit-application", id] });
       qc.invalidateQueries({ queryKey: ["workflow-instances"] });
       qc.invalidateQueries({ queryKey: ["credit-timeline", id] });
+      qc.invalidateQueries({ queryKey: ["credit-readiness", id] });
     },
     onError: (e) =>
       setActionError(
@@ -1716,6 +1721,21 @@ export function CreditApplicationDetailPage() {
           "La soumission a échoué. Vérifiez qu'un circuit d'approbation actif " +
             "couvre ce dossier, puis réessayez.",
         ),
+      ),
+  });
+
+  const cancelDossierMutation = useMutation({
+    mutationFn: async () =>
+      (await api.post(`/credit-applications/${id}/cancel/`)).data,
+    onSuccess: () => {
+      setActionError(null);
+      qc.invalidateQueries({ queryKey: ["credit-application", id] });
+      qc.invalidateQueries({ queryKey: ["workflow-instances"] });
+      qc.invalidateQueries({ queryKey: ["credit-timeline", id] });
+    },
+    onError: (e) =>
+      setActionError(
+        extractApiError(e, "L'annulation formelle du dossier a échoué."),
       ),
   });
 
@@ -1865,8 +1885,16 @@ export function CreditApplicationDetailPage() {
     "APPROVED",
     "CONTRACT_GENERATED",
     "DISBURSEMENT_PENDING",
+    ...(readiness?.policy.allow_collateral_during_approval
+      ? (["IN_APPROVAL", "SUBMITTED"] as const)
+      : []),
   ];
   const canAttachCollateral = collateralStatuses.includes(app.status);
+  const canCancelDossier =
+    !!readiness?.policy.enable_cancel_status &&
+    isCreator &&
+    canChangeCredit &&
+    !["DISBURSED", "CLOSED", "CANCELLED"].includes(app.status);
   const readyForDisburse = ["APPROVED", "CONTRACT_GENERATED"].includes(
     app.status,
   );
@@ -1973,6 +2001,15 @@ export function CreditApplicationDetailPage() {
   const navSections = [
     { id: "sec-decision", icon: Gavel, label: "Décision à rendre", show: !!myTask, group: "Priorité" },
     { id: "sec-conditions", icon: ClipboardCheck, label: "Réserves", show: hasConditions, group: "Priorité" },
+    {
+      id: "sec-readiness",
+      icon: ClipboardCheck,
+      label: "Ready à soumettre",
+      show: Boolean(
+        canSubmit && readiness?.show_checklist && editableStatus,
+      ),
+      group: "Priorité",
+    },
     { id: "sec-terms", icon: Banknote, label: "Conditions du crédit", show: true, group: "Instruction" },
     { id: "sec-financial", icon: LineChart, label: "Analyse financière", show: true, group: "Instruction" },
     { id: "sec-patrimoine", icon: Landmark, label: "Garanties & cautions", show: true, group: "Instruction" },
@@ -2074,10 +2111,37 @@ export function CreditApplicationDetailPage() {
               <button
                 className="btn btn-primary"
                 onClick={() => submitMutation.mutate()}
-                disabled={submitMutation.isPending}
+                disabled={
+                  submitMutation.isPending ||
+                  (readiness?.show_checklist === true &&
+                    readiness.ready === false)
+                }
+                title={
+                  readiness?.show_checklist && !readiness.ready
+                    ? "Complétez la checklist de readiness avant de soumettre"
+                    : undefined
+                }
               >
                 <Send />
                 Soumettre à validation
+              </button>
+            )}
+            {canCancelDossier && (
+              <button
+                className="btn btn-danger"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Annuler définitivement ce dossier (statut Annulé) ?",
+                    )
+                  ) {
+                    cancelDossierMutation.mutate();
+                  }
+                }}
+                disabled={cancelDossierMutation.isPending}
+              >
+                <Ban />
+                Annuler le dossier
               </button>
             )}
             {canRequestDisburse && (
@@ -2185,7 +2249,8 @@ export function CreditApplicationDetailPage() {
           <div className="hero-metric">
             <span className="hero-metric-label">Périodicité</span>
             <span className="hero-metric-value">
-              {lbl(CREDIT_LABELS.periodicity, app.periodicity)}
+              {app.periodicity_label ||
+                lbl(CREDIT_LABELS.periodicity, app.periodicity)}
             </span>
           </div>
           {coveragePct !== null && (
@@ -2271,6 +2336,42 @@ export function CreditApplicationDetailPage() {
             </ViewSection>
           )}
 
+          {canSubmit && readiness?.show_checklist && (
+            <ViewSection
+              id="sec-readiness"
+              icon={ClipboardCheck}
+              title="Ready à soumettre"
+              description="Contrôles selon la politique d'instruction de la filiale."
+            >
+              <ul className="readiness-list">
+                {readiness.checks.map((c) => (
+                  <li
+                    key={c.key}
+                    className={`readiness-item${c.ok ? " ok" : c.blocking ? " blocking" : " warn"}`}
+                  >
+                    <span className="readiness-mark">
+                      {c.ok ? <Check size={14} /> : <X size={14} />}
+                    </span>
+                    <div>
+                      <strong>{c.label}</strong>
+                      {!c.ok && c.message && (
+                        <p className="muted small">{c.message}</p>
+                      )}
+                      {!c.blocking && !c.ok && (
+                        <span className="muted small">Alerte (non bloquant)</span>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              <p className={`muted small${readiness.ready ? "" : " readiness-block-hint"}`}>
+                {readiness.ready
+                  ? "Le dossier peut être soumis au circuit."
+                  : "Corrigez les points bloquants avant de soumettre."}
+              </p>
+            </ViewSection>
+          )}
+
           <ViewSection
             id="sec-terms"
             icon={Banknote}
@@ -2280,7 +2381,7 @@ export function CreditApplicationDetailPage() {
             <Row term="Montant demandé" value={formatMoney(app.amount_requested, cur)} />
             <Row term="Montant proposé" value={app.amount_proposed && formatMoney(app.amount_proposed, cur)} />
             <Row term="Montant accordé" value={app.amount_approved && formatMoney(app.amount_approved, cur)} />
-            <Row term="Devise" value={app.currency} />
+            <Row term="Devise" value={app.currency_label || app.currency} />
             <Row term="Taux d'intérêt" value={app.interest_rate && `${app.interest_rate} %`} />
             <Row
               term="Épargne obligatoire"
@@ -2290,14 +2391,72 @@ export function CreditApplicationDetailPage() {
                   : undefined
               }
             />
-            <Row term="Périodicité" value={lbl(CREDIT_LABELS.periodicity, app.periodicity)} />
+            <Row
+              term="Périodicité"
+              value={
+                app.periodicity_label ||
+                lbl(CREDIT_LABELS.periodicity, app.periodicity)
+              }
+            />
             <Row term="Durée" value={`${app.duration_months} mois`} />
             <Row term="Première échéance" value={app.first_due_date && formatDate(app.first_due_date)} />
             <Row term="Dernière échéance" value={app.last_due_date && formatDate(app.last_due_date)} />
-            <Row term="Mécanisme" value={app.repayment_mechanism && lbl(CREDIT_LABELS.repayment_mechanism, app.repayment_mechanism)} />
+            <Row
+              term="Mécanisme"
+              value={
+                app.repayment_mechanism_label ||
+                (app.repayment_mechanism &&
+                  lbl(
+                    CREDIT_LABELS.repayment_mechanism,
+                    app.repayment_mechanism,
+                  ))
+              }
+            />
             <Row term="Objet du financement" value={app.purpose_type && lbl(CREDIT_LABELS.purpose_type, app.purpose_type)} />
             <Row term="Niveau de risque (circuit)" value={app.risk_level ?? undefined} />
           </dl>
+          {app.cbs_refs && (
+            <SubSection icon={Cable} title="Mapping CBS (décaissement)">
+              <dl className="def-list two">
+                <Row
+                  term="idPeriodicite"
+                  value={app.cbs_refs.periodicity?.cbs_code || "—"}
+                />
+                <Row
+                  term="idProduitCrd"
+                  value={app.cbs_refs.product_cbs_code || "—"}
+                />
+                <Row
+                  term="idProduitRemb"
+                  value={app.cbs_refs.product_repayment_cbs_code || "—"}
+                />
+                <Row
+                  term="codeDevise"
+                  value={
+                    app.cbs_refs.currency?.cbs_code || app.currency || "—"
+                  }
+                />
+                <Row
+                  term="idGestionnaire"
+                  value={app.cbs_refs.manager_cbs_id || "—"}
+                />
+                <Row
+                  term="Adhérent CBS"
+                  value={app.cbs_refs.client_adherent_id || "—"}
+                />
+                <Row
+                  term="idPointService"
+                  value={app.cbs_refs.point_of_service_id || "—"}
+                />
+              </dl>
+              {app.cbs_refs.warnings && app.cbs_refs.warnings.length > 0 && (
+                <p className="muted small" style={{ marginTop: 8 }}>
+                  À compléter avant décaissement :{" "}
+                  {app.cbs_refs.warnings.join(" · ")}
+                </p>
+              )}
+            </SubSection>
+          )}
           {app.fees_breakdown && app.fees_breakdown.lines.length > 0 && (
             <SubSection icon={Wallet} title="Frais">
               <p className="muted small" style={{ marginTop: 0 }}>
