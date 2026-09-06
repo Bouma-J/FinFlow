@@ -19,13 +19,17 @@ from .models import (
 
 
 class GuaranteeMovementSerializer(serializers.ModelSerializer):
+    movement_type_display = serializers.CharField(
+        source="get_movement_type_display", read_only=True
+    )
+
     class Meta:
         model = GuaranteeMovement
         fields = [
-            "id", "guarantee", "movement_type", "movement_date",
-            "value", "target_application", "comment",
+            "id", "guarantee", "movement_type", "movement_type_display",
+            "movement_date", "value", "target_application", "comment",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = ["id", "movement_type_display"]
 
 
 class GuaranteePhotoSerializer(serializers.ModelSerializer):
@@ -160,17 +164,25 @@ class GuaranteeSerializer(serializers.ModelSerializer):
     type_display = serializers.CharField(
         source="get_guarantee_type_display", read_only=True
     )
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True
+    )
     renewed_from_reference = serializers.CharField(
         source="renewed_from.reference", read_only=True, default=None
     )
     surety_display = serializers.SerializerMethodField()
+    client_display = serializers.SerializerMethodField()
+    application_reference = serializers.SerializerMethodField()
+    agency_name = serializers.SerializerMethodField()
     open_formalization_id = serializers.SerializerMethodField()
 
     class Meta:
         model = Guarantee
         fields = [
             "id", "reference", "guarantee_type", "type_display", "agency",
-            "pledge_category", "client", "application",
+            "agency_name",
+            "pledge_category", "client", "client_display",
+            "application", "application_reference",
             "belongs_to_applicant", "surety", "surety_display",
             "description", "owners", "expertise_value", "current_value",
             "is_insured", "insurance_reference",
@@ -199,27 +211,44 @@ class GuaranteeSerializer(serializers.ModelSerializer):
             "deposit_maturity_date", "isin_code", "volatility_history",
             "security_discount", "pledge_deed_scan",
             # Suivi
-            "status", "last_valuation_date", "photos", "documents",
+            "status", "status_display", "last_valuation_date",
+            "photos", "documents",
             "movements",
             "jewelry_items", "renewed_from", "renewed_from_reference",
             "registration_number", "registration_date",
             "registration_authority", "formalized_at",
             "open_formalization_id",
-            "created_at",
+            "created_at", "updated_at",
         ]
         read_only_fields = [
-            "id", "status", "current_value", "ltv_ratio",
+            "id", "status", "status_display", "current_value", "ltv_ratio",
             "renewed_from", "renewed_from_reference", "surety_display",
+            "client_display", "application_reference", "agency_name",
             "registration_number", "registration_date",
             "registration_authority", "formalized_at",
             "open_formalization_id",
-            "created_at",
+            "created_at", "updated_at",
         ]
 
     def get_surety_display(self, obj) -> str | None:
         if not obj.surety_id:
             return None
         return getattr(obj.surety, "display_name", None) or str(obj.surety)
+
+    def get_client_display(self, obj) -> str | None:
+        if not obj.client_id:
+            return None
+        return getattr(obj.client, "display_name", None) or str(obj.client)
+
+    def get_application_reference(self, obj) -> str | None:
+        if not obj.application_id:
+            return None
+        return obj.application.reference or str(obj.application_id)
+
+    def get_agency_name(self, obj) -> str | None:
+        if not obj.agency_id:
+            return None
+        return obj.agency.name
 
     def get_open_formalization_id(self, obj):
         open_statuses = (

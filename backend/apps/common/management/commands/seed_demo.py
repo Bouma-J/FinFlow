@@ -5,12 +5,15 @@ Crée : un administrateur Groupe, une filiale de démonstration avec son
 administrateur, des rôles, un produit de crédit, un circuit d'approbation
 à deux niveaux, un connecteur Core Banking et un client.
 
+Avec --rich (défaut) : clients, dossiers, garanties, formalisations,
+mains levées, dations et dossiers de recouvrement pour usage local.
+
 Usage :
     python manage.py seed_demo
+    python manage.py seed_demo --no-rich
 """
 from decimal import Decimal
 
-from django.contrib.auth.models import Permission
 from django.core.management.base import BaseCommand
 from django.db import transaction
 
@@ -18,6 +21,7 @@ from apps.accounts.models import User
 from apps.catalog.models import CreditProduct, ProductCategory
 from apps.clients.models import Client
 from apps.accounts.services import get_or_create_tenant_role
+from apps.common.demo_rich import seed_rich_operational_data
 from apps.common.tenancy import tenant_context
 from apps.corebanking.models import CoreBankingConnector
 from apps.corebanking.perfect_defaults import ensure_perfect_connector, perfect_connector_defaults
@@ -27,6 +31,13 @@ from apps.workflow.models import ApprovalStep, WorkflowDefinition
 
 class Command(BaseCommand):
     help = "Crée un jeu de données de démonstration."
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--no-rich",
+            action="store_true",
+            help="Ne crée que le socle minimal (sans dossiers / garanties).",
+        )
 
     @transaction.atomic
     def handle(self, *args, **options):
@@ -94,17 +105,23 @@ class Command(BaseCommand):
                 defaults={"name": "Agence Centrale", "region": "Abidjan"},
             )
 
+        # Ne réapplique le mot de passe que si le compte n'existe pas encore
+        # (évite UserAttributeSimilarityValidator vs email contenant « finflow »).
+        fil_admin_exists = User.objects.filter(username="fil01_admin").exists()
         fil_admin, created = provision_filiale_admin(
             tenant=tenant,
             agency=agency,
             username="fil01_admin",
-            password="FinFlow2026!",
-            email="admin@fil01.finflow.local",
+            password=None if fil_admin_exists else "FinFlow2026!",
+            email="admin@fil01.demo.local",
             first_name="Admin",
             last_name="Filiale01",
             send_credentials=False,
             must_change_password=False,
         )
+        if fil_admin_exists and fil_admin.must_change_password:
+            fil_admin.must_change_password = False
+            fil_admin.save(update_fields=["must_change_password"])
         # Rôles workflow additionnels (circuits d'approbation)
         fil_admin.groups.add(analyst_role, manager_role, committee_role)
         if created:
@@ -235,6 +252,15 @@ class Command(BaseCommand):
                     "kyc_status": Client.KycStatus.VALIDATED,
                 },
             )
+
+            if not options["no_rich"]:
+                seed_rich_operational_data(
+                    tenant=tenant,
+                    agency=agency,
+                    product=product,
+                    user=fil_admin,
+                    stdout=self.stdout,
+                )
 
         self.stdout.write(self.style.SUCCESS(
             "Données de démonstration créées.\n"

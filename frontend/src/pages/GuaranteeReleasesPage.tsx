@@ -858,8 +858,22 @@ export function GuaranteeReleaseDetailPage() {
     ? (r.cbs_raw.datas as Array<Record<string, unknown>>)
     : [];
 
+  const stepDemandeDone = Boolean(r.has_client_demande);
+  const stepActeDone = Boolean(r.has_signed_acte);
+  const stepCircuitDone = ["APPROVED", "COMPLETED"].includes(r.status);
+  const stepClosed = r.status === "COMPLETED";
+  const stepCurrent = !stepDemandeDone
+    ? 1
+    : !stepActeDone && editable
+      ? 2
+      : !stepCircuitDone
+        ? 3
+        : stepClosed
+          ? 4
+          : 3;
+
   return (
-    <div>
+    <div className="release-detail-page">
       <PageHeader
         icon={Unlock}
         title={r.reference || "Main levée"}
@@ -879,16 +893,17 @@ export function GuaranteeReleaseDetailPage() {
                 Soumettre au circuit
               </button>
             )}
-            {canInitiate && !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => refreshCbs.mutate()}
-                disabled={refreshCbs.isPending}
-              >
-                <RefreshCw size={16} />
-                Rafraîchir CBS
-              </button>
-            )}
+            {canInitiate &&
+              !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) && (
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => refreshCbs.mutate()}
+                  disabled={refreshCbs.isPending}
+                >
+                  <RefreshCw size={16} />
+                  Rafraîchir CBS
+                </button>
+              )}
             {canCancel && (
               <button
                 className="btn btn-ghost"
@@ -912,6 +927,36 @@ export function GuaranteeReleaseDetailPage() {
         }
       />
 
+      <div className="client-banner">
+        <div className="client-banner-info">
+          <span className="client-banner-icon">
+            <Unlock size={26} />
+          </span>
+          <div>
+            <h2 className="client-banner-name">
+              {r.guarantee_reference || "Main levée"}
+            </h2>
+            <div className="client-banner-meta">
+              <code>{r.reference}</code>
+              <Badge value={r.status} label={r.status_display} />
+              <Badge
+                value={r.acte_status || "NONE"}
+                label={r.acte_status_display || "Acte non généré"}
+              />
+              {r.cbs_settled != null && (
+                <Badge
+                  value={r.cbs_settled ? "ACTIVE" : "WARN"}
+                  label={r.cbs_settled ? "Prêt soldé CBS" : "Prêt non soldé"}
+                />
+              )}
+              <span className="muted">
+                Encours : {formatMoney(r.cbs_outstanding, cur)}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {actionError && <div className="form-error">{actionError}</div>}
 
       {r.status === "APPROVED" && !r.has_signed_acte && (
@@ -921,387 +966,547 @@ export function GuaranteeReleaseDetailPage() {
         </div>
       )}
 
-      <div className="detail-grid">
-        <Card title="Demande">
-          <dl className="def-list two">
-            <div>
-              <dt>Statut</dt>
-              <dd>
-                <Badge value={r.status} label={r.status_display} />
-              </dd>
-            </div>
-            <div>
-              <dt>Garantie</dt>
-              <dd>
-                <Link to={`/garanties/${r.guarantee}`}>
-                  {r.guarantee_reference || r.guarantee.slice(0, 8)}
-                </Link>
-              </dd>
-            </div>
-            <div>
-              <dt>Réf. demande CBS</dt>
-              <dd>
-                <code>{r.cbs_loan_reference || "—"}</code>
-              </dd>
-            </div>
-            <div>
-              <dt>Soldé CBS</dt>
-              <dd>
-                {r.cbs_settled == null ? (
-                  "—"
-                ) : r.cbs_settled ? (
-                  <Badge value="ACTIVE" label="Oui" />
-                ) : (
-                  <Badge value="WARN" label="Non" />
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt>Encours CBS</dt>
-              <dd>{formatMoney(r.cbs_outstanding, cur)}</dd>
-            </div>
-            <div>
-              <dt>Vérifié le</dt>
-              <dd>
-                {r.cbs_checked_at ? formatDate(r.cbs_checked_at) : "—"}
-              </dd>
-            </div>
-            <div>
-              <dt>Frais client</dt>
-              <dd>{formatMoney(r.fees_client_total ?? r.release_fees, cur)}</dd>
-            </div>
-            <div>
-              <dt>Acte</dt>
-              <dd>
-                <Badge
-                  value={r.acte_status || "NONE"}
-                  label={r.acte_status_display || "Non généré"}
-                />
-              </dd>
-            </div>
-            <div>
-              <dt>Demande client</dt>
-              <dd>{r.has_client_demande ? "Jointe" : "Manquante"}</dd>
-            </div>
-            <div>
-              <dt>Acte signé</dt>
-              <dd>{r.has_signed_acte ? "Déposé" : "Manquant"}</dd>
-            </div>
-          </dl>
-          {editable && canInitiate && (
-            <div className="form-grid" style={{ marginTop: 12 }}>
-              <label className="field full-span">
-                <span>Commentaire</span>
-                <textarea
-                  rows={2}
-                  value={draftComment || r.comment || ""}
-                  onChange={(e) => setDraftComment(e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                disabled={updateDraft.isPending}
-                onClick={() => updateDraft.mutate()}
-              >
-                Enregistrer le commentaire
-              </button>
-            </div>
-          )}
-          {!editable && r.comment && (
-            <p className="muted small" style={{ marginTop: 12 }}>
-              {r.comment}
-            </p>
-          )}
-        </Card>
+      <div className="process-steps" aria-label="Étapes du processus">
+        {[
+          {
+            n: 1,
+            label: "Demande client",
+            hint: stepDemandeDone ? "Jointe" : "À joindre",
+            done: stepDemandeDone,
+          },
+          {
+            n: 2,
+            label: "Acte",
+            hint: stepActeDone
+              ? "Signé"
+              : r.has_generated_acte
+                ? "À signer"
+                : "À générer",
+            done: stepActeDone,
+          },
+          {
+            n: 3,
+            label: "Circuit",
+            hint: stepCircuitDone ? "Validé" : "Validation",
+            done: stepCircuitDone,
+          },
+          {
+            n: 4,
+            label: "Clôture",
+            hint: stepClosed ? "Terminée" : "En attente",
+            done: stepClosed,
+          },
+        ].map((s) => (
+          <div
+            key={s.n}
+            className={`process-step${s.done ? " done" : ""}${
+              stepCurrent === s.n ? " current" : ""
+            }`}
+          >
+            <span className="step-num">{s.n}</span>
+            <span>
+              <strong>{s.label}</strong>
+              {s.hint}
+            </span>
+          </div>
+        ))}
+      </div>
 
-        <Card title="Frais">
-          {fees.length === 0 ? (
-            <p className="muted small">Aucun frais enregistré.</p>
-          ) : (
-            <ul className="link-list">
-              {fees.map((f) => (
-                <li key={f.id}>
-                  <span>
-                    <Receipt size={14} /> {f.fee_type_display}
-                    {f.label ? ` — ${f.label}` : ""}
-                    <em className="muted small"> · {f.payer_display}</em>
-                  </span>
-                  <span className="row-actions">
-                    <span className="num">{formatMoney(f.amount, cur)}</span>
-                    {editable && canInitiate && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => removeFee.mutate(f.id)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {editable && canInitiate && (
-            <div className="form-grid" style={{ marginTop: 12 }}>
-              <label className="field">
-                <span>Type</span>
-                <select
-                  value={feeType}
-                  onChange={(e) => setFeeType(e.target.value)}
+      <div className="detail-sections">
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <ShieldCheck size={17} /> Dossier
+              </>
+            }
+          >
+            <dl className="def-list two">
+              <div>
+                <dt>Statut</dt>
+                <dd>
+                  <Badge value={r.status} label={r.status_display} />
+                </dd>
+              </div>
+              <div>
+                <dt>Garantie</dt>
+                <dd>
+                  <Link to={`/garanties/${r.guarantee}`}>
+                    {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                  </Link>
+                </dd>
+              </div>
+              <div>
+                <dt>Client</dt>
+                <dd>{r.client_display || "—"}</dd>
+              </div>
+              <div>
+                <dt>Date de demande</dt>
+                <dd>
+                  {r.request_date ? formatDate(r.request_date) : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>Demande client</dt>
+                <dd>{r.has_client_demande ? "Jointe" : "Manquante"}</dd>
+              </div>
+              <div>
+                <dt>Acte signé</dt>
+                <dd>{r.has_signed_acte ? "Déposé" : "Manquant"}</dd>
+              </div>
+              <div>
+                <dt>Frais client</dt>
+                <dd>
+                  {formatMoney(r.fees_client_total ?? r.release_fees, cur)}
+                </dd>
+              </div>
+              <div>
+                <dt>Frais institution</dt>
+                <dd>{formatMoney(r.fees_institution_total, cur)}</dd>
+              </div>
+            </dl>
+            {editable && canInitiate && (
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field full-span">
+                  <span>Commentaire</span>
+                  <textarea
+                    rows={2}
+                    value={draftComment || r.comment || ""}
+                    onChange={(e) => setDraftComment(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={updateDraft.isPending}
+                  onClick={() => updateDraft.mutate()}
                 >
-                  {RELEASE_FEE_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Montant</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={feeAmount}
-                  onChange={(e) => setFeeAmount(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Payeur</span>
-                <select
-                  value={feePayer}
-                  onChange={(e) => setFeePayer(e.target.value)}
-                >
-                  <option value="CLIENT">Client</option>
-                  <option value="INSTITUTION">Institution</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>Libellé</span>
-                <input
-                  value={feeLabel}
-                  onChange={(e) => setFeeLabel(e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!feeAmount || addFee.isPending}
-                onClick={() => addFee.mutate()}
-              >
-                <Plus size={14} />
-                Ajouter frais
-              </button>
-            </div>
-          )}
-        </Card>
-
-        {schedule.length > 0 && (
-          <Card title="Échéancier CBS (crd/situation)">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Date</th>
-                  <th>Capital</th>
-                  <th>Intérêt</th>
-                  <th>Total</th>
-                  <th>Statut</th>
-                </tr>
-              </thead>
-              <tbody>
-                {schedule.map((row, idx) => (
-                  <tr key={idx}>
-                    <td>{String(row.echeance ?? idx + 1)}</td>
-                    <td>{String(row.date ?? "—")}</td>
-                    <td className="num">
-                      {formatMoney(
-                        row.montantCapital != null
-                          ? String(row.montantCapital)
-                          : null,
-                        cur,
-                      )}
-                    </td>
-                    <td className="num">
-                      {formatMoney(
-                        row.montantInteret != null
-                          ? String(row.montantInteret)
-                          : null,
-                        cur,
-                      )}
-                    </td>
-                    <td className="num">
-                      {formatMoney(
-                        row.montantTotal != null
-                          ? String(row.montantTotal)
-                          : null,
-                        cur,
-                      )}
-                    </td>
-                    <td>{String(row.statut ?? "—")}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+                  Enregistrer le commentaire
+                </button>
+              </div>
+            )}
+            {!editable && r.comment && (
+              <p className="muted small" style={{ marginTop: 12 }}>
+                {r.comment}
+              </p>
+            )}
           </Card>
-        )}
 
-        <Card title="1. Demande client">
-          <p className="muted small">
-            Joindre la demande de main levée transmise par le client
-            (obligatoire avant soumission).
-          </p>
-          {(docs.data ?? []).length > 0 && (
-            <ul className="link-list">
-              {(docs.data ?? []).map((d) => (
-                <li key={d.id}>
-                  <span>
-                    <FileUp size={14} /> {d.name}
-                    <em className="muted small"> · {d.category_label}</em>
-                  </span>
-                  <a
-                    className="btn btn-ghost btn-sm"
-                    href={d.file}
-                    target="_blank"
-                    rel="noreferrer"
-                  >
-                    Ouvrir
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-          {canInitiate && canUploadDocs && (
-            <div className="form-grid" style={{ marginTop: 12 }}>
-              <label className="field">
-                <span>Fichier demande</span>
-                <input
-                  type="file"
-                  accept=".pdf,.jpg,.jpeg,.png"
-                  onChange={(e) =>
-                    setDemandeFile(e.target.files?.[0] ?? null)
-                  }
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!demandeFile || uploadDemande.isPending}
-                onClick={() => uploadDemande.mutate()}
-              >
-                <FileUp size={14} />
-                Charger la demande
-              </button>
-            </div>
-          )}
-        </Card>
+          <Card
+            title={
+              <>
+                <Banknote size={17} /> Situation CBS
+              </>
+            }
+          >
+            <dl className="def-list two">
+              <div>
+                <dt>Réf. demande CBS</dt>
+                <dd>
+                  <code>{r.cbs_loan_reference || "—"}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>Code adhérent</dt>
+                <dd>
+                  <code>{r.cbs_client_id || "—"}</code>
+                </dd>
+              </div>
+              <div>
+                <dt>Soldé CBS</dt>
+                <dd>
+                  {r.cbs_settled == null ? (
+                    "—"
+                  ) : r.cbs_settled ? (
+                    <Badge value="ACTIVE" label="Oui" />
+                  ) : (
+                    <Badge value="WARN" label="Non" />
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Encours CBS</dt>
+                <dd>{formatMoney(r.cbs_outstanding, cur)}</dd>
+              </div>
+              <div>
+                <dt>Devise</dt>
+                <dd>{cur}</dd>
+              </div>
+              <div>
+                <dt>Vérifié le</dt>
+                <dd>
+                  {r.cbs_checked_at ? formatDate(r.cbs_checked_at) : "—"}
+                </dd>
+              </div>
+            </dl>
+          </Card>
+        </div>
 
-        <Card title="2. Acte de main levée">
-          <p className="muted small">
-            Générez l&apos;acte, faites-le signer, puis déposez le scan. L&apos;acte
-            signé est obligatoire pour clôturer.
-          </p>
-          <dl className="def-list two">
-            <div>
-              <dt>Acte généré</dt>
-              <dd>
-                {r.acte_generated_url ? (
-                  <a href={r.acte_generated_url} target="_blank" rel="noreferrer">
-                    Télécharger
-                  </a>
-                ) : (
-                  "—"
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt>Acte signé</dt>
-              <dd>
-                {r.acte_signed_url ? (
-                  <a href={r.acte_signed_url} target="_blank" rel="noreferrer">
-                    Voir le dépôt
-                  </a>
-                ) : (
-                  "—"
-                )}
-              </dd>
-            </div>
-          </dl>
-          {canInitiate && canUploadDocs && (
-            <div className="row-actions" style={{ marginTop: 12, gap: 8 }}>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={generateActe.isPending || r.has_signed_acte}
-                onClick={() => generateActe.mutate()}
-              >
-                {r.has_generated_acte ? "Régénérer l'acte" : "Générer l'acte"}
-              </button>
-            </div>
-          )}
-          {canDepositSigned &&
-            r.has_generated_acte &&
-            !r.has_signed_acte &&
-            canUploadDocs && (
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <FileUp size={17} /> Demande client
+              </>
+            }
+          >
+            <p className="muted small">
+              Joindre la demande de main levée transmise par le client
+              (obligatoire avant soumission).
+            </p>
+            {(docs.data ?? []).length > 0 && (
+              <ul className="link-list">
+                {(docs.data ?? []).map((d) => (
+                  <li key={d.id}>
+                    <span>
+                      <FileUp size={14} /> {d.name}
+                      <em className="muted small"> · {d.category_label}</em>
+                    </span>
+                    <a
+                      className="btn btn-ghost btn-sm"
+                      href={d.file}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Ouvrir
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {canInitiate && canUploadDocs && (
               <div className="form-grid" style={{ marginTop: 12 }}>
                 <label className="field">
-                  <span>Acte signé (PDF / scan)</span>
+                  <span>Fichier demande</span>
                   <input
                     type="file"
                     accept=".pdf,.jpg,.jpeg,.png"
                     onChange={(e) =>
-                      setSignedFile(e.target.files?.[0] ?? null)
+                      setDemandeFile(e.target.files?.[0] ?? null)
                     }
                   />
                 </label>
                 <button
                   type="button"
                   className="btn btn-primary btn-sm"
-                  disabled={!signedFile || uploadSigned.isPending}
-                  onClick={() => uploadSigned.mutate()}
+                  disabled={!demandeFile || uploadDemande.isPending}
+                  onClick={() => uploadDemande.mutate()}
                 >
                   <FileUp size={14} />
-                  Déposer l&apos;acte signé
+                  Charger la demande
                 </button>
               </div>
             )}
-        </Card>
-
-        {myTask && (
-          <Card title={`Décision — ${myTask.step_name}`}>
-            <div className="card-title-icon">
-              <Gavel size={16} />
-            </div>
-            <DecisionPanel task={myTask} />
           </Card>
-        )}
 
-        <Card title="Circuit">
-          {!workflow.data?.instance ? (
-            <EmptyState
-              message={
-                editable
-                  ? "Circuit non démarré — joignez la demande, générez l'acte, puis soumettez."
-                  : "Aucun circuit associé."
-              }
-            />
-          ) : (
+          <Card
+            title={
+              <>
+                <ShieldOff size={17} /> Acte de main levée
+              </>
+            }
+          >
+            <p className="muted small">
+              Générez l&apos;acte, faites-le signer, puis déposez le scan.
+              L&apos;acte signé est obligatoire pour clôturer.
+            </p>
             <dl className="def-list two">
               <div>
-                <dt>Circuit</dt>
-                <dd>{workflow.data.instance.definition_code || "—"}</dd>
+                <dt>Statut acte</dt>
+                <dd>
+                  <Badge
+                    value={r.acte_status || "NONE"}
+                    label={r.acte_status_display || "Non généré"}
+                  />
+                </dd>
               </div>
               <div>
-                <dt>Statut circuit</dt>
+                <dt>Acte généré</dt>
                 <dd>
-                  <Badge value={workflow.data.instance.status} />
+                  {r.acte_generated_url ? (
+                    <a
+                      href={r.acte_generated_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Télécharger
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Généré le</dt>
+                <dd>
+                  {r.acte_generated_at
+                    ? formatDate(r.acte_generated_at)
+                    : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>Acte signé</dt>
+                <dd>
+                  {r.acte_signed_url ? (
+                    <a
+                      href={r.acte_signed_url}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Voir le dépôt
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Signé déposé le</dt>
+                <dd>
+                  {r.acte_signed_at ? formatDate(r.acte_signed_at) : "—"}
                 </dd>
               </div>
             </dl>
-          )}
-        </Card>
+            {canInitiate && canUploadDocs && (
+              <div className="row-actions" style={{ marginTop: 12, gap: 8 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={generateActe.isPending || r.has_signed_acte}
+                  onClick={() => generateActe.mutate()}
+                >
+                  {r.has_generated_acte
+                    ? "Régénérer l'acte"
+                    : "Générer l'acte"}
+                </button>
+              </div>
+            )}
+            {canDepositSigned &&
+              r.has_generated_acte &&
+              !r.has_signed_acte &&
+              canUploadDocs && (
+                <div className="form-grid" style={{ marginTop: 12 }}>
+                  <label className="field">
+                    <span>Acte signé (PDF / scan)</span>
+                    <input
+                      type="file"
+                      accept=".pdf,.jpg,.jpeg,.png"
+                      onChange={(e) =>
+                        setSignedFile(e.target.files?.[0] ?? null)
+                      }
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={!signedFile || uploadSigned.isPending}
+                    onClick={() => uploadSigned.mutate()}
+                  >
+                    <FileUp size={14} />
+                    Déposer l&apos;acte signé
+                  </button>
+                </div>
+              )}
+          </Card>
+        </div>
+
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <Receipt size={17} /> Frais
+              </>
+            }
+          >
+            {fees.length === 0 ? (
+              <p className="muted small">Aucun frais enregistré.</p>
+            ) : (
+              <ul className="link-list">
+                {fees.map((f) => (
+                  <li key={f.id}>
+                    <span>
+                      <Receipt size={14} /> {f.fee_type_display}
+                      {f.label ? ` — ${f.label}` : ""}
+                      <em className="muted small"> · {f.payer_display}</em>
+                    </span>
+                    <span className="row-actions">
+                      <span className="num">
+                        {formatMoney(f.amount, cur)}
+                      </span>
+                      {editable && canInitiate && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => removeFee.mutate(f.id)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {editable && canInitiate && (
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span>Type</span>
+                  <select
+                    value={feeType}
+                    onChange={(e) => setFeeType(e.target.value)}
+                  >
+                    {RELEASE_FEE_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Montant</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={feeAmount}
+                    onChange={(e) => setFeeAmount(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Payeur</span>
+                  <select
+                    value={feePayer}
+                    onChange={(e) => setFeePayer(e.target.value)}
+                  >
+                    <option value="CLIENT">Client</option>
+                    <option value="INSTITUTION">Institution</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Libellé</span>
+                  <input
+                    value={feeLabel}
+                    onChange={(e) => setFeeLabel(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={!feeAmount || addFee.isPending}
+                  onClick={() => addFee.mutate()}
+                >
+                  <Plus size={14} />
+                  Ajouter frais
+                </button>
+              </div>
+            )}
+          </Card>
+
+          <Card
+            title={
+              <>
+                <Gavel size={17} /> Circuit & décision
+              </>
+            }
+          >
+            {!workflow.data?.instance ? (
+              <EmptyState
+                message={
+                  editable
+                    ? "Circuit non démarré — joignez la demande, générez l'acte, puis soumettez."
+                    : "Aucun circuit associé."
+                }
+              />
+            ) : (
+              <dl className="def-list two">
+                <div>
+                  <dt>Circuit</dt>
+                  <dd>{workflow.data.instance.definition_code || "—"}</dd>
+                </div>
+                <div>
+                  <dt>Statut circuit</dt>
+                  <dd>
+                    <Badge value={workflow.data.instance.status} />
+                  </dd>
+                </div>
+                <div>
+                  <dt>Clôturée le</dt>
+                  <dd>
+                    {r.completed_at ? formatDate(r.completed_at) : "—"}
+                  </dd>
+                </div>
+              </dl>
+            )}
+            {myTask && (
+              <div style={{ marginTop: 16 }}>
+                <h4 className="section-subtitle">
+                  Décision — {myTask.step_name}
+                </h4>
+                <DecisionPanel task={myTask} />
+              </div>
+            )}
+          </Card>
+        </div>
+
+        {schedule.length > 0 && (
+          <div className="detail-sections-row full">
+            <Card
+              title={
+                <>
+                  <UserRound size={17} /> Échéancier CBS (crd/situation)
+                </>
+              }
+            >
+              <div className="table-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Date</th>
+                      <th>Capital</th>
+                      <th>Intérêt</th>
+                      <th>Total</th>
+                      <th>Statut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {schedule.map((row, idx) => (
+                      <tr key={idx}>
+                        <td>{String(row.echeance ?? idx + 1)}</td>
+                        <td>{String(row.date ?? "—")}</td>
+                        <td className="num">
+                          {formatMoney(
+                            row.montantCapital != null
+                              ? String(row.montantCapital)
+                              : null,
+                            cur,
+                          )}
+                        </td>
+                        <td className="num">
+                          {formatMoney(
+                            row.montantInteret != null
+                              ? String(row.montantInteret)
+                              : null,
+                            cur,
+                          )}
+                        </td>
+                        <td className="num">
+                          {formatMoney(
+                            row.montantTotal != null
+                              ? String(row.montantTotal)
+                              : null,
+                            cur,
+                          )}
+                        </td>
+                        <td>{String(row.statut ?? "—")}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+        )}
       </div>
     </div>
   );

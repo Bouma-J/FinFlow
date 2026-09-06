@@ -1305,6 +1305,17 @@ export interface GuaranteeJewelryItem {
   description: string;
 }
 
+export interface GuaranteeMovement {
+  id: string;
+  guarantee: string;
+  movement_type: string;
+  movement_type_display?: string;
+  movement_date: string;
+  value: string | null;
+  target_application: string | null;
+  comment: string;
+}
+
 export interface Guarantee {
   id: string;
   reference: string;
@@ -1312,7 +1323,11 @@ export interface Guarantee {
   type_display: string;
   pledge_category: string;
   client: string;
+  client_display?: string | null;
   application: string | null;
+  application_reference?: string | null;
+  agency?: string | null;
+  agency_name?: string | null;
   belongs_to_applicant?: boolean;
   surety?: string | null;
   surety_display?: string | null;
@@ -1377,6 +1392,7 @@ export interface Guarantee {
   pledge_deed_scan: string | null;
   // Suivi
   status: string;
+  status_display?: string;
   last_valuation_date: string | null;
   registration_number?: string;
   registration_date?: string | null;
@@ -1386,8 +1402,11 @@ export interface Guarantee {
   has_open_formalization?: boolean;
   photos?: GuaranteePhoto[];
   documents?: GuaranteeDocument[];
+  movements?: GuaranteeMovement[];
   renewed_from?: string | null;
   renewed_from_reference?: string | null;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export const GUARANTEE_LABELS = {
@@ -1424,6 +1443,18 @@ export const GUARANTEE_LABELS = {
     DAT: "Dépôt à terme (DAT)",
     SAVINGS: "Épargne",
     SECURITY: "Titre",
+  } as Record<string, string>,
+  marital_status: {
+    SINGLE: "Célibataire",
+    MARRIED: "Marié(e)",
+    DIVORCED: "Divorcé(e)",
+    WIDOWED: "Veuf/Veuve",
+  } as Record<string, string>,
+  status: {
+    ACTIVE: "Active",
+    RELEASED: "Mainlevée",
+    REALIZED: "Réalisée",
+    TRANSFERRED: "Transférée",
   } as Record<string, string>,
 };
 

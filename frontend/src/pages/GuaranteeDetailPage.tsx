@@ -6,7 +6,9 @@ import {
   FilePenLine,
   FileText,
   Gem,
+  History,
   Images,
+  Info,
   Landmark,
   ShieldCheck,
   ShieldOff,
@@ -44,6 +46,15 @@ const OPEN_FORM_STATUSES = [
   "RETURNED",
   "APPROVED",
 ];
+
+const GENERIC_TYPES = new Set([
+  "LIEN",
+  "DEPOSIT",
+  "BANK_GUARANTEE",
+  "DATION",
+  "JOINT",
+  "OTHER",
+]);
 
 function lbl(map: Record<string, string>, key: string) {
   return map[key] || key || "—";
@@ -146,7 +157,9 @@ export function GuaranteeDetailPage({
   const isVehicle = isPledge && g.pledge_category === "VEHICLE";
   const isValuable = isPledge && g.pledge_category === "VALUABLE";
   const isFinancial = g.guarantee_type === "FINANCIAL";
+  const isGeneric = GENERIC_TYPES.has(g.guarantee_type);
   const photos = g.photos ?? [];
+  const movements = g.movements ?? [];
   const canEdit = manageable && hasPerm(user, "guarantees.change_guarantee");
   const canDelete = manageable && hasPerm(user, "guarantees.delete_guarantee");
   const canRelease =
@@ -159,6 +172,29 @@ export function GuaranteeDetailPage({
     hasPerm(user, "guarantees.initiate_guaranteeformalizationrequest");
   const openFormId =
     openFormalization.data?.id || g.open_formalization_id || null;
+
+  const scanEntries: { label: string; href: string | null }[] = [
+    { label: "Scan du document", href: g.document_scan },
+    { label: "Rapport d'expertise", href: g.expertise_report_scan },
+    { label: "Contrat de bail", href: g.lease_contract_scan },
+    {
+      label: "Certificat de situation juridique",
+      href: g.legal_situation_certificate_scan,
+    },
+    { label: "Carte grise", href: g.registration_card_scan },
+    { label: "Expertise mécanique", href: g.mechanical_expertise_scan },
+    { label: "Visite technique", href: g.technical_inspection_scan },
+    { label: "Assurance", href: g.insurance_scan },
+    { label: "Facture d'achat", href: g.purchase_invoice_scan },
+    { label: "Certificat d'expertise", href: g.expertise_certificate_scan },
+    {
+      label: "Certificat d'origine / facture",
+      href: g.origin_certificate_scan,
+    },
+    { label: "Acte de nantissement / blocage", href: g.pledge_deed_scan },
+  ];
+  const hasTypedScans = scanEntries.some((s) => !!s.href);
+  const hasFreeDocs = (g.documents?.length ?? 0) > 0;
 
   function remove() {
     if (
@@ -254,7 +290,13 @@ export function GuaranteeDetailPage({
             <h2 className="client-banner-name">{g.type_display}</h2>
             <div className="client-banner-meta">
               <code>{g.reference || g.id.slice(0, 8)}</code>
-              <Badge value={g.status} />
+              <Badge
+                value={g.status}
+                label={
+                  g.status_display ||
+                  lbl(GUARANTEE_LABELS.status, g.status)
+                }
+              />
               {openFormId && (
                 <Badge value="IN_PROGRESS" label="Formalisation en cours" />
               )}
@@ -267,31 +309,129 @@ export function GuaranteeDetailPage({
         </div>
       </div>
 
-      {(g.formalized_at ||
-        g.registration_number ||
-        g.registration_date ||
-        g.registration_authority) && (
-        <Card title="Constitution juridique">
+      <div className="detail-row">
+        <Section icon={Info} title="Identification">
+          <dl className="def-list two">
+            <Row term="Référence" value={g.reference || "—"} />
+            <Row term="Type" value={g.type_display} />
+            {isPledge && (
+              <Row
+                term="Catégorie de gage"
+                value={
+                  g.pledge_category
+                    ? lbl(GUARANTEE_LABELS.pledge_category, g.pledge_category)
+                    : undefined
+                }
+              />
+            )}
+            <Row
+              term="Statut"
+              value={
+                g.status_display || lbl(GUARANTEE_LABELS.status, g.status)
+              }
+            />
+            <Row
+              term="Client"
+              value={
+                g.client ? (
+                  <Link to={`/clients/${g.client}`}>
+                    {g.client_display || "Voir le client"}
+                  </Link>
+                ) : (
+                  g.client_display
+                )
+              }
+            />
+            <Row
+              term="Dossier de crédit"
+              value={
+                g.application ? (
+                  <Link to={`/dossiers/${g.application}`}>
+                    {g.application_reference || "Voir le dossier"}
+                  </Link>
+                ) : undefined
+              }
+            />
+            <Row term="Agence" value={g.agency_name} />
+            <Row term="Propriétaires" value={g.owners} />
+            <Row
+              term="Reconduite depuis"
+              value={
+                g.renewed_from ? (
+                  <Link to={`/garanties/${g.renewed_from}`}>
+                    {g.renewed_from_reference || "Garantie d'origine"}
+                  </Link>
+                ) : undefined
+              }
+            />
+            <Row
+              term="Créée le"
+              value={g.created_at && formatDate(g.created_at)}
+            />
+            <Row
+              term="Modifiée le"
+              value={g.updated_at && formatDate(g.updated_at)}
+            />
+          </dl>
+          {g.description && (
+            <div style={{ marginTop: 12 }}>
+              <h4 className="section-subtitle">Description</h4>
+              <p className="prose">{g.description}</p>
+            </div>
+          )}
+        </Section>
+
+        <Section icon={Banknote} title="Valorisation & assurance">
           <dl className="def-list two">
             <Row
-              term="Formalisée le"
-              value={g.formalized_at && formatDate(g.formalized_at)}
+              term="Valeur d'expertise"
+              value={
+                g.expertise_value != null && g.expertise_value !== ""
+                  ? formatMoney(g.expertise_value)
+                  : undefined
+              }
             />
-            <Row term="N° d'enregistrement" value={g.registration_number} />
             <Row
-              term="Date d'enregistrement"
-              value={g.registration_date && formatDate(g.registration_date)}
+              term="Valeur actualisée"
+              value={
+                g.current_value != null && g.current_value !== ""
+                  ? formatMoney(g.current_value)
+                  : undefined
+              }
             />
-            <Row term="Organisme" value={g.registration_authority} />
+            <Row
+              term="Valeur à considérer"
+              value={
+                g.value_to_consider != null && g.value_to_consider !== ""
+                  ? formatMoney(g.value_to_consider)
+                  : undefined
+              }
+            />
+            <Row
+              term="Taux de couverture (LTV)"
+              value={
+                g.ltv_ratio
+                  ? `${(Number(g.ltv_ratio) * 100).toFixed(0)} %`
+                  : undefined
+              }
+            />
+            <Row
+              term="Date d'expertise"
+              value={g.expertise_date && formatDate(g.expertise_date)}
+            />
+            <Row
+              term="Dernière valorisation"
+              value={
+                g.last_valuation_date && formatDate(g.last_valuation_date)
+              }
+            />
+            <Row term="Cabinet d'expertise" value={g.expertise_firm} />
+            <Row term="Nom de l'expert" value={g.expert_name} />
+            <Row term="Bien assuré" value={g.is_insured ? "Oui" : "Non"} />
+            <Row term="Réf. assurance" value={g.insurance_reference} />
           </dl>
-          <p className="muted small" style={{ marginTop: 8 }}>
-            La formalisation est parallèle au crédit et ne bloque pas le
-            décaissement.
-          </p>
-        </Card>
-      )}
+        </Section>
 
-      <div className="detail-row">
         <Section icon={User} title="Propriété du bien">
           <dl className="def-list two">
             <Row
@@ -312,86 +452,93 @@ export function GuaranteeDetailPage({
                 }
               />
             )}
+            <Row term="Nom du propriétaire" value={g.owner_last_name} />
+            <Row term="Prénom du propriétaire" value={g.owner_first_name} />
+            <Row
+              term="Situation matrimoniale"
+              value={
+                g.owner_marital_status
+                  ? lbl(
+                      GUARANTEE_LABELS.marital_status,
+                      g.owner_marital_status,
+                    )
+                  : undefined
+              }
+            />
+            <Row
+              term="Régime matrimonial"
+              value={
+                g.matrimonial_regime
+                  ? lbl(
+                      GUARANTEE_LABELS.matrimonial_regime,
+                      g.matrimonial_regime,
+                    )
+                  : undefined
+              }
+            />
           </dl>
         </Section>
 
-        {isMortgage && (
-          <>
-            <Section icon={User} title="Identité du propriétaire">
-              <dl className="def-list two">
-                <Row term="Nom" value={g.owner_last_name} />
-                <Row term="Prénom" value={g.owner_first_name} />
-                <Row
-                  term="Situation matrimoniale"
-                  value={g.owner_marital_status}
-                />
-                <Row
-                  term="Régime matrimonial"
-                  value={
-                    g.matrimonial_regime &&
-                    lbl(GUARANTEE_LABELS.matrimonial_regime, g.matrimonial_regime)
-                  }
-                />
-              </dl>
-            </Section>
+        {(g.formalized_at ||
+          g.registration_number ||
+          g.registration_date ||
+          g.registration_authority) && (
+          <Section icon={Stamp} title="Constitution juridique">
+            <dl className="def-list two">
+              <Row
+                term="Formalisée le"
+                value={g.formalized_at && formatDate(g.formalized_at)}
+              />
+              <Row term="N° d'enregistrement" value={g.registration_number} />
+              <Row
+                term="Date d'enregistrement"
+                value={
+                  g.registration_date && formatDate(g.registration_date)
+                }
+              />
+              <Row term="Organisme" value={g.registration_authority} />
+            </dl>
+            <p className="muted small" style={{ marginTop: 8 }}>
+              La formalisation est parallèle au crédit et ne bloque pas le
+              décaissement.
+            </p>
+          </Section>
+        )}
 
-            <Section icon={Landmark} title="Bien immobilier">
-              <dl className="def-list two">
-                <Row
-                  term="Type de document"
-                  value={
-                    g.document_type &&
-                    lbl(GUARANTEE_LABELS.document_type, g.document_type)
-                  }
-                />
-                <Row term="Numéro du document" value={g.document_number} />
-                <Row
-                  term="Date d'établissement"
-                  value={
-                    g.document_issue_date && formatDate(g.document_issue_date)
-                  }
-                />
-                <Row term="Adresse du bien" value={g.address} />
-                <Row
-                  term="Valeur expertisée"
-                  value={g.expertise_value && formatMoney(g.expertise_value)}
-                />
-                <Row
-                  term="Date de l'expertise"
-                  value={g.expertise_date && formatDate(g.expertise_date)}
-                />
-                <Row term="Cabinet d'expertise" value={g.expertise_firm} />
-                <Row term="Nom de l'expert" value={g.expert_name} />
-                <Row
-                  term="Valeur à considérer"
-                  value={g.value_to_consider && formatMoney(g.value_to_consider)}
-                />
-                <Row
-                  term="Taux de couverture"
-                  value={
-                    g.ltv_ratio
-                      ? `${(Number(g.ltv_ratio) * 100).toFixed(0)} %`
-                      : undefined
-                  }
-                />
-                <Row
-                  term="Statut d'occupation"
-                  value={
-                    g.occupancy_status &&
-                    lbl(GUARANTEE_LABELS.occupancy_status, g.occupancy_status)
-                  }
-                />
-                <Row term="Bien assuré" value={g.is_insured ? "Oui" : "Non"} />
-              </dl>
-            </Section>
-          </>
+        {isMortgage && (
+          <Section icon={Landmark} title="Bien immobilier">
+            <dl className="def-list two">
+              <Row
+                term="Type de document"
+                value={
+                  g.document_type
+                    ? lbl(GUARANTEE_LABELS.document_type, g.document_type)
+                    : undefined
+                }
+              />
+              <Row term="Numéro du document" value={g.document_number} />
+              <Row
+                term="Date d'établissement"
+                value={
+                  g.document_issue_date && formatDate(g.document_issue_date)
+                }
+              />
+              <Row term="Adresse du bien" value={g.address} />
+              <Row
+                term="Statut d'occupation"
+                value={
+                  g.occupancy_status
+                    ? lbl(GUARANTEE_LABELS.occupancy_status, g.occupancy_status)
+                    : undefined
+                }
+              />
+            </dl>
+          </Section>
         )}
 
         {isVehicle && (
           <Section icon={Car} title="Moyen roulant">
             <dl className="def-list two">
-              <Row term="Nom du propriétaire" value={g.owner_last_name} />
-              <Row term="Prénom du propriétaire" value={g.owner_first_name} />
               <Row term="Numéro de châssis" value={g.chassis_number} />
               <Row term="Numéro du moteur" value={g.engine_number} />
               <Row term="Marque" value={g.brand} />
@@ -408,7 +555,9 @@ export function GuaranteeDetailPage({
               />
               <Row
                 term="Valeur d'acquisition"
-                value={g.acquisition_value && formatMoney(g.acquisition_value)}
+                value={
+                  g.acquisition_value && formatMoney(g.acquisition_value)
+                }
               />
               <Row
                 term="Valeur estimée à la revente"
@@ -418,15 +567,11 @@ export function GuaranteeDetailPage({
                 term="Date d'estimation"
                 value={g.estimation_date && formatDate(g.estimation_date)}
               />
-              <Row
-                term="Date de l'expertise"
-                value={g.expertise_date && formatDate(g.expertise_date)}
-              />
-              <Row term="Cabinet d'expertise" value={g.expertise_firm} />
-              <Row term="Nom de l'expert" value={g.expert_name} />
             </dl>
             {g.additional_info && (
-              <p className="prose">{g.additional_info}</p>
+              <p className="prose" style={{ marginTop: 12 }}>
+                {g.additional_info}
+              </p>
             )}
           </Section>
         )}
@@ -435,21 +580,12 @@ export function GuaranteeDetailPage({
           <Section icon={Gem} title="Objet de valeur">
             <dl className="def-list two">
               <Row
-                term="Valeur estimée"
-                value={g.expertise_value && formatMoney(g.expertise_value)}
-              />
-              <Row
-                term="Date d'expertise"
-                value={g.expertise_date && formatDate(g.expertise_date)}
-              />
-              <Row term="Cabinet d'expertise" value={g.expertise_firm} />
-              <Row term="Nom de l'expert" value={g.expert_name} />
-              <Row
                 term="Cours de la matière première"
-                value={g.raw_material_price && formatMoney(g.raw_material_price)}
+                value={
+                  g.raw_material_price && formatMoney(g.raw_material_price)
+                }
               />
             </dl>
-            {g.description && <p className="prose">{g.description}</p>}
             {g.jewelry_items && g.jewelry_items.length > 0 && (
               <div className="jewelry-list" style={{ marginTop: 16 }}>
                 <h4 className="section-subtitle">Composantes du gage</h4>
@@ -490,8 +626,9 @@ export function GuaranteeDetailPage({
               <Row
                 term="Type"
                 value={
-                  g.financial_type &&
-                  lbl(GUARANTEE_LABELS.financial_type, g.financial_type)
+                  g.financial_type
+                    ? lbl(GUARANTEE_LABELS.financial_type, g.financial_type)
+                    : undefined
                 }
               />
               <Row term="Numéro de compte" value={g.account_number} />
@@ -503,7 +640,8 @@ export function GuaranteeDetailPage({
               <Row
                 term="Échéance du dépôt"
                 value={
-                  g.deposit_maturity_date && formatDate(g.deposit_maturity_date)
+                  g.deposit_maturity_date &&
+                  formatDate(g.deposit_maturity_date)
                 }
               />
               <Row term="Code ISIN / valeur" value={g.isin_code} />
@@ -513,65 +651,53 @@ export function GuaranteeDetailPage({
               />
             </dl>
             {g.volatility_history && (
-              <p className="prose">{g.volatility_history}</p>
+              <p className="prose" style={{ marginTop: 12 }}>
+                {g.volatility_history}
+              </p>
             )}
+          </Section>
+        )}
+
+        {isGeneric && (
+          <Section icon={ShieldCheck} title="Détails du bien / engagement">
+            <dl className="def-list two">
+              <Row
+                term="Type de garantie"
+                value={
+                  lbl(GUARANTEE_LABELS.guarantee_type, g.guarantee_type) ||
+                  g.type_display
+                }
+              />
+              <Row term="Adresse / localisation" value={g.address} />
+              <Row term="N° de document" value={g.document_number} />
+              <Row
+                term="Date du document"
+                value={
+                  g.document_issue_date && formatDate(g.document_issue_date)
+                }
+              />
+              <Row term="Informations complémentaires" value={g.additional_info} />
+            </dl>
           </Section>
         )}
 
         <Section icon={UploadCloud} title="Pièces justificatives">
           <div className="doc-row">
-            <DocChip label="Scan du document" href={g.document_scan} />
-            <DocChip
-              label="Rapport d'expertise"
-              href={g.expertise_report_scan}
-            />
-            <DocChip label="Contrat de bail" href={g.lease_contract_scan} />
-            <DocChip
-              label="Certificat de situation juridique"
-              href={g.legal_situation_certificate_scan}
-            />
-            <DocChip label="Carte grise" href={g.registration_card_scan} />
-            <DocChip
-              label="Expertise mécanique"
-              href={g.mechanical_expertise_scan}
-            />
-            <DocChip
-              label="Visite technique"
-              href={g.technical_inspection_scan}
-            />
-            <DocChip label="Assurance" href={g.insurance_scan} />
-            <DocChip label="Facture d'achat" href={g.purchase_invoice_scan} />
-            <DocChip
-              label="Certificat d'expertise"
-              href={g.expertise_certificate_scan}
-            />
-            <DocChip
-              label="Certificat d'origine / facture"
-              href={g.origin_certificate_scan}
-            />
-            <DocChip
-              label="Acte de nantissement / blocage"
-              href={g.pledge_deed_scan}
-            />
+            {scanEntries.map((s) => (
+              <DocChip key={s.label} label={s.label} href={s.href} />
+            ))}
           </div>
-          {!g.document_scan &&
-            !g.expertise_report_scan &&
-            !g.lease_contract_scan &&
-            !g.legal_situation_certificate_scan &&
-            !g.registration_card_scan &&
-            !g.mechanical_expertise_scan &&
-            !g.technical_inspection_scan &&
-            !g.insurance_scan &&
-            !g.purchase_invoice_scan &&
-            !g.expertise_certificate_scan &&
-            !g.origin_certificate_scan &&
-            !g.pledge_deed_scan && (
-              <p className="muted small">Aucune pièce jointe.</p>
-            )}
-          {(g.documents?.length ?? 0) > 0 && (
+          {!hasTypedScans && !hasFreeDocs && (
+            <p className="muted small">Aucune pièce jointe.</p>
+          )}
+          {hasFreeDocs && (
             <div className="doc-row" style={{ marginTop: 12 }}>
               {g.documents!.map((d) => (
-                <DocChip key={d.id} label={d.title || "Document"} href={d.file} />
+                <DocChip
+                  key={d.id}
+                  label={d.title || "Document"}
+                  href={d.file}
+                />
               ))}
             </div>
           )}
@@ -594,6 +720,37 @@ export function GuaranteeDetailPage({
             </div>
           ) : (
             <p className="muted small">Aucune photo pour cette garantie.</p>
+          )}
+        </Section>
+
+        <Section icon={History} title="Historique des mouvements">
+          {movements.length > 0 ? (
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Type</th>
+                  <th>Valeur</th>
+                  <th>Commentaire</th>
+                </tr>
+              </thead>
+              <tbody>
+                {movements.map((m) => (
+                  <tr key={m.id}>
+                    <td>{formatDate(m.movement_date)}</td>
+                    <td>{m.movement_type_display || m.movement_type}</td>
+                    <td>
+                      {m.value != null && m.value !== ""
+                        ? formatMoney(m.value)
+                        : "—"}
+                    </td>
+                    <td>{m.comment || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p className="muted small">Aucun mouvement enregistré.</p>
           )}
         </Section>
       </div>
