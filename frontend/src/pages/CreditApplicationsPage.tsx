@@ -9,10 +9,9 @@ import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import {
   Badge,
-  EmptyState,
   PageHeader,
   PaginationBar,
-  Spinner,
+  QueryStatus,
   formatMoney,
 } from "@/components/ui";
 
@@ -20,7 +19,7 @@ export function CreditApplicationsPage() {
   const { user } = useAuth();
   const canCreate = hasPerm(user, "credits.add_creditapplication");
   const [page, setPage] = useState(1);
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["credit-applications", page],
     queryFn: async () =>
       (
@@ -46,11 +45,13 @@ export function CreditApplicationsPage() {
         }
       />
 
-      {isLoading || !data ? (
-        <Spinner />
-      ) : data.results.length === 0 ? (
-        <EmptyState message="Aucun dossier de crédit." />
-      ) : (
+      <QueryStatus
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={!data?.results.length}
+        emptyMessage="Aucun dossier de crédit."
+        onRetry={() => refetch()}
+      >
         <>
           <table className="table card">
             <thead>
@@ -64,7 +65,7 @@ export function CreditApplicationsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.results.map((a) => (
+              {(data?.results ?? []).map((a) => (
                 <tr key={a.id}>
                   <td>
                     <code>{a.reference || a.id.slice(0, 8)}</code>
@@ -87,9 +88,13 @@ export function CreditApplicationsPage() {
               ))}
             </tbody>
           </table>
-          <PaginationBar page={page} count={data.count} onPageChange={setPage} />
+          <PaginationBar
+            page={page}
+            count={data?.count ?? 0}
+            onPageChange={setPage}
+          />
         </>
-      )}
+      </QueryStatus>
     </div>
   );
 }

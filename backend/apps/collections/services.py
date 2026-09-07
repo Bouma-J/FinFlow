@@ -97,6 +97,20 @@ def change_case_stage(
         automatic=automatic,
         changed_by=user if user and getattr(user, "is_authenticated", False) else None,
     )
+    if (
+        automatic
+        and to_stage == CollectionCase.Stage.LITIGATION
+        and (
+            not case.next_action_date
+            or case.next_action_type != CollectionActionType.LEGAL
+        )
+    ):
+        set_next_action(
+            case,
+            action_date=timezone.localdate(),
+            action_type=CollectionActionType.LEGAL,
+            note="Escalade contentieux — ouvrir / suivre le dossier",
+        )
     return case
 
 
@@ -210,7 +224,17 @@ def refresh_loan_overdue(loan: Loan, as_of=None):
 
     if created:
         case.stage_changed_at = timezone.now()
-        case.save(update_fields=["stage_changed_at"])
+        update_fields = ["stage_changed_at"]
+        app = getattr(loan, "application", None)
+        agent = None
+        if app is not None:
+            agent = getattr(app, "submitted_by", None) or getattr(
+                app, "created_by", None
+            )
+        if agent is not None and case.assigned_to_id is None:
+            case.assigned_to = agent
+            update_fields.append("assigned_to")
+        case.save(update_fields=update_fields)
         CollectionStageHistory.objects.create(
             tenant_id=case.tenant_id,
             case=case,
@@ -219,6 +243,13 @@ def refresh_loan_overdue(loan: Loan, as_of=None):
             reason="Nouveau retard",
             automatic=True,
         )
+        if not case.next_action_date:
+            set_next_action(
+                case,
+                action_date=as_of,
+                action_type=CollectionActionType.CALL,
+                note="Premier contact",
+            )
     elif case.stage == CollectionCase.Stage.CLOSED:
         change_case_stage(
             case,
@@ -227,6 +258,13 @@ def refresh_loan_overdue(loan: Loan, as_of=None):
             reason="Réouverture",
         )
         case.refresh_from_db()
+        if not case.next_action_date:
+            set_next_action(
+                case,
+                action_date=as_of,
+                action_type=CollectionActionType.CALL,
+                note="Réouverture — reprise de contact",
+            )
 
     return apply_escalation_rules(case)
 
@@ -287,13 +325,37 @@ def _mark_kept_promises(repayment: Repayment):
 
 @transaction.atomic
 def refresh_broken_promises(as_of=None) -> int:
-    """Passe en BROKEN les promesses PENDING dont la date est dépassée."""
+    """Passe en BROKEN les promesses PENDING dont la date est dépassée.
+
+    Planifie une reprise de contact si aucune prochaine action future n'existe.
+    """
     as_of = as_of or timezone.localdate()
     # all_tenants : appelé depuis Celery hors ContextVar tenant.
-    return PaymentPromise.all_tenants.filter(
-        status=PaymentPromise.Status.PENDING,
-        promised_date__lt=as_of,
-    ).update(status=PaymentPromise.Status.BROKEN)
+    qs = (
+        PaymentPromise.all_tenants.filter(
+            status=PaymentPromise.Status.PENDING,
+            promised_date__lt=as_of,
+        )
+        .select_related("case")
+        .order_by("promised_date")
+    )
+    count = 0
+    for promise in qs:
+        promise.status = PaymentPromise.Status.BROKEN
+        promise.save(update_fields=["status"])
+        count += 1
+        case = promise.case
+        if case is None:
+            continue
+        if case.next_action_date and case.next_action_date >= as_of:
+            continue
+        set_next_action(
+            case,
+            action_date=as_of,
+            action_type=CollectionActionType.CALL,
+            note="Promesse non tenue",
+        )
+    return count
 
 
 def record_repayment(
@@ -336,51 +398,67 @@ def set_next_action(
     return case
 
 
-def agent_dashboard(*, user, tenant_id=None) -> dict:
-    """Indicateurs portefeuille agent (ou filiale si admin sans filtre mine)."""
+def agent_dashboard(*, user, tenant_id=None, scope: str = "mine") -> dict:
+    """Indicateurs portefeuille agent (`mine`) ou filiale / équipe (`team`)."""
     today = timezone.localdate()
     month_start = today.replace(day=1)
     qs = CollectionCase.objects.exclude(stage=CollectionCase.Stage.CLOSED)
     if tenant_id:
         qs = qs.filter(tenant_id=tenant_id)
-    if user and not getattr(user, "is_group_level", False):
-        # Portefeuille personnel si demandé côté vue ; ici base = assigné + non assignés visibles
-        pass
 
-    assigned_qs = qs.filter(assigned_to=user) if user else qs.none()
-    followups = assigned_qs.filter(
+    scope = (scope or "mine").lower()
+    if scope not in {"mine", "team"}:
+        scope = "mine"
+
+    if scope == "team":
+        # Superviseur / vue filiale : tous les dossiers ouverts du périmètre.
+        portfolio_qs = qs
+    elif user:
+        portfolio_qs = qs.filter(assigned_to=user)
+    else:
+        portfolio_qs = qs.none()
+
+    followups = portfolio_qs.filter(
         next_action_date__isnull=False,
         next_action_date__lte=today,
     ).count()
     pending_promises = PaymentPromise.objects.filter(
-        case__in=assigned_qs,
+        case__in=portfolio_qs,
         status=PaymentPromise.Status.PENDING,
     ).count()
     broken_promises = PaymentPromise.objects.filter(
-        case__in=assigned_qs,
+        case__in=portfolio_qs,
         status=PaymentPromise.Status.BROKEN,
         promised_date__gte=today - timedelta(days=30),
     ).count()
-    repay_agg = Repayment.objects.filter(
-        loan__collection_case__assigned_to=user,
-        payment_date__gte=month_start,
-    ).aggregate(count=Count("id"), total=Sum("amount"))
+
+    if scope == "team":
+        repay_agg = Repayment.objects.filter(
+            loan__collection_case__in=portfolio_qs,
+            payment_date__gte=month_start,
+        ).aggregate(count=Count("id"), total=Sum("amount"))
+    else:
+        repay_agg = Repayment.objects.filter(
+            loan__collection_case__assigned_to=user,
+            payment_date__gte=month_start,
+        ).aggregate(count=Count("id"), total=Sum("amount"))
 
     by_par = {
         row["par_class"]: row["n"]
-        for row in assigned_qs.values("par_class").annotate(n=Count("id"))
+        for row in portfolio_qs.values("par_class").annotate(n=Count("id"))
     }
     by_stage = {
         row["stage"]: row["n"]
-        for row in assigned_qs.values("stage").annotate(n=Count("id"))
+        for row in portfolio_qs.values("stage").annotate(n=Count("id"))
     }
 
     due_cases = list(
-        assigned_qs.filter(next_action_date__isnull=False)
+        portfolio_qs.filter(next_action_date__isnull=False)
         .order_by("next_action_date")
         .select_related(
             "loan__application__client",
             "loan__application",
+            "assigned_to",
         )[:10]
     )
     due_followups = []
@@ -398,10 +476,19 @@ def agent_dashboard(*, user, tenant_id=None) -> dict:
             "overdue_amount": str(c.overdue_amount),
             "par_class": c.par_class,
             "stage": c.stage,
+            "assigned_to_name": (
+                (c.assigned_to.get_full_name() or c.assigned_to.username)
+                if c.assigned_to_id
+                else None
+            ),
         })
 
+    unassigned_open = qs.filter(assigned_to__isnull=True).count() if scope == "team" else 0
+
     return {
-        "assigned_open": assigned_qs.count(),
+        "scope": scope,
+        "assigned_open": portfolio_qs.count(),
+        "unassigned_open": unassigned_open,
         "followups_due": followups,
         "pending_promises": pending_promises,
         "broken_promises_30d": broken_promises,
@@ -894,9 +981,16 @@ def notify_upcoming_hearings(*, within_days: int = 7) -> dict:
 
 def send_sms_stub(*, tenant, phone: str, message: str) -> tuple[str, str]:
     """
-    Stub SMS — aucun provider branché.
+    Stub SMS — aucun provider branché (FEATURE_SMS=False par défaut).
     Retourne (status, error_message) avec status SKIPPED.
     """
+    from django.conf import settings
+
+    if not getattr(settings, "FEATURE_SMS", False):
+        return (
+            "SKIPPED",
+            "Canal SMS désactivé (FEATURE_SMS=0). Aucun envoi.",
+        )
     if not phone:
         return "SKIPPED", "Aucun numéro de téléphone."
     return (
@@ -1004,6 +1098,14 @@ def send_collection_reminder(
         return {"status": status, "log_id": str(log.id), "channel": "EMAIL"}
 
     if channel == "SMS":
+        from django.conf import settings
+
+        if not getattr(settings, "FEATURE_SMS", False):
+            return {
+                "status": "SKIPPED",
+                "channel": "SMS",
+                "reason": "Canal SMS désactivé (FEATURE_SMS=0)",
+            }
         if not force and (not prefs.enabled or not prefs.notify_collection_sms):
             return {"status": "SKIPPED", "reason": "Relances SMS désactivées"}
         phone = (getattr(client, "phone", None) or "").strip()

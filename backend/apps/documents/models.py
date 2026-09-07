@@ -6,7 +6,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import models
 
 from apps.common.files import safe_filename
-from apps.common.models import ReferenceModel, TenantScopedModel
+from apps.common.managers import SoftDeleteAllTenantsManager, SoftDeleteTenantManager
+from apps.common.models import ReferenceModel, SoftDeleteModel, TenantScopedModel
 
 
 def document_upload_path(instance, filename):
@@ -35,11 +36,17 @@ class DocumentCategory(ReferenceModel):
         ]
 
 
-class Document(TenantScopedModel):
+class Document(SoftDeleteModel, TenantScopedModel):
     """
     Document électronique rattaché à une entité métier (client, dossier,
     garantie…) via une relation générique. Versionné et contrôlé en intégrité.
+    Suppression logique (rétention) via SoftDeleteModel.
     """
+
+    objects = SoftDeleteTenantManager()
+    all_tenants = SoftDeleteAllTenantsManager()
+    # Accès y compris soft-deleted (purge, audit)
+    including_deleted = models.Manager()
 
     category = models.ForeignKey(
         DocumentCategory,
@@ -72,6 +79,14 @@ class Document(TenantScopedModel):
         null=True,
         blank=True,
         related_name="uploaded_documents",
+    )
+    # Lien vers la pièce métier d'origine (ex. credits.CreditDocument:<uuid>)
+    origin_key = models.CharField(
+        "clé d'origine",
+        max_length=120,
+        blank=True,
+        db_index=True,
+        help_text="Identifiant stable du silo source pour dédoublonnage / purge.",
     )
 
     class Meta:

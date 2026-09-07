@@ -18,10 +18,9 @@ import { ClientCbsImportForm } from "@/components/ClientCbsImportForm";
 import { ClientForm } from "@/components/ClientForm";
 import {
   Badge,
-  EmptyState,
   PageHeader,
   PaginationBar,
-  Spinner,
+  QueryStatus,
 } from "@/components/ui";
 
 function typeLabel(t: string) {
@@ -43,7 +42,7 @@ export function ClientsPage() {
   const [page, setPage] = useState(1);
   const [importNotice, setImportNotice] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["clients", page],
     queryFn: async () =>
       (await api.get<Paginated<Client>>("/clients/", { params: { page } })).data,
@@ -132,11 +131,14 @@ export function ClientsPage() {
         ) : (
           <ClientForm onSuccess={closeForm} onCancel={closeForm} />
         )
-      ) : isLoading || !data ? (
-        <Spinner />
-      ) : data.results.length === 0 ? (
-        <EmptyState message="Aucun client enregistré." />
       ) : (
+        <QueryStatus
+          isLoading={isLoading}
+          isError={isError}
+          isEmpty={!data?.results.length}
+          emptyMessage="Aucun client enregistré."
+          onRetry={() => refetch()}
+        >
         <>
           <table className="table card">
             <thead>
@@ -150,7 +152,7 @@ export function ClientsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.results.map((c) => (
+              {(data?.results ?? []).map((c) => (
                 <tr key={c.id}>
                   <td>
                     <code>{c.reference || "—"}</code>
@@ -174,10 +176,11 @@ export function ClientsPage() {
           </table>
           <PaginationBar
             page={page}
-            count={data.count}
+            count={data?.count ?? 0}
             onPageChange={setPage}
           />
         </>
+        </QueryStatus>
       )}
     </div>
   );

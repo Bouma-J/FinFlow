@@ -5,16 +5,20 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type {
+  AdminUser,
   CollectionActionType,
   CollectionCase,
   CollectionStage,
+  Paginated,
   PromiseStatus,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { isSmsEnabled } from "@/auth/features";
 import { hasPerm } from "@/auth/permissions";
 import {
   Badge,
   Card,
+  ErrorState,
   PageHeader,
   Spinner,
   formatMoney,
@@ -41,6 +45,7 @@ export function CollectionCaseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const smsEnabled = isSmsEnabled(user);
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -51,6 +56,7 @@ export function CollectionCaseDetailPage() {
   const canManageCase = hasPerm(user, "collections.change_collectioncase");
   const canAddAction = hasPerm(user, "collections.add_collectionaction");
   const canAddPromise = hasPerm(user, "collections.add_paymentpromise");
+  const canChangePromise = hasPerm(user, "collections.change_paymentpromise");
   const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
 
   const [payAmount, setPayAmount] = useState("");
@@ -69,6 +75,7 @@ export function CollectionCaseDetailPage() {
 
   const [promiseAmount, setPromiseAmount] = useState("");
   const [promiseDate, setPromiseDate] = useState("");
+  const [assignUserId, setAssignUserId] = useState<string>("");
 
   const [nextDate, setNextDate] = useState("");
   const [nextType, setNextType] = useState<CollectionActionType | "">("");
@@ -86,12 +93,24 @@ export function CollectionCaseDetailPage() {
     enabled: !!id,
   });
 
+  const agents = useQuery({
+    queryKey: ["collection-assign-users"],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<AdminUser>>("/users/", {
+          params: { page_size: 200, is_active: true },
+        })
+      ).data,
+    enabled: canManageCase,
+  });
+
   useEffect(() => {
     const c = caseQuery.data;
     if (!c) return;
     setNextDate(c.next_action_date || "");
     setNextType(c.next_action_type || "");
     setNextNote(c.next_action_note || "");
+    setAssignUserId(c.assigned_to || "");
   }, [caseQuery.data]);
 
   const invalidate = () => {
@@ -160,6 +179,42 @@ export function CollectionCaseDetailPage() {
       invalidate();
     },
     onError: () => setError("Impossible d'enregistrer la promesse."),
+  });
+
+  const promiseStatusMutation = useMutation({
+    mutationFn: async ({
+      promiseId,
+      status,
+    }: {
+      promiseId: string;
+      status: PromiseStatus;
+    }) =>
+      (
+        await api.patch(`/payment-promises/${promiseId}/`, {
+          status,
+        })
+      ).data,
+    onSuccess: () => {
+      setSuccess("Statut de la promesse mis à jour.");
+      setError(null);
+      invalidate();
+    },
+    onError: () => setError("Impossible de mettre à jour la promesse."),
+  });
+
+  const assignMutation = useMutation({
+    mutationFn: async (assignedTo: string | null) =>
+      (
+        await api.post(`/collection-cases/${id}/assign/`, {
+          assigned_to: assignedTo,
+        })
+      ).data,
+    onSuccess: () => {
+      setSuccess("Affectation mise à jour.");
+      setError(null);
+      invalidate();
+    },
+    onError: () => setError("Impossible d'affecter l'agent."),
   });
 
   const stageMutation = useMutation({
@@ -285,8 +340,16 @@ export function CollectionCaseDetailPage() {
     nextActionMutation.mutate();
   }
 
-  if (caseQuery.isLoading || !caseQuery.data) {
+  if (caseQuery.isLoading) {
     return <Spinner />;
+  }
+  if (caseQuery.isError || !caseQuery.data) {
+    return (
+      <ErrorState
+        message="Impossible de charger le dossier de recouvrement."
+        onRetry={() => caseQuery.refetch()}
+      />
+    );
   }
 
   const c = caseQuery.data;
@@ -387,7 +450,40 @@ export function CollectionCaseDetailPage() {
             </div>
             <div>
               <dt>Agent</dt>
-              <dd>{c.assigned_to_name || "Non affecté"}</dd>
+              <dd>
+                {canManageCase ? (
+                  <div className="row-actions" style={{ gap: 8 }}>
+                    <select
+                      value={assignUserId}
+                      onChange={(e) => setAssignUserId(e.target.value)}
+                    >
+                      <option value="">Non affecté</option>
+                      {(agents.data?.results ?? []).map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.first_name || u.last_name
+                            ? `${u.first_name} ${u.last_name}`.trim()
+                            : u.username}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      disabled={
+                        assignMutation.isPending ||
+                        assignUserId === (c.assigned_to || "")
+                      }
+                      onClick={() =>
+                        assignMutation.mutate(assignUserId || null)
+                      }
+                    >
+                      Affecter
+                    </button>
+                  </div>
+                ) : (
+                  c.assigned_to_name || "Non affecté"
+                )}
+              </dd>
             </div>
             <div>
               <dt>Stade</dt>
@@ -769,6 +865,7 @@ export function CollectionCaseDetailPage() {
                   <th>Date</th>
                   <th className="num">Montant</th>
                   <th>Statut</th>
+                  {(canChangePromise || canAddPromise) && <th></th>}
                 </tr>
               </thead>
               <tbody>
@@ -779,6 +876,40 @@ export function CollectionCaseDetailPage() {
                     <td>
                       <Badge value={p.status_display} />
                     </td>
+                    {(canChangePromise || canAddPromise) && (
+                      <td>
+                        {p.status === "PENDING" && (
+                          <div className="row-actions" style={{ gap: 4 }}>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              disabled={promiseStatusMutation.isPending}
+                              onClick={() =>
+                                promiseStatusMutation.mutate({
+                                  promiseId: p.id,
+                                  status: "KEPT",
+                                })
+                              }
+                            >
+                              Tenue
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              disabled={promiseStatusMutation.isPending}
+                              onClick={() =>
+                                promiseStatusMutation.mutate({
+                                  promiseId: p.id,
+                                  status: "BROKEN",
+                                })
+                              }
+                            >
+                              Rompue
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -791,8 +922,10 @@ export function CollectionCaseDetailPage() {
         {canManageCase && (
         <Card title="Relances">
           <p className="muted small" style={{ marginBottom: 10 }}>
-            Envoi immédiat (force les préférences filiale). SMS = stub
-            journalisé.
+            Envoi immédiat (force les préférences filiale).
+            {smsEnabled
+              ? " SMS disponible si un provider est configuré."
+              : " Canal SMS désactivé (FEATURE_SMS=0)."}
           </p>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <button
@@ -803,14 +936,16 @@ export function CollectionCaseDetailPage() {
             >
               <Mail size={14} /> Relancer e-mail
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              disabled={reminderMutation.isPending || c.stage === "CLOSED"}
-              onClick={() => reminderMutation.mutate("SMS")}
-            >
-              <MessageSquare size={14} /> Relancer SMS
-            </button>
+            {smsEnabled && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={reminderMutation.isPending || c.stage === "CLOSED"}
+                onClick={() => reminderMutation.mutate("SMS")}
+              >
+                <MessageSquare size={14} /> Relancer SMS
+              </button>
+            )}
           </div>
         </Card>
         )}
@@ -989,7 +1124,7 @@ export function CollectionCaseDetailPage() {
               </ul>
               <Link
                 className="btn btn-ghost btn-sm"
-                to="/intervenants-juridiques"
+                to="/admin/intervenants-juridiques"
                 style={{ marginTop: 8 }}
               >
                 Intervenants juridiques

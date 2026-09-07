@@ -5,13 +5,13 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api/client";
 import type { CreditApplication, Guarantee } from "@/api/types";
 import { GuaranteeForm } from "@/components/GuaranteeForm";
-import { PageHeader, Spinner } from "@/components/ui";
+import { ErrorState, PageHeader, Spinner } from "@/components/ui";
 
 export function GuaranteeEditPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  const { data: guarantee, isLoading } = useQuery({
+  const { data: guarantee, isLoading, isError, refetch } = useQuery({
     queryKey: ["guarantee", id],
     queryFn: async () =>
       (await api.get<Guarantee>(`/guarantees/${id}/`)).data,
@@ -29,7 +29,14 @@ export function GuaranteeEditPage() {
     enabled: !!guarantee?.application,
   });
 
-  if (isLoading || !guarantee) return <Spinner />;
+  if (isLoading) return <Spinner />;
+  if (isError || !guarantee)
+    return (
+      <ErrorState
+        message="Impossible de charger la garantie."
+        onRetry={() => refetch()}
+      />
+    );
 
   const loanAmount = Number(
     app?.amount_approved || app?.amount_proposed || app?.amount_requested || 0,

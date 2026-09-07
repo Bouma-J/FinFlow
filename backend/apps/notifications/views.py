@@ -66,8 +66,14 @@ class TenantNotificationSettingsViewSet(TenantContextMixin, ReadOnlyModelViewSet
         return bool(
             user.is_superuser
             or getattr(user, "is_group_level", False)
-            or user.is_staff
+            or user.has_perm("notifications.change_tenantnotificationsettings")
             or user.has_perm("tenants.change_tenant")
+        )
+
+    def _can_view(self, user) -> bool:
+        return bool(
+            self._can_manage(user)
+            or user.has_perm("notifications.view_tenantnotificationsettings")
         )
 
     @action(detail=False, methods=["get", "patch"])
@@ -80,6 +86,8 @@ class TenantNotificationSettingsViewSet(TenantContextMixin, ReadOnlyModelViewSet
             )
         prefs = TenantNotificationSettings.for_tenant(tenant)
         if request.method == "GET":
+            if not self._can_view(request.user):
+                return Response({"detail": "Droit insuffisant."}, status=403)
             return Response(self.get_serializer(prefs).data)
 
         if not self._can_manage(request.user):

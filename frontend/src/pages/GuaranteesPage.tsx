@@ -7,17 +7,16 @@ import { api } from "@/api/client";
 import type { Guarantee, Paginated } from "@/api/types";
 import {
   Badge,
-  EmptyState,
   PageHeader,
   PaginationBar,
-  Spinner,
+  QueryStatus,
   formatMoney,
 } from "@/components/ui";
 
 export function GuaranteesPage() {
   const navigate = useNavigate();
   const [page, setPage] = useState(1);
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["guarantees", page],
     queryFn: async () =>
       (await api.get<Paginated<Guarantee>>("/guarantees/", { params: { page } }))
@@ -31,11 +30,13 @@ export function GuaranteesPage() {
         title="Garanties"
         subtitle="Sûretés adossées aux crédits"
       />
-      {isLoading || !data ? (
-        <Spinner />
-      ) : data.results.length === 0 ? (
-        <EmptyState message="Aucune garantie enregistrée." />
-      ) : (
+      <QueryStatus
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={!data?.results.length}
+        emptyMessage="Aucune garantie enregistrée."
+        onRetry={() => refetch()}
+      >
         <>
           <table className="table card">
             <thead>
@@ -47,7 +48,7 @@ export function GuaranteesPage() {
               </tr>
             </thead>
             <tbody>
-              {data.results.map((g) => (
+              {(data?.results ?? []).map((g) => (
                 <tr
                   key={g.id}
                   className="row-clickable"
@@ -63,9 +64,9 @@ export function GuaranteesPage() {
               ))}
             </tbody>
           </table>
-          <PaginationBar page={page} count={data.count} onPageChange={setPage} />
+          <PaginationBar page={page} count={data?.count ?? 0} onPageChange={setPage} />
         </>
-      )}
+      </QueryStatus>
     </div>
   );
 }

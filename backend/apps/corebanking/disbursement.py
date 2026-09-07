@@ -327,48 +327,77 @@ def submit_credit_to_cbs(application, *, connector=None) -> dict:
 
 def apply_cbs_callback(application_id, body: dict, *, secret: str | None = None):
     """Traite un callback Perfect sur une demande de crédit."""
+    from django.db import transaction
+
     from apps.credits.models import CreditApplication, Loan
 
-    app = CreditApplication.all_tenants.filter(pk=application_id).first()
-    if app is None:
-        raise CoreBankingError("Dossier introuvable pour ce callback CBS.")
+    with transaction.atomic():
+        app = (
+            CreditApplication.all_tenants.select_for_update()
+            .filter(pk=application_id)
+            .first()
+        )
+        if app is None:
+            raise CoreBankingError("Dossier introuvable pour ce callback CBS.")
 
-    try:
         connector = resolve_active_connector(app.tenant_id)
         expected = str(
             (_disbursement_rules(connector).get("callback_secret") or "")
         ).strip()
-        if expected and secret != expected:
+        # Secret obligatoire : refuse les callbacks anonymes même hors CBS live.
+        if not expected:
+            raise CoreBankingError(
+                "Callback CBS refusé : configurez callback_secret sur le connecteur."
+            )
+        if not secret or secret != expected:
             raise CoreBankingError("Secret de callback CBS invalide.")
-    except CoreBankingError:
-        if secret:
-            raise
 
-    loan = Loan.all_tenants.filter(application_id=app.pk).first()
-    status = str(
-        body.get("status")
-        or body.get("context")
-        or body.get("responseCode")
-        or "UPDATED"
-    )[:40]
-    updates = {
-        "cbs_disbursement_status": status,
-        "cbs_disbursement_payload": body if isinstance(body, dict) else {},
-    }
-    if body.get("numDemande"):
-        updates["cbs_demande_number"] = str(body["numDemande"])[:100]
-    if body.get("refDemande"):
-        updates["cbs_demande_ref"] = str(body["refDemande"])[:100]
-    if body.get("numContrat"):
-        updates["cbs_contract_number"] = str(body["numContrat"])[:100]
-        updates["core_banking_reference"] = str(body["numContrat"])[:100]
+        # États vraiment terminaux : ignorer les replays. DISBURSED reste
+        # ouvert aux mises à jour CBS (n° contrat, statut déblocage…).
+        hard_terminal = {
+            CreditApplication.Status.CLOSED,
+            CreditApplication.Status.CANCELLED,
+            CreditApplication.Status.REJECTED,
+        }
+        if app.status in hard_terminal:
+            return {
+                "application_id": str(app.pk),
+                "loan_id": None,
+                "ignored": True,
+                "detail": f"Dossier déjà en statut {app.status} — callback ignoré.",
+            }
 
-    if loan is not None:
-        for k, v in updates.items():
-            setattr(loan, k, v)
-        loan.save(update_fields=[*updates.keys(), "updated_at"])
+        loan = (
+            Loan.all_tenants.select_for_update()
+            .filter(application_id=app.pk)
+            .first()
+        )
+        status = str(
+            body.get("status")
+            or body.get("context")
+            or body.get("responseCode")
+            or "UPDATED"
+        )[:40]
+        updates = {
+            "cbs_disbursement_status": status,
+            "cbs_disbursement_payload": body if isinstance(body, dict) else {},
+        }
+        if body.get("numDemande"):
+            updates["cbs_demande_number"] = str(body["numDemande"])[:100]
+        if body.get("refDemande"):
+            updates["cbs_demande_ref"] = str(body["refDemande"])[:100]
+        if body.get("numContrat"):
+            updates["cbs_contract_number"] = str(body["numContrat"])[:100]
+            updates["core_banking_reference"] = str(body["numContrat"])[:100]
 
-    # Journal INBOUND
+        if loan is not None:
+            for k, v in updates.items():
+                setattr(loan, k, v)
+            loan.save(update_fields=[*updates.keys(), "updated_at"])
+
+        loan_id = str(loan.pk) if loan else None
+
+    # Journal INBOUND hors du verrou dossier (échec non bloquant)
     try:
         connector = resolve_active_connector(app.tenant_id)
         IntegrationLog.all_tenants.create(
@@ -387,4 +416,4 @@ def apply_cbs_callback(application_id, body: dict, *, secret: str | None = None)
     except Exception:  # noqa: BLE001
         logger.exception("Échec journalisation callback CBS")
 
-    return {"application_id": str(app.pk), "loan_id": str(loan.pk) if loan else None}
+    return {"application_id": str(app.pk), "loan_id": loan_id}

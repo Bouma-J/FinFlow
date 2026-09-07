@@ -52,6 +52,8 @@ class CreditInstructionPolicySerializer(serializers.ModelSerializer):
             "show_readiness_checklist",
             "enable_cancel_status",
             "allow_collateral_during_approval",
+            "require_surety_signed_contracts",
+            "require_formalization_before_disbursement",
             "created_at",
             "updated_at",
         ]
@@ -339,6 +341,18 @@ class CreditDocumentSerializer(serializers.ModelSerializer):
         model = CreditDocument
         fields = ["id", "application", "file", "label", "created_at"]
         read_only_fields = ["id", "created_at"]
+
+    def validate_file(self, value):
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
+
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=True,
+        )
 
 
 class CreditApplicationFeeSerializer(serializers.ModelSerializer):
@@ -640,6 +654,44 @@ class InstallmentSerializer(serializers.ModelSerializer):
             "balance", "status",
         ]
         read_only_fields = fields
+
+
+class LoanListSerializer(serializers.ModelSerializer):
+    """Liste légère (sans échéancier)."""
+
+    application_reference = serializers.CharField(
+        source="application.reference", read_only=True
+    )
+    currency = serializers.CharField(
+        source="application.currency", read_only=True
+    )
+    client_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Loan
+        fields = [
+            "id",
+            "application",
+            "application_reference",
+            "client_display",
+            "currency",
+            "principal",
+            "interest_rate",
+            "duration_months",
+            "disbursed_at",
+            "first_due_date",
+            "status",
+            "core_banking_reference",
+            "cbs_contract_number",
+            "cbs_disbursement_status",
+        ]
+        read_only_fields = fields
+
+    def get_client_display(self, obj):
+        client = getattr(obj.application, "client", None)
+        if client is None:
+            return ""
+        return getattr(client, "display_name", None) or str(client)
 
 
 class LoanSerializer(serializers.ModelSerializer):

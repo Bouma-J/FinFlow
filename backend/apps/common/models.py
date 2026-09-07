@@ -53,13 +53,57 @@ class AuthoredModel(models.Model):
 
 class SoftDeleteQuerySet(models.QuerySet):
     def delete(self):
-        return super().update(is_deleted=True)
+        from django.utils import timezone
+
+        return super().update(is_deleted=True, deleted_at=timezone.now())
 
     def hard_delete(self):
         return super().delete()
 
     def alive(self):
         return self.filter(is_deleted=False)
+
+    def dead(self):
+        return self.filter(is_deleted=True)
+
+
+class SoftDeleteModel(models.Model):
+    """
+    Suppression logique (rétention). Les managers applicatifs doivent
+    exclure ``is_deleted=True`` ; ``all_tenants`` / admin voient tout.
+    """
+
+    is_deleted = models.BooleanField("supprimé", default=False, db_index=True)
+    deleted_at = models.DateTimeField(
+        "supprimé le", null=True, blank=True, db_index=True
+    )
+
+    class Meta:
+        abstract = True
+
+    def soft_delete(self, *, user=None):
+        from django.utils import timezone
+
+        self.is_deleted = True
+        self.deleted_at = timezone.now()
+        update = ["is_deleted", "deleted_at"]
+        if hasattr(self, "updated_at"):
+            update.append("updated_at")
+        if user is not None and hasattr(self, "updated_by_id"):
+            self.updated_by = user
+            update.append("updated_by")
+        self.save(update_fields=update)
+
+    def restore(self, *, user=None):
+        self.is_deleted = False
+        self.deleted_at = None
+        update = ["is_deleted", "deleted_at"]
+        if hasattr(self, "updated_at"):
+            update.append("updated_at")
+        if user is not None and hasattr(self, "updated_by_id"):
+            self.updated_by = user
+            update.append("updated_by")
+        self.save(update_fields=update)
 
 
 class BaseModel(UUIDModel, TimeStampedModel):

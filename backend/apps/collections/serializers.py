@@ -714,3 +714,15 @@ class LitigationDocumentUploadSerializer(serializers.Serializer):
         max_length=50,
         help_text="Code catégorie GED (ex. LIT_JUDGMENT). Défaut : LIT_OTHER.",
     )
+
+    def validate_file(self, value):
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
+
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=True,
+        )

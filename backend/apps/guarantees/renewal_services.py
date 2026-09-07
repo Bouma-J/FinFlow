@@ -146,14 +146,18 @@ def renewable_guarantees_for_application(application: CreditApplication):
 
 
 def _next_reference(tenant_id) -> str:
+    from apps.tenants.models import Tenant
+
     today = timezone.now().strftime("%Y%m%d")
-    count = (
-        Guarantee.all_tenants.filter(
-            tenant_id=tenant_id, created_at__date=date.today()
-        ).count()
-        + 1
-    )
-    return f"GAR-R-{today}-{count:04d}"
+    with transaction.atomic():
+        Tenant.objects.select_for_update().filter(pk=tenant_id).first()
+        count = (
+            Guarantee.all_tenants.filter(
+                tenant_id=tenant_id, created_at__date=date.today()
+            ).count()
+            + 1
+        )
+        return f"GAR-R-{today}-{count:04d}"
 
 
 @transaction.atomic
@@ -175,6 +179,10 @@ def renew_guarantee(
     if source.client_id != application.client_id:
         raise RenewalError(
             "La garantie n'appartient pas au client de ce dossier."
+        )
+    if str(source.tenant_id) != str(application.tenant_id):
+        raise RenewalError(
+            "La garantie n'appartient pas à la même filiale que le dossier."
         )
     if source.status != Guarantee.Status.ACTIVE:
         raise RenewalError(

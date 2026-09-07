@@ -20,7 +20,7 @@ from .serializers import (
     PublicTenantBrandingSerializer,
     TenantSerializer,
 )
-from .services import bootstrap_tenant
+from .services import bootstrap_tenant, tenant_business_data
 
 
 class TenantViewSet(TenantContextMixin, viewsets.ModelViewSet):
@@ -40,21 +40,47 @@ class TenantViewSet(TenantContextMixin, viewsets.ModelViewSet):
         if self.action in ("retrieve", "current"):
             return [IsAuthenticated()]
         if self.action in ("update", "partial_update"):
-            return [IsAuthenticated()]
+            return [IsAuthenticated(), MustChangePasswordGate()]
         return [IsAuthenticated(), IsGroupLevel()]
 
     def perform_update(self, serializer):
         user = self.request.user
-        if not (getattr(user, "is_group_level", False) or user.is_superuser):
-            if str(serializer.instance.id) != str(user.tenant_id):
-                raise PermissionDenied(
-                    "Vous ne pouvez modifier que votre propre filiale."
-                )
+        if getattr(user, "is_group_level", False) or user.is_superuser:
+            serializer.save()
+            return
+        if str(serializer.instance.id) != str(user.tenant_id):
+            raise PermissionDenied(
+                "Vous ne pouvez modifier que votre propre filiale."
+            )
+        if not user.has_perm("tenants.change_tenant"):
+            raise PermissionDenied(
+                "Droit « tenants.change_tenant » requis pour modifier la filiale."
+            )
         serializer.save()
 
     def perform_create(self, serializer):
         tenant = serializer.save()
         bootstrap_tenant(tenant)
+
+    def perform_destroy(self, instance):
+        """Supprime une filiale, sauf si elle porte déjà des données métier.
+
+        La suppression cascade sur les dossiers de crédit, la GED et la piste
+        d'audit : irréversible et incompatible avec les obligations de
+        conservation. La désactivation (`is_active=False`) coupe l'accès tout
+        en préservant l'historique. Une filiale créée par erreur (vide) reste
+        supprimable.
+        """
+        existing = tenant_business_data(instance)
+        if existing:
+            detail = ", ".join(f"{wording} : {count}" for wording, count in existing)
+            raise ValidationError(
+                f"La filiale « {instance.code} » porte des données métier "
+                f"({detail}) et ne peut pas être supprimée. Désactivez-la pour "
+                "en couper l'accès tout en conservant l'historique et la piste "
+                "d'audit."
+            )
+        instance.delete()
 
     def get_queryset(self):
         user = self.request.user
@@ -155,14 +181,13 @@ class AgencyViewSet(TenantContextMixin, viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = Agency.objects.select_related("tenant").all()
-        if not is_group_context():
-            tenant_id = get_current_tenant_id()
-            qs = qs.filter(tenant_id=tenant_id) if tenant_id else qs.none()
-        else:
-            tenant_id = get_current_tenant_id()
-            if tenant_id:
-                qs = qs.filter(tenant_id=tenant_id)
-        return qs
+        tenant_id = get_current_tenant_id()
+        if tenant_id:
+            return qs.filter(tenant_id=tenant_id)
+        # Filiale sans tenant, ou Groupe sans X-Tenant-Id : aucune fuite.
+        if is_group_context():
+            return qs.none()
+        return qs.none()
 
     def perform_create(self, serializer):
         tenant_id = get_current_tenant_id()

@@ -1,6 +1,7 @@
 from django.urls import path
 
 from .views import (
+    AfterSalesHubView,
     GroupBreakdownView,
     GroupConsolidationView,
     OperationalDashboardView,
@@ -8,6 +9,11 @@ from .views import (
 
 urlpatterns = [
     path("reporting/dashboard/", OperationalDashboardView.as_view(), name="dashboard"),
+    path(
+        "reporting/after-sales-hub/",
+        AfterSalesHubView.as_view(),
+        name="after-sales-hub",
+    ),
     path(
         "reporting/group-consolidation/",
         GroupConsolidationView.as_view(),

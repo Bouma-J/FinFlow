@@ -2,17 +2,41 @@ import django.db.models.deletion
 from django.db import migrations, models
 
 
+ROLE_LABEL_MAX_LENGTH = 150
+
+
 def populate_author_roles(apps, schema_editor):
     """Fige le profil des auteurs pour les analyses/visites existantes."""
     FinancialAnalysis = apps.get_model("credits", "FinancialAnalysis")
     FieldVisit = apps.get_model("credits", "FieldVisit")
 
+    # Les groupes d'une filiale portent un nom technique généré d'environ 55
+    # caractères : on résout le libellé métier via TenantRole et on borne le
+    # résultat, sinon la migration échoue (varchar(150)) sur le premier
+    # utilisateur portant 3 rôles ou plus.
+    try:
+        TenantRole = apps.get_model("accounts", "TenantRole")
+        role_names = dict(TenantRole.objects.values_list("group_id", "name"))
+    except LookupError:
+        role_names = {}
+
     def role_label(user):
         if user is None:
             return ""
-        names = list(user.groups.values_list("name", flat=True))
+        names = sorted(
+            role_names.get(group_id) or group_name
+            for group_id, group_name in user.groups.values_list("id", "name")
+        )
         if names:
-            return ", ".join(names)
+            kept = []
+            for name in names:
+                candidate = kept + [name]
+                if len(", ".join(candidate)) > ROLE_LABEL_MAX_LENGTH:
+                    break
+                kept = candidate
+            if not kept:
+                return names[0][:ROLE_LABEL_MAX_LENGTH]
+            return ", ".join(kept)
         if getattr(user, "is_superuser", False):
             return "Administrateur"
         if getattr(user, "is_group_level", False):

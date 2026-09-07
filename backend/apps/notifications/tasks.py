@@ -6,7 +6,7 @@ from celery import shared_task
 logger = logging.getLogger("finflow")
 
 
-@shared_task(ignore_result=True)
+@shared_task(ignore_result=True, soft_time_limit=120, time_limit=180)
 def send_step_opened_emails(instance_id: str, order: int):
     from apps.workflow.models import ApprovalTask, WorkflowInstance
 
@@ -34,7 +34,7 @@ def send_step_opened_emails(instance_id: str, order: int):
         notify_step_opened(instance, task.step, task=task)
 
 
-@shared_task(ignore_result=True)
+@shared_task(ignore_result=True, soft_time_limit=120, time_limit=180)
 def send_workflow_outcome_email(instance_id: str, outcome: str):
     from apps.workflow.models import WorkflowInstance
 

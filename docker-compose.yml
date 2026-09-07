@@ -12,7 +12,8 @@ name: finflow
 
 x-backend-env: &backend-env
   DJANGO_SETTINGS_MODULE: config.settings.prod
-  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-change-me-in-production}
+  # Démo locale uniquement — surcharger en prod (docker-compose.prod.yml).
+  DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:-finflow-local-compose-demo-key-not-for-production-use-x9K2mP7qR4}
   DJANGO_DEBUG: "False"
   DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,backend
   DJANGO_SECURE_SSL_REDIRECT: "False"
@@ -36,6 +37,8 @@ x-backend-env: &backend-env
   AWS_S3_ADDRESSING_STYLE: path
   AWS_S3_URL_PROTOCOL: "http:"
   AWS_QUERYSTRING_AUTH: "True"
+  # Fernet démo locale (prod : docker-compose.prod.yml exige une clé dédiée)
+  FIELD_ENCRYPTION_KEY: ${FIELD_ENCRYPTION_KEY:-jyYZdpd3kTY2RiW3UUFhbGMQuJCrQIFjO1ed6zowfqk=}
   # E-mail : console par défaut. Pour Gmail, définir ces variables dans
   # un fichier `.env` à la racine (voir backend/.env.example section Gmail).
   EMAIL_BACKEND: ${EMAIL_BACKEND:-django.core.mail.backends.console.EmailBackend}
@@ -69,6 +72,15 @@ services:
 
   redis:
     image: redis:7-alpine
+    # Persistance broker Celery (AOF) — évite la perte de tâches au restart
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "100"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   minio:
@@ -96,20 +108,22 @@ services:
       db:
         condition: service_healthy
       redis:
-        condition: service_started
+        condition: service_healthy
       minio:
         condition: service_started
     restart: unless-stopped
 
   worker:
     build: ./backend
-    command: celery -A config worker -l info
+    command: celery -A config worker -l info --concurrency=2 --prefetch-multiplier=1
     environment:
       <<: *backend-env
       RUN_MIGRATIONS: "0"
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   beat:
@@ -119,8 +133,10 @@ services:
       <<: *backend-env
       RUN_MIGRATIONS: "0"
     depends_on:
-      - backend
-      - redis
+      backend:
+        condition: service_started
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
   frontend:
@@ -135,5 +151,6 @@ services:
 volumes:
   pgdata:
   miniodata:
+  redisdata:
   media:
   staticfiles:

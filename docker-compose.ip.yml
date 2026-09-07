@@ -1,11 +1,12 @@
 # =========================================================================
-# FIN_FLOW — surcharge accès par IP (HTTP, sans domaine / TLS)
+# FIN_FLOW — surcharge accès par IP (sans domaine)
 # Usage :
 #   docker compose -f docker-compose.yml -f docker-compose.prod.yml \
 #                  -f docker-compose.ip.yml up -d --build
 #
-# Expose MinIO sur toutes les interfaces (:9000) pour les URLs présignées
-# du navigateur (AWS_S3_CUSTOM_DOMAIN=<IP>:9000).
+# En HTTP : MinIO est publié sur :9000 (URLs présignées).
+# En HTTPS : ajouter docker-compose.ip-tls.yml (MinIO en 127.0.0.1:19000,
+# Nginx hôte termine le TLS sur :443 et :9000).
 # =========================================================================
 
 services:

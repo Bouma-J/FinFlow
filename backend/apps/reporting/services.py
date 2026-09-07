@@ -10,7 +10,7 @@ Les vues consolidées s'appuient sur le manager `all_tenants` puis
 appliquent des filtres explicites (l'isolation implicite est levée
 uniquement pour les utilisateurs de niveau Groupe habilités).
 """
-from datetime import date
+from datetime import date, timedelta
 
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import (
@@ -22,6 +22,7 @@ from django.db.models import (
     Sum,
 )
 from django.db.models.functions import TruncMonth
+from django.utils import timezone
 from dateutil.relativedelta import relativedelta
 
 from apps.clients.models import Client
@@ -359,7 +360,9 @@ def workflow_kpis(application_qs, user=None):
     )
     my_pending = 0
     if user and user.is_authenticated and not getattr(user, "is_group_level", False):
-        group_ids = list(user.groups.values_list("id", flat=True))
+        from apps.workflow.services import effective_group_ids
+
+        group_ids = list(effective_group_ids(user))
         if group_ids:
             my_pending = pending_tasks.filter(
                 step__required_group_id__in=group_ids
@@ -504,3 +507,172 @@ def build_group_breakdown(params, dimension="tenant"):
         )
         .order_by("-count")
     )
+
+
+_CLOSED_PROCESS = ("COMPLETED", "CANCELLED", "REJECTED")
+
+
+def _after_sales_module_access(*, user) -> dict[str, bool]:
+    """Aligné sur PERM_RELEASES / DATIONS / FORMALIZATIONS / COLLECTIONS du front."""
+    if user is None or getattr(user, "is_superuser", False):
+        return {
+            "main_levee": True,
+            "dation": True,
+            "formalisation": True,
+            "collection": True,
+        }
+
+    def _any(*codes: str) -> bool:
+        return any(user.has_perm(c) for c in codes)
+
+    return {
+        "main_levee": _any(
+            "guarantees.view_guaranteereleaserequest",
+            "guarantees.initiate_guaranteereleaserequest",
+        ),
+        "dation": _any(
+            "guarantees.view_dationrequest",
+            "guarantees.initiate_dationrequest",
+        ),
+        "formalisation": _any(
+            "guarantees.view_guaranteeformalizationrequest",
+            "guarantees.initiate_guaranteeformalizationrequest",
+        ),
+        "collection": _any("collections.view_collectioncase"),
+    }
+
+
+def build_after_sales_hub(*, tenant_id=None, user=None) -> dict:
+    """Synthèse après-vente : ML, dation, formalisation, recouvrement."""
+    from apps.collections.models import PaymentPromise
+    from apps.guarantees.models import (
+        DationRequest,
+        GuaranteeFormalizationRequest,
+        GuaranteeReleaseRequest,
+    )
+
+    today = timezone.localdate()
+    access = _after_sales_module_access(user=user)
+
+    def _scope(qs):
+        if tenant_id:
+            return qs.filter(tenant_id=tenant_id)
+        return qs
+
+    modules: dict = {}
+    recent: list[dict] = []
+
+    def _push(kind, path_prefix, qs):
+        for obj in qs.order_by("-updated_at")[:5]:
+            client = None
+            if kind in ("MAIN_LEVEE", "FORMALISATION"):
+                g = getattr(obj, "guarantee", None)
+                client = getattr(g, "client", None) if g else None
+            elif kind == "DATION":
+                client = getattr(obj, "client", None)
+            elif kind == "COLLECTION":
+                app = getattr(getattr(obj, "loan", None), "application", None)
+                client = getattr(app, "client", None) if app else None
+            recent.append(
+                {
+                    "kind": kind,
+                    "id": str(obj.id),
+                    "reference": getattr(obj, "reference", "") or "",
+                    "status": getattr(obj, "status", None)
+                    or getattr(obj, "stage", ""),
+                    "status_display": (
+                        obj.get_status_display()
+                        if hasattr(obj, "get_status_display")
+                        else (
+                            obj.get_stage_display()
+                            if hasattr(obj, "get_stage_display")
+                            else ""
+                        )
+                    ),
+                    "client_name": client.display_name if client else "—",
+                    "detail_path": f"{path_prefix}/{obj.id}",
+                    "updated_at": (
+                        obj.updated_at.isoformat()
+                        if getattr(obj, "updated_at", None)
+                        else None
+                    ),
+                }
+            )
+
+    if access["main_levee"]:
+        ml = _scope(GuaranteeReleaseRequest.all_tenants.all())
+        ml_open = ml.exclude(status__in=_CLOSED_PROCESS)
+        modules["main_levee"] = {
+            "open": ml_open.count(),
+            "in_approval": ml.filter(
+                status=GuaranteeReleaseRequest.Status.IN_APPROVAL
+            ).count(),
+            "total": ml.count(),
+        }
+        _push(
+            "MAIN_LEVEE",
+            "/mains-levees",
+            ml_open.select_related("guarantee__client"),
+        )
+
+    if access["dation"]:
+        dation = _scope(DationRequest.all_tenants.all())
+        dation_open = dation.exclude(status__in=_CLOSED_PROCESS)
+        modules["dation"] = {
+            "open": dation_open.count(),
+            "in_approval": dation.filter(
+                status=DationRequest.Status.IN_APPROVAL
+            ).count(),
+            "total": dation.count(),
+        }
+        _push("DATION", "/dations", dation_open.select_related("client"))
+
+    if access["formalisation"]:
+        formz = _scope(GuaranteeFormalizationRequest.all_tenants.all())
+        form_open = formz.exclude(status__in=_CLOSED_PROCESS)
+        modules["formalisation"] = {
+            "open": form_open.count(),
+            "in_approval": formz.filter(
+                status=GuaranteeFormalizationRequest.Status.IN_APPROVAL
+            ).count(),
+            "total": formz.count(),
+        }
+        _push(
+            "FORMALISATION",
+            "/formalisations",
+            form_open.select_related("guarantee__client"),
+        )
+
+    if access["collection"]:
+        cases = _scope(CollectionCase.all_tenants.all()).exclude(
+            stage=CollectionCase.Stage.CLOSED
+        )
+        followups = cases.filter(
+            next_action_date__isnull=False,
+            next_action_date__lte=today,
+        ).count()
+        broken = PaymentPromise.all_tenants.filter(
+            case__in=cases,
+            status=PaymentPromise.Status.BROKEN,
+            promised_date__gte=today - timedelta(days=30),
+        ).count()
+        modules["collection"] = {
+            "open": cases.count(),
+            "followups_due": followups,
+            "broken_promises_30d": broken,
+            "unassigned": cases.filter(assigned_to__isnull=True).count(),
+        }
+        _push(
+            "COLLECTION",
+            "/recouvrement",
+            cases.select_related("loan__application__client"),
+        )
+
+    recent.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+    recent = recent[:12]
+
+    return {
+        "modules": modules,
+        "recent": recent,
+        "as_of": today.isoformat(),
+    }

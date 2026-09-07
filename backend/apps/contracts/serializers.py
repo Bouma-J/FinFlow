@@ -50,12 +50,17 @@ class ContractTemplateSerializer(serializers.ModelSerializer):
         return data
 
     def validate_file(self, value):
-        name = (value.name or "").lower()
-        if not (name.endswith(".docx") or name.endswith(".xlsx")):
-            raise serializers.ValidationError(
-                "Formats acceptés : .docx (Word) ou .xlsx (Excel)."
-            )
-        return value
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
+
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=False,
+            allowed_extensions=["docx", "xlsx"],
+        )
 
     def validate(self, attrs):
         # Déduit le moteur à partir de l'extension du fichier importé.
@@ -81,9 +86,9 @@ class GeneratedContractSerializer(serializers.ModelSerializer):
     class Meta:
         model = GeneratedContract
         fields = [
-            "id", "application", "template", "template_name", "category",
-            "file", "status", "status_display", "signed_file", "signed_at",
-            "notes", "extra_values", "created_by_name", "created_at",
+            "id", "application", "surety_engagement", "template", "template_name",
+            "category", "file", "status", "status_display", "signed_file",
+            "signed_at", "notes", "extra_values", "created_by_name", "created_at",
         ]
         read_only_fields = [
             "id", "template_name", "category", "file", "context_snapshot",
@@ -110,8 +115,22 @@ class GenerateContractSerializer(serializers.Serializer):
     application = serializers.UUIDField()
     template = serializers.UUIDField()
     extra_values = serializers.DictField(required=False, default=dict)
+    surety_engagement = serializers.UUIDField(required=False, allow_null=True)
 
 
 class SignedContractUploadSerializer(serializers.Serializer):
     signed_file = serializers.FileField()
     notes = serializers.CharField(required=False, allow_blank=True)
+
+    def validate_signed_file(self, value):
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
+
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=True,
+            allowed_extensions=["pdf", "jpg", "jpeg", "png"],
+        )

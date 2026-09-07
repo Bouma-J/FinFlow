@@ -35,8 +35,10 @@ import {
   Badge,
   Card,
   EmptyState,
+  ErrorState,
   PageHeader,
   PaginationBar,
+  QueryStatus,
   Spinner,
   formatDate,
   formatMoney,
@@ -88,11 +90,13 @@ export function GuaranteeReleasesPage() {
         }
       />
 
-      {list.isLoading || !list.data ? (
-        <Spinner />
-      ) : list.data.results.length === 0 ? (
-        <EmptyState message="Aucune demande de main levée." />
-      ) : (
+      <QueryStatus
+        isLoading={list.isLoading}
+        isError={list.isError}
+        isEmpty={!list.data?.results.length}
+        emptyMessage="Aucune demande de main levée."
+        onRetry={() => list.refetch()}
+      >
         <>
         <table className="table card">
           <thead>
@@ -107,7 +111,7 @@ export function GuaranteeReleasesPage() {
             </tr>
           </thead>
           <tbody>
-            {list.data.results.map((r) => (
+            {(list.data?.results ?? []).map((r) => (
               <tr key={r.id}>
                 <td>
                   <code>{r.reference || "—"}</code>
@@ -133,11 +137,11 @@ export function GuaranteeReleasesPage() {
         </table>
         <PaginationBar
           page={page}
-          count={list.data.count}
+          count={list.data?.count ?? 0}
           onPageChange={setPage}
         />
         </>
-      )}
+      </QueryStatus>
     </div>
   );
 }
@@ -836,7 +840,14 @@ export function GuaranteeReleaseDetailPage() {
     onError: (e) => setActionError(errMsg(e, "Dépôt acte signé impossible.")),
   });
 
-  if (detail.isLoading || !detail.data) return <Spinner />;
+  if (detail.isLoading) return <Spinner />;
+  if (detail.isError || !detail.data)
+    return (
+      <ErrorState
+        message="Impossible de charger la main levée."
+        onRetry={() => detail.refetch()}
+      />
+    );
   const r = detail.data;
   const cur = r.cbs_currency || "XOF";
   const editable = r.status === "DRAFT" || r.status === "RETURNED";
@@ -1057,12 +1068,12 @@ export function GuaranteeReleaseDetailPage() {
               <div>
                 <dt>Frais client</dt>
                 <dd>
-                  {formatMoney(r.fees_client_total ?? r.release_fees, cur)}
+                  {formatMoney(r.fees_client_total ?? r.release_fees ?? null, cur)}
                 </dd>
               </div>
               <div>
                 <dt>Frais institution</dt>
-                <dd>{formatMoney(r.fees_institution_total, cur)}</dd>
+                <dd>{formatMoney(r.fees_institution_total ?? null, cur)}</dd>
               </div>
             </dl>
             {editable && canInitiate && (

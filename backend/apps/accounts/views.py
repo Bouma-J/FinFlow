@@ -18,6 +18,7 @@ from .models import Delegation, TenantRole, User
 from .password_services import issue_temporary_password
 from .serializers import (
     ChangePasswordSerializer,
+    DelegationGiveSerializer,
     DelegationSerializer,
     MeSerializer,
     PermissionSerializer,
@@ -168,15 +169,6 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
         )
         from .serializers import AdminSetPasswordSerializer
 
-        actor = request.user
-        if not (
-            getattr(actor, "is_group_level", False)
-            or actor.is_staff
-            or actor.is_superuser
-        ):
-            raise PermissionDenied(
-                "Seuls les administrateurs peuvent régénérer un mot de passe."
-            )
         user = self.get_object()
         serializer = AdminSetPasswordSerializer(data=request.data or {})
         serializer.is_valid(raise_exception=True)
@@ -284,15 +276,6 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
         )
 
     def perform_create(self, serializer):
-        actor = self.request.user
-        if not (
-            getattr(actor, "is_group_level", False)
-            or actor.is_staff
-            or actor.is_superuser
-        ):
-            raise PermissionDenied(
-                "Seuls les administrateurs peuvent créer des utilisateurs."
-            )
         serializer.save()
 
 
@@ -347,7 +330,16 @@ class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
         "content_type__app_label", "codename"
     )
     serializer_class = PermissionSerializer
-    permission_classes = [IsAuthenticated, MustChangePasswordGate]
+    permission_classes = [
+        IsAuthenticated,
+        MustChangePasswordGate,
+        HasModelPermission,
+    ]
+    # Lecture réservée aux gestionnaires de rôles
+    action_perms = {
+        "list": ["auth.change_group"],
+        "retrieve": ["auth.change_group"],
+    }
     pagination_class = None
     search_fields = ["name", "codename", "content_type__app_label"]
 
@@ -364,13 +356,111 @@ class DelegationViewSet(TenantContextMixin, viewsets.ModelViewSet):
     ]
     enforce_model_permissions = True
     filterset_fields = ["delegator", "delegate", "is_active"]
+    # Self-service : tout utilisateur authentifié peut gérer SES délégations.
+    action_perms = {
+        "mine": [],
+        "give": [],
+        "revoke": [],
+        "colleagues": [],
+    }
 
     def get_queryset(self):
         qs = Delegation.objects.select_related("delegator", "delegate")
-        if not is_group_context():
-            tenant_id = get_current_tenant_id()
-            if tenant_id:
-                qs = qs.filter(delegator__tenant_id=tenant_id)
-            else:
-                qs = qs.none()
-        return qs
+        tenant_id = get_current_tenant_id()
+        if tenant_id:
+            return qs.filter(delegator__tenant_id=tenant_id)
+        # Groupe sans filiale sélectionnée : pas de liste cross-tenant.
+        return qs.none()
+
+    @action(detail=False, methods=["get"])
+    def colleagues(self, request):
+        """Utilisateurs actifs de la filiale (hors soi) pour choisir un délégataire."""
+        tenant_id = get_current_tenant_id() or getattr(
+            request.user, "tenant_id", None
+        )
+        qs = User.objects.filter(is_active=True).exclude(pk=request.user.pk)
+        if tenant_id:
+            qs = qs.filter(tenant_id=tenant_id)
+        rows = [
+            {
+                "id": str(u.id),
+                "username": u.username,
+                "display_name": u.get_full_name() or u.username,
+            }
+            for u in qs.order_by("last_name", "first_name", "username")[:300]
+        ]
+        return Response(rows)
+    @action(detail=False, methods=["get"])
+    def mine(self, request):
+        """Délégations données ou reçues par l'utilisateur connecté."""
+        from django.db.models import Q
+
+        qs = (
+            Delegation.objects.select_related("delegator", "delegate")
+            .filter(Q(delegator=request.user) | Q(delegate=request.user))
+            .order_by("-start_date")
+        )
+        return Response(
+            DelegationSerializer(qs, many=True, context={"request": request}).data
+        )
+
+    @action(detail=False, methods=["post"])
+    def give(self, request):
+        """Crée une délégation où le délégant = utilisateur connecté."""
+        payload = DelegationGiveSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        data = payload.validated_data
+        try:
+            delegate = User.objects.get(pk=data["delegate"], is_active=True)
+        except User.DoesNotExist as exc:
+            raise ValidationError({"delegate": "Utilisateur introuvable."}) from exc
+        if delegate.pk == request.user.pk:
+            raise ValidationError(
+                {"delegate": "Le délégataire doit être distinct du délégant."}
+            )
+        # Même filiale (sauf Groupe / superuser)
+        if (
+            not request.user.is_superuser
+            and not getattr(request.user, "is_group_level", False)
+            and request.user.tenant_id
+            and delegate.tenant_id
+            and delegate.tenant_id != request.user.tenant_id
+        ):
+            raise ValidationError(
+                {"delegate": "Le délégataire doit appartenir à votre filiale."}
+            )
+        delegation = Delegation.objects.create(
+            delegator=request.user,
+            delegate=delegate,
+            reason=data.get("reason") or "",
+            start_date=data["start_date"],
+            end_date=data["end_date"],
+            is_active=True,
+        )
+        return Response(
+            DelegationSerializer(delegation, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+    @action(detail=True, methods=["post"])
+    def revoke(self, request, pk=None):
+        """Désactive une délégation (délégant ou admin)."""
+        # get_object() respecte get_queryset() (filtre tenant) — anti-IDOR.
+        delegation = self.get_object()
+
+        is_owner = delegation.delegator_id == request.user.id
+        can_admin = (
+            request.user.is_superuser
+            or getattr(request.user, "is_group_level", False)
+            or request.user.has_perm("accounts.change_delegation")
+        )
+        if not is_owner and not can_admin:
+            raise PermissionDenied(
+                "Seul le délégant peut révoquer cette délégation."
+            )
+
+        delegation.is_active = False
+        delegation.save(update_fields=["is_active"])
+        return Response(
+            DelegationSerializer(delegation, context={"request": request}).data
+        )

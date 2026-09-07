@@ -7,9 +7,8 @@ import type { Agency, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
   Card,
-  EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   TenantScopeNotice,
 } from "@/components/ui";
 
@@ -325,11 +324,13 @@ export function AdminAgenciesPage() {
         </Card>
       )}
 
-      {agencies.isLoading || !agencies.data ? (
-        <Spinner />
-      ) : agencies.data.results.length === 0 ? (
-        <EmptyState message="Aucune agence pour cette filiale." />
-      ) : (
+      <QueryStatus
+        isLoading={agencies.isLoading}
+        isError={agencies.isError}
+        isEmpty={!agencies.data?.results.length}
+        emptyMessage="Aucune agence pour cette filiale."
+        onRetry={() => agencies.refetch()}
+      >
         <table className="table card">
           <thead>
             <tr>
@@ -342,7 +343,7 @@ export function AdminAgenciesPage() {
             </tr>
           </thead>
           <tbody>
-            {agencies.data.results.map((a) => (
+            {(agencies.data?.results ?? []).map((a) => (
               <tr key={a.id}>
                 <td>{a.code}</td>
                 <td>{a.name}</td>
@@ -372,7 +373,7 @@ export function AdminAgenciesPage() {
             ))}
           </tbody>
         </table>
-      )}
+      </QueryStatus>
     </div>
   );
 }

@@ -9,7 +9,7 @@ from apps.common.tenancy import tenant_context
 logger = logging.getLogger("finflow")
 
 
-@shared_task(bind=True, ignore_result=False)
+@shared_task(bind=True, ignore_result=False, soft_time_limit=240, time_limit=300)
 def generate_contract_task(
     self,
     application_id: str,
@@ -17,6 +17,7 @@ def generate_contract_task(
     user_id: str,
     extra_values: dict | None = None,
     tenant_id: str | None = None,
+    surety_engagement_id: str | None = None,
 ):
     """Génère un contrat hors requête HTTP."""
     from apps.accounts.models import User
@@ -36,7 +37,26 @@ def generate_contract_task(
             logger.exception("generate_contract_task : entité introuvable")
             raise
 
-        context = build_context(application, extra_values)
+        primary_engagement = None
+        if surety_engagement_id:
+            from apps.sureties.models import SuretyEngagement
+
+            try:
+                primary_engagement = SuretyEngagement.all_tenants.select_related(
+                    "surety"
+                ).get(pk=surety_engagement_id, application_id=application_id)
+            except SuretyEngagement.DoesNotExist:
+                logger.exception(
+                    "generate_contract_task : engagement %s introuvable",
+                    surety_engagement_id,
+                )
+                raise
+
+        context = build_context(
+            application,
+            extra_values,
+            primary_engagement=primary_engagement,
+        )
         try:
             rendered = render_template(template, context)
         except ContractRenderError:
@@ -44,14 +64,20 @@ def generate_contract_task(
             raise
 
         with transaction.atomic():
-            application.generated_contracts.filter(template=template).exclude(
-                status=GeneratedContract.Status.CANCELLED
-            ).update(status=GeneratedContract.Status.CANCELLED)
+            cancel_qs = application.generated_contracts.filter(
+                template=template
+            ).exclude(status=GeneratedContract.Status.CANCELLED)
+            if primary_engagement is not None:
+                cancel_qs = cancel_qs.filter(
+                    surety_engagement=primary_engagement
+                )
+            cancel_qs.update(status=GeneratedContract.Status.CANCELLED)
             gc = GeneratedContract(
                 application=application,
                 template=template,
                 template_name=template.name,
                 category=template.category,
+                surety_engagement=primary_engagement,
                 context_snapshot=context,
                 extra_values=extra_values,
                 created_by=user,

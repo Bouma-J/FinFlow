@@ -5,19 +5,26 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api/client";
 import type { Client } from "@/api/types";
 import { ClientForm } from "@/components/ClientForm";
-import { PageHeader, Spinner } from "@/components/ui";
+import { ErrorState, PageHeader, Spinner } from "@/components/ui";
 
 export function ClientEditPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  const { data: client, isLoading } = useQuery({
+  const { data: client, isLoading, isError, refetch } = useQuery({
     queryKey: ["client", id],
     queryFn: async () => (await api.get<Client>(`/clients/${id}/`)).data,
     enabled: !!id,
   });
 
-  if (isLoading || !client) return <Spinner />;
+  if (isLoading) return <Spinner />;
+  if (isError || !client)
+    return (
+      <ErrorState
+        message="Impossible de charger le client."
+        onRetry={() => refetch()}
+      />
+    );
 
   return (
     <div className="page-shell">

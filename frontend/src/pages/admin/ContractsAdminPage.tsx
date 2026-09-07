@@ -21,9 +21,8 @@ import { useAuth } from "@/auth/AuthContext";
 import {
   Badge,
   Card,
-  EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   TenantScopeNotice,
 } from "@/components/ui";
 
@@ -381,11 +380,13 @@ export function AdminContractsPage() {
         </Card>
       </div>
 
-      {templates.isLoading || !templates.data ? (
-        <Spinner />
-      ) : templates.data.results.length === 0 ? (
-        <EmptyState message="Aucun modèle de contrat. Ajoutez-en un ci-dessus." />
-      ) : (
+      <QueryStatus
+        isLoading={templates.isLoading}
+        isError={templates.isError}
+        isEmpty={!templates.data?.results.length}
+        emptyMessage="Aucun modèle de contrat. Ajoutez-en un ci-dessus."
+        onRetry={() => templates.refetch()}
+      >
         <table className="table card" style={{ marginTop: 20 }}>
           <thead>
             <tr>
@@ -398,7 +399,7 @@ export function AdminContractsPage() {
             </tr>
           </thead>
           <tbody>
-            {templates.data.results.map((t) => (
+            {(templates.data?.results ?? []).map((t) => (
               <tr key={t.id}>
                 <td>{t.name}</td>
                 <td>{t.category_display}</td>
@@ -454,7 +455,7 @@ export function AdminContractsPage() {
             ))}
           </tbody>
         </table>
-      )}
+      </QueryStatus>
     </div>
   );
 }

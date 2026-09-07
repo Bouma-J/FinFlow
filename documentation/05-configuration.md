@@ -14,6 +14,9 @@ En Compose, beaucoup sont injectées dans `docker-compose.yml` (`x-backend-env`)
 | `DJANGO_ALLOWED_HOSTS` | Liste séparée par virgules |
 | `DJANGO_CORS_ALLOWED_ORIGINS` | Origines frontend |
 | `DJANGO_SECURE_SSL_REDIRECT` | `True` en prod TLS |
+| `DJANGO_SECURE_HSTS_SECONDS` | Domaine : `31536000`. IP Let’s Encrypt : `604800`. IP auto-signé / HTTP : `0` |
+| `DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS` | `True` sur un nom de domaine uniquement |
+| `DJANGO_SECURE_HSTS_PRELOAD` | `True` sur un nom de domaine uniquement — **jamais** sur une IP |
 
 ## 2. Base de données
 

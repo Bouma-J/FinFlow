@@ -115,6 +115,9 @@ class ClientSerializer(serializers.ModelSerializer):
         return data
 
     def validate(self, attrs):
+        from apps.common.upload_validation import validate_attrs_uploads
+
+        attrs = validate_attrs_uploads(attrs, self.context, check_quota=True)
         client_type = attrs.get("client_type") or getattr(
             self.instance, "client_type", None
         )

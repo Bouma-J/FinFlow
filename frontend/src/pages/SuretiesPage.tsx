@@ -10,10 +10,9 @@ import { hasPerm } from "@/auth/permissions";
 import { SuretyForm } from "@/components/SuretyForm";
 import {
   Badge,
-  EmptyState,
   PageHeader,
   PaginationBar,
-  Spinner,
+  QueryStatus,
 } from "@/components/ui";
 
 export function SuretiesPage() {
@@ -23,7 +22,7 @@ export function SuretiesPage() {
   const [showForm, setShowForm] = useState(false);
   const [page, setPage] = useState(1);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["sureties", page],
     queryFn: async () =>
       (await api.get<Paginated<Surety>>("/sureties/", { params: { page } })).data,
@@ -63,46 +62,50 @@ export function SuretiesPage() {
           onSuccess={() => setShowForm(false)}
           onCancel={() => setShowForm(false)}
         />
-      ) : isLoading || !data ? (
-        <Spinner />
-      ) : data.results.length === 0 ? (
-        <EmptyState message="Aucune caution enregistrée." />
       ) : (
-        <>
-          <table className="table card">
-            <thead>
-              <tr>
-                <th>Nom & prénom</th>
-                <th>Activité</th>
-                <th>Téléphone</th>
-                <th>Statut</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.results.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.display_name}</td>
-                  <td>{s.activity || "—"}</td>
-                  <td>{s.phone || "—"}</td>
-                  <td>
-                    <Badge
-                      value={s.is_active ? "ACTIVE" : "DRAFT"}
-                      label={s.is_active ? "Active" : "Inactive"}
-                    />
-                  </td>
-                  <td>
-                    <Link className="btn btn-ghost btn-sm" to={`/cautions/${s.id}`}>
-                      Ouvrir
-                      <ArrowRight />
-                    </Link>
-                  </td>
+        <QueryStatus
+          isLoading={isLoading}
+          isError={isError}
+          isEmpty={!data?.results.length}
+          emptyMessage="Aucune caution enregistrée."
+          onRetry={() => refetch()}
+        >
+          <>
+            <table className="table card">
+              <thead>
+                <tr>
+                  <th>Nom & prénom</th>
+                  <th>Activité</th>
+                  <th>Téléphone</th>
+                  <th>Statut</th>
+                  <th></th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-          <PaginationBar page={page} count={data.count} onPageChange={setPage} />
-        </>
+              </thead>
+              <tbody>
+                {(data?.results ?? []).map((s) => (
+                  <tr key={s.id}>
+                    <td>{s.display_name}</td>
+                    <td>{s.activity || "—"}</td>
+                    <td>{s.phone || "—"}</td>
+                    <td>
+                      <Badge
+                        value={s.is_active ? "ACTIVE" : "DRAFT"}
+                        label={s.is_active ? "Active" : "Inactive"}
+                      />
+                    </td>
+                    <td>
+                      <Link className="btn btn-ghost btn-sm" to={`/cautions/${s.id}`}>
+                        Ouvrir
+                        <ArrowRight />
+                      </Link>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <PaginationBar page={page} count={data?.count ?? 0} onPageChange={setPage} />
+          </>
+        </QueryStatus>
       )}
     </div>
   );

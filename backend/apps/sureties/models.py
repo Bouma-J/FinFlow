@@ -183,8 +183,12 @@ class Surety(TenantScopedModel, AuthoredModel):
 
     @property
     def total_committed(self):
+        # ACTIVE + CALLED : l'appel en garantie garde l'exposition jusqu'à libération.
         agg = self.engagements.filter(
-            status=SuretyEngagement.Status.ACTIVE
+            status__in=[
+                SuretyEngagement.Status.ACTIVE,
+                SuretyEngagement.Status.CALLED,
+            ]
         ).aggregate(models.Sum("amount"))
         return agg["amount__sum"] or 0
 
@@ -226,6 +230,10 @@ class SuretyEngagement(TenantScopedModel):
         RELEASED = "RELEASED", "Libéré"
         CALLED = "CALLED", "Appelé"
 
+    class EngagementType(models.TextChoices):
+        SIMPLE = "SIMPLE", "Caution simple"
+        SOLIDAIRE = "SOLIDAIRE", "Caution solidaire"
+
     surety = models.ForeignKey(
         Surety,
         on_delete=models.CASCADE,
@@ -239,10 +247,20 @@ class SuretyEngagement(TenantScopedModel):
         verbose_name="dossier",
     )
     amount = models.DecimalField("montant engagé", max_digits=18, decimal_places=2)
+    engagement_type = models.CharField(
+        "type d'engagement",
+        max_length=20,
+        choices=EngagementType.choices,
+        default=EngagementType.SOLIDAIRE,
+        db_index=True,
+    )
     signed_date = models.DateField("date de signature", null=True, blank=True)
     status = models.CharField(
         max_length=20, choices=Status.choices, default=Status.ACTIVE
     )
+    notes = models.TextField("observations", blank=True)
+    released_at = models.DateTimeField("libéré le", null=True, blank=True)
+    called_at = models.DateTimeField("appelé le", null=True, blank=True)
 
     class Meta:
         verbose_name = "engagement de caution"
@@ -251,6 +269,19 @@ class SuretyEngagement(TenantScopedModel):
 
     def __str__(self):
         return f"{self.surety} — {self.amount}"
+
+    @property
+    def active_contract(self):
+        """Dernier contrat de cautionnement non annulé lié à cet engagement."""
+        from apps.contracts.models import GeneratedContract
+
+        return (
+            self.generated_contracts.exclude(
+                status=GeneratedContract.Status.CANCELLED
+            )
+            .order_by("-created_at")
+            .first()
+        )
 
 
 class SuretyPhone(TenantScopedModel):

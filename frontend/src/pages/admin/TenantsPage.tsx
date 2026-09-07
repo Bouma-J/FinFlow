@@ -23,8 +23,8 @@ import { useAuth } from "@/auth/AuthContext";
 import {
   Badge,
   Card,
-  EmptyState,
   PageHeader,
+  QueryStatus,
   Spinner,
 } from "@/components/ui";
 
@@ -334,11 +334,13 @@ export function AdminTenantsPage() {
 
       <div className="tenants-admin-layout">
         <Card title="Filiales">
-          {tenants.isLoading || !tenants.data ? (
-            <Spinner />
-          ) : tenants.data.results.length === 0 ? (
-            <EmptyState message="Aucune filiale." />
-          ) : (
+          <QueryStatus
+            isLoading={tenants.isLoading}
+            isError={tenants.isError}
+            isEmpty={!tenants.data?.results.length}
+            emptyMessage="Aucune filiale."
+            onRetry={() => tenants.refetch()}
+          >
             <div className="table-scroll">
               <table className="table">
                 <thead>
@@ -352,7 +354,7 @@ export function AdminTenantsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {tenants.data.results.map((t) => (
+                  {(tenants.data?.results ?? []).map((t) => (
                     <tr
                       key={t.id}
                       className={selectedId === t.id ? "is-selected" : undefined}
@@ -383,7 +385,7 @@ export function AdminTenantsPage() {
                 </tbody>
               </table>
             </div>
-          )}
+          </QueryStatus>
         </Card>
 
         <Card

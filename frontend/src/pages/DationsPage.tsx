@@ -35,8 +35,10 @@ import {
   Badge,
   Card,
   EmptyState,
+  ErrorState,
   PageHeader,
   PaginationBar,
+  QueryStatus,
   Spinner,
   formatDate,
   formatMoney,
@@ -122,11 +124,13 @@ export function DationsPage() {
         }
       />
 
-      {list.isLoading || !list.data ? (
-        <Spinner />
-      ) : list.data.results.length === 0 ? (
-        <EmptyState message="Aucune demande de dation en paiement." />
-      ) : (
+      <QueryStatus
+        isLoading={list.isLoading}
+        isError={list.isError}
+        isEmpty={!list.data?.results.length}
+        emptyMessage="Aucune demande de dation en paiement."
+        onRetry={() => list.refetch()}
+      >
         <>
         <table className="table card">
           <thead>
@@ -141,7 +145,7 @@ export function DationsPage() {
             </tr>
           </thead>
           <tbody>
-            {list.data.results.map((r) => (
+            {(list.data?.results ?? []).map((r) => (
               <tr key={r.id}>
                 <td>
                   <code>{r.reference || "—"}</code>
@@ -179,11 +183,11 @@ export function DationsPage() {
         </table>
         <PaginationBar
           page={page}
-          count={list.data.count}
+          count={list.data?.count ?? 0}
           onPageChange={setPage}
         />
         </>
-      )}
+      </QueryStatus>
     </div>
   );
 }
@@ -1074,7 +1078,14 @@ export function DationDetailPage() {
     onError: (e) => setActionError(errMsg(e, "Upload impossible.")),
   });
 
-  if (detail.isLoading || !detail.data) return <Spinner />;
+  if (detail.isLoading) return <Spinner />;
+  if (detail.isError || !detail.data)
+    return (
+      <ErrorState
+        message="Impossible de charger la dation en paiement."
+        onRetry={() => detail.refetch()}
+      />
+    );
   const r = detail.data;
   const cur = r.cbs_currency || "XOF";
   const editable = r.status === "DRAFT" || r.status === "RETURNED";

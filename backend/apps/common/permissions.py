@@ -50,6 +50,20 @@ class MustChangePasswordGate(BasePermission):
         return False
 
 
+class HasDashboardPermission(BasePermission):
+    """Consulter le tableau de bord opérationnel (reporting.view_dashboard)."""
+
+    message = "Droit insuffisant pour consulter le tableau de bord."
+
+    def has_permission(self, request, view):
+        user = request.user
+        if not (user and user.is_authenticated):
+            return False
+        if user.is_superuser:
+            return True
+        return user.has_perm("reporting.view_dashboard")
+
+
 class HasModelPermission(BasePermission):
     """
     Contrôle d'accès basé sur les permissions Django (RBAC).

@@ -12,13 +12,12 @@ import {
 import { useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
-import type { CbsConnector, Paginated } from "@/api/types";
+import type { CbsConnector, IntegrationLog, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
   Badge,
-  EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   TenantScopeNotice,
 } from "@/components/ui";
 
@@ -268,8 +267,40 @@ export function AdminConnectorsPage() {
     enabled: !needsTenant,
   });
 
-  const invalidate = () =>
+  const logs = useQuery({
+    queryKey: ["integration-logs", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<IntegrationLog>>("/integration-logs/", {
+          params: { page_size: 30, ordering: "-created_at" },
+        })
+      ).data,
+    enabled: !needsTenant,
+  });
+
+  const opsMetrics = useQuery({
+    queryKey: ["ops-status", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<{
+          documents_soft_deleted?: number;
+          celery?: {
+            ok?: boolean;
+            workers?: string[];
+            queues?: Record<string, number>;
+            broker_ping?: boolean;
+            error?: string;
+          };
+        }>("/ops/status/")
+      ).data,
+    enabled: Boolean(user?.is_group_level || user?.is_staff),
+    refetchInterval: 60_000,
+  });
+
+  const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["cbs-connectors"] });
+    qc.invalidateQueries({ queryKey: ["integration-logs"] });
+  };
 
   const create = useMutation({
     mutationFn: async () =>
@@ -388,6 +419,21 @@ export function AdminConnectorsPage() {
           subtitle="Par filiale"
         />
         <TenantScopeNotice />
+        {opsMetrics.data?.celery && (
+          <div className="card" style={{ marginTop: 16, padding: 16 }}>
+            <h3 style={{ marginTop: 0 }}>Celery / files</h3>
+            <p className="muted small">
+              Workers :{" "}
+              {opsMetrics.data.celery.ok
+                ? (opsMetrics.data.celery.workers ?? []).join(", ") || "ok"
+                : opsMetrics.data.celery.error || "indisponible"}
+              {" · "}
+              File celery : {opsMetrics.data.celery.queues?.celery ?? "—"}
+              {" · "}
+              GED soft-delete : {opsMetrics.data.documents_soft_deleted ?? 0}
+            </p>
+          </div>
+        )}
       </div>
     );
   }
@@ -527,11 +573,19 @@ export function AdminConnectorsPage() {
                   })
                 }
               >
-                <option value="LOCAL">LOCAL — simulation (démo)</option>
+                <option value="LOCAL">LOCAL — démo / hors CBS</option>
                 <option value="CBS">CBS — POST Perfect crd/simple</option>
               </select>
             </label>
           </div>
+
+          {form.disburse_mode === "LOCAL" && (
+            <div className="form-error" style={{ marginTop: 10 }}>
+              Mode LOCAL : aucun appel CBS. Décaissements et contrôles
+              (soldes, situation) restent simulés — réservé à la démo / UAT
+              tant que le CBS n’est pas disponible.
+            </div>
+          )}
 
           <div className="form-section-head" style={{ marginTop: 12 }}>
             <div className="form-section-icon">
@@ -744,11 +798,20 @@ export function AdminConnectorsPage() {
         </form>
       )}
 
-      {connectors.isLoading || !connectors.data ? (
-        <Spinner />
-      ) : connectors.data.results.length === 0 ? (
-        <EmptyState message="Aucun connecteur. Créez un connecteur Perfect pour la filiale." />
-      ) : (
+      <QueryStatus
+        isLoading={connectors.isLoading}
+        isError={connectors.isError}
+        isEmpty={!connectors.data?.results.length}
+        emptyMessage="Aucun connecteur. Créez un connecteur Perfect pour la filiale."
+        onRetry={() => connectors.refetch()}
+      >
+        <>
+          {(connectors.data?.results ?? []).some((c) => connectorMode(c) === "LOCAL") && (
+            <div className="form-error" style={{ marginBottom: 12 }}>
+              Au moins un connecteur est en mode LOCAL (démo / hors CBS) :
+              les décaissements ne partent pas vers le core banking.
+            </div>
+          )}
         <table className="table card">
           <thead>
             <tr>
@@ -762,7 +825,7 @@ export function AdminConnectorsPage() {
             </tr>
           </thead>
           <tbody>
-            {connectors.data.results.map((c) => {
+            {(connectors.data?.results ?? []).map((c) => {
               const endpoints = asRecord(asRecord(c.mapping_rules).endpoints);
               const authPath = str(endpoints.authentification, "—");
               const crdPath = str(endpoints.crd_simple, "—");
@@ -784,7 +847,7 @@ export function AdminConnectorsPage() {
                   <td>
                     <Badge
                       value={mode === "CBS" ? "ACTIVE" : "PENDING"}
-                      label={mode}
+                      label={mode === "LOCAL" ? "LOCAL (démo)" : mode}
                     />
                   </td>
                   <td className="muted small" style={{ maxWidth: 220 }}>
@@ -837,7 +900,76 @@ export function AdminConnectorsPage() {
             })}
           </tbody>
         </table>
+        </>
+      </QueryStatus>
+
+      <h3 style={{ marginTop: 28, marginBottom: 8 }}>Journaux d&apos;intégration</h3>
+      <p className="muted small" style={{ marginBottom: 12 }}>
+        Derniers échanges CBS (décaissements, callbacks, PING…).
+      </p>
+      {opsMetrics.data?.celery && (
+        <div className="card" style={{ marginBottom: 16, padding: 12 }}>
+          <strong>Ops Celery</strong>
+          <span className="muted small" style={{ marginLeft: 8 }}>
+            {opsMetrics.data.celery.ok ? "workers OK" : "workers KO"}
+            {" · file="}
+            {opsMetrics.data.celery.queues?.celery ?? "—"}
+            {" · soft-delete GED="}
+            {opsMetrics.data.documents_soft_deleted ?? 0}
+          </span>
+        </div>
       )}
+      <QueryStatus
+        isLoading={logs.isLoading}
+        isError={logs.isError}
+        isEmpty={!logs.data?.results.length}
+        emptyMessage="Aucun journal pour cette filiale."
+        onRetry={() => logs.refetch()}
+      >
+        <table className="table card">
+          <thead>
+            <tr>
+              <th>Date</th>
+              <th>Opération</th>
+              <th>Sens</th>
+              <th>Statut</th>
+              <th>Réf. externe</th>
+              <th>Erreur</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(logs.data?.results ?? []).map((log) => (
+              <tr key={log.id}>
+                <td className="muted small">
+                  {new Date(log.created_at).toLocaleString("fr-FR")}
+                </td>
+                <td>
+                  <code>{log.operation}</code>
+                </td>
+                <td>{log.direction}</td>
+                <td>
+                  <Badge
+                    value={
+                      log.status === "SUCCESS"
+                        ? "ACTIVE"
+                        : log.status === "FAILED"
+                          ? "REJECTED"
+                          : "PENDING"
+                    }
+                    label={log.status}
+                  />
+                </td>
+                <td className="muted small">
+                  {log.external_reference || "—"}
+                </td>
+                <td className="muted small" style={{ maxWidth: 240 }}>
+                  {log.error_message || "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </QueryStatus>
     </div>
   );
 }

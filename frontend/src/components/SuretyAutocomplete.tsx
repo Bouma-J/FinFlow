@@ -11,7 +11,7 @@ export function SuretyAutocomplete({
   initialLabel = "",
 }: {
   value: string;
-  onChange: (id: string, label: string) => void;
+  onChange: (id: string, label: string, surety?: Surety) => void;
   /** Libellé affiché si une caution est déjà sélectionnée (édition). */
   initialLabel?: string;
 }) {
@@ -57,7 +57,7 @@ export function SuretyAutocomplete({
     setQuery(s.display_name);
     setSelected(true);
     setOpen(false);
-    onChange(s.id, s.display_name);
+    onChange(s.id, s.display_name, s);
   }
 
   function clear() {

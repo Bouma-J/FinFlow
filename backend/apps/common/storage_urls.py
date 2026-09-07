@@ -4,10 +4,37 @@ from __future__ import annotations
 from urllib.parse import urlparse, urlunparse
 
 from django.conf import settings
+from django.core.signing import BadSignature, SignatureExpired, TimestampSigner
+
+CLIENT_FILE_TOKEN_SALT = "finflow.client-file"
+CLIENT_FILE_TOKEN_MAX_AGE = 3600  # 1 h — aligné Cache-Control historique
 
 
 def is_s3_storage() -> bool:
     return getattr(settings, "STORAGE_BACKEND", "local") == "s3"
+
+
+def sign_client_file_token(client_id, field: str) -> str:
+    """Jeton court pour <img>/<a> sans JWT (stockage local / proxy API)."""
+    signer = TimestampSigner(salt=CLIENT_FILE_TOKEN_SALT)
+    return signer.sign(f"{client_id}:{field}")
+
+
+def verify_client_file_token(
+    token: str | None,
+    client_id,
+    field: str,
+    *,
+    max_age: int = CLIENT_FILE_TOKEN_MAX_AGE,
+) -> bool:
+    if not token:
+        return False
+    signer = TimestampSigner(salt=CLIENT_FILE_TOKEN_SALT)
+    try:
+        value = signer.unsign(token, max_age=max_age)
+    except (BadSignature, SignatureExpired):
+        return False
+    return value == f"{client_id}:{field}"
 
 
 def _public_s3_endpoint() -> str | None:
@@ -156,8 +183,9 @@ def client_file_url(client, field: str, request=None) -> str | None:
         if url:
             return url
 
-    # Repli local / échec présigné : proxy API
-    path = f"/api/v1/clients/{client.pk}/files/{field}/"
+    # Repli local / échec présigné : proxy API avec jeton signé (pas d'AllowAny nu)
+    token = sign_client_file_token(client.pk, field)
+    path = f"/api/v1/clients/{client.pk}/files/{field}/?token={token}"
     if request is not None:
         return request.build_absolute_uri(path)
     return path
@@ -182,8 +210,7 @@ def image_content_type(filename: str) -> str:
         return "image/webp"
     if name.endswith(".gif"):
         return "image/gif"
-    if name.endswith(".svg"):
-        return "image/svg+xml"
+    # SVG volontairement exclu (XSS stocké)
     return "application/octet-stream"
 
 

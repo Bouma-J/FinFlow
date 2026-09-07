@@ -27,7 +27,9 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import { CLIENT_LABELS, type AuditLog, type Client, type Paginated } from "@/api/types";
-import { Badge, Card, Spinner, formatDate } from "@/components/ui";
+import { useAuth } from "@/auth/AuthContext";
+import { hasPerm } from "@/auth/permissions";
+import { Badge, Card, ErrorState, Spinner, formatDate } from "@/components/ui";
 
 function label(map: Record<string, string>, key: string) {
   return map[key] || key || "—";
@@ -153,9 +155,12 @@ export function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const { user } = useAuth();
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const canChange = hasPerm(user, "clients.change_client");
+  const canDelete = hasPerm(user, "clients.delete_client");
 
-  const { data: c, isLoading } = useQuery({
+  const { data: c, isLoading, isError, refetch } = useQuery({
     queryKey: ["client", id],
     queryFn: async () => (await api.get<Client>(`/clients/${id}/`)).data,
     enabled: !!id,
@@ -169,7 +174,15 @@ export function ClientDetailPage() {
     },
   });
 
-  if (isLoading || !c) return <Spinner />;
+  if (isLoading) return <Spinner />;
+  if (isError || !c) {
+    return (
+      <ErrorState
+        message="Impossible de charger le client."
+        onRetry={() => refetch()}
+      />
+    );
+  }
 
   const isCorporate = c.client_type === "CORPORATE";
   const fullName = `${c.first_name} ${c.last_name}`.trim();
@@ -245,17 +258,21 @@ export function ClientDetailPage() {
               <ArrowLeft size={15} />
               Retour
             </Link>
-            <Link className="btn btn-banner" to={`/clients/${c.id}/modifier`}>
-              <Pencil size={15} />
-              Modifier
-            </Link>
-            <button
-              className="btn btn-banner btn-banner-danger"
-              onClick={() => setConfirmDelete(true)}
-            >
-              <Trash2 size={15} />
-              Supprimer
-            </button>
+            {canChange && (
+              <Link className="btn btn-banner" to={`/clients/${c.id}/modifier`}>
+                <Pencil size={15} />
+                Modifier
+              </Link>
+            )}
+            {canDelete && (
+              <button
+                className="btn btn-banner btn-banner-danger"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 size={15} />
+                Supprimer
+              </button>
+            )}
           </div>
         </div>
 

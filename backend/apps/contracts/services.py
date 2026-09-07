@@ -28,6 +28,37 @@ def missing_required_contracts(application) -> list[str]:
     ]
 
 
+def missing_surety_signed_contracts(application) -> list[str]:
+    """
+    Engagements de caution actifs sans contrat de cautionnement signé.
+
+    Un contrat lié à l'engagement (``surety_engagement``) en statut SIGNED
+    est exigé. Les contrats SURETY « dossier » non liés à l'engagement ne
+    suffisent pas (une caution = un acte).
+    """
+    from apps.sureties.models import SuretyEngagement
+
+    from .models import GeneratedContract
+
+    missing: list[str] = []
+    engagements = (
+        SuretyEngagement.objects.filter(
+            application=application,
+            status=SuretyEngagement.Status.ACTIVE,
+        )
+        .select_related("surety")
+        .prefetch_related("generated_contracts")
+    )
+    for eng in engagements:
+        gc = eng.active_contract
+        label = eng.surety.display_name if eng.surety_id else str(eng.pk)
+        if gc is None:
+            missing.append(f"Cautionnement — {label} (non généré)")
+        elif gc.status != GeneratedContract.Status.SIGNED:
+            missing.append(f"Cautionnement — {label} (non signé)")
+    return missing
+
+
 def refresh_contract_status(application, user=None):
     """Passe le dossier en CONTRACT_GENERATED si tous les contrats requis sont là.
 

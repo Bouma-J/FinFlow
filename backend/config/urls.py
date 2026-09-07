@@ -16,7 +16,8 @@ from apps.accounts.auth_views import (
     ThrottledTokenObtainPairView,
     ThrottledTokenRefreshView,
 )
-from apps.common.health import HealthView, MetricsView
+from apps.common.async_tasks import AsyncTaskStatusView
+from apps.common.health import HealthView, MetricsView, OpsStatusView
 
 api_v1 = [
     path("auth/token/", ThrottledTokenObtainPairView.as_view(), name="token_obtain_pair"),
@@ -27,6 +28,12 @@ api_v1 = [
     path("auth/mfa/disable/", MfaDisableView.as_view(), name="mfa_disable"),
     path("health/", HealthView.as_view(), name="health"),
     path("metrics/", MetricsView.as_view(), name="metrics"),
+    path("ops/status/", OpsStatusView.as_view(), name="ops-status"),
+    path(
+        "async-tasks/<str:task_id>/",
+        AsyncTaskStatusView.as_view(),
+        name="async-task-status",
+    ),
     path("", include("apps.tenants.urls")),
     path("", include("apps.accounts.urls")),
     path("", include("apps.catalog.urls")),
@@ -48,20 +55,31 @@ urlpatterns = [
     # Hors du préfixe /admin/ réservé à la SPA React (sinon F5 → admin Django).
     path("django-admin/", admin.site.urls),
     path("api/v1/", include((api_v1, "api"), namespace="v1")),
-    path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
-    path(
-        "api/docs/",
-        SpectacularSwaggerView.as_view(url_name="schema"),
-        name="swagger-ui",
-    ),
-    *([
+]
+
+# OpenAPI / Swagger : désactivés en prod sauf ENABLE_API_DOCS=1
+if getattr(settings, "ENABLE_API_DOCS", False):
+    urlpatterns += [
+        path("api/schema/", SpectacularAPIView.as_view(), name="schema"),
+        path(
+            "api/docs/",
+            SpectacularSwaggerView.as_view(url_name="schema"),
+            name="swagger-ui",
+        ),
+    ]
+
+# /media/ anonyme : uniquement en DEBUG (local). En prod → S3 présigné / proxy auth.
+if (
+    getattr(settings, "STORAGE_BACKEND", "local") != "s3"
+    and settings.DEBUG
+):
+    urlpatterns += [
         re_path(
             r"^media/(?P<path>.*)$",
             serve,
             {"document_root": settings.MEDIA_ROOT},
         ),
-    ] if getattr(settings, "STORAGE_BACKEND", "local") != "s3" else []),
-]
+    ]
 
 if settings.DEBUG:
     try:

@@ -1,23 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  Building2,
+  Check,
   FileSignature,
   FileUp,
+  FolderOpen,
   Gavel,
+  Landmark,
   Plus,
   Receipt,
+  Scale,
+  ScrollText,
+  Search,
+  ShieldCheck,
   Stamp,
   Trash2,
   UserRound,
+  X,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type {
   ApprovalTask,
+  CreditApplication,
+  FormalizationComposeContext,
   FormalizationFee,
-  Guarantee,
   GuaranteeFormalizationRequest,
   GedDocument,
   Paginated,
@@ -30,31 +40,36 @@ import {
   Badge,
   Card,
   EmptyState,
+  ErrorState,
   PageHeader,
   PaginationBar,
+  QueryStatus,
   Spinner,
   formatDate,
   formatMoney,
 } from "@/components/ui";
 
-const OPEN_FORM_STATUSES = [
-  "DRAFT",
-  "IN_PROGRESS",
-  "IN_APPROVAL",
-  "RETURNED",
-  "APPROVED",
-];
-
 const EDITABLE_STATUSES = ["DRAFT", "IN_PROGRESS", "RETURNED"];
 
 const LEGAL_STAGES = [
-  { value: "NOT_SENT", label: "Non soumis chez le notaire" },
-  { value: "AT_NOTARY", label: "Chez le notaire" },
-  { value: "AWAITING_SIGNATURE", label: "En attente de signature" },
-  { value: "SIGNED", label: "Acte signé" },
-  { value: "PENDING_REGISTRATION", label: "Enregistrement / publicité en cours" },
-  { value: "REGISTERED", label: "Enregistré" },
+  { value: "NOT_SENT", label: "Non soumis chez le notaire", short: "Non soumis" },
+  { value: "AT_NOTARY", label: "Chez le notaire", short: "Chez notaire" },
+  {
+    value: "AWAITING_SIGNATURE",
+    label: "En attente de signature",
+    short: "Signature",
+  },
+  { value: "SIGNED", label: "Acte signé", short: "Signé" },
+  {
+    value: "PENDING_REGISTRATION",
+    label: "Enregistrement / publicité en cours",
+    short: "Enregistrement",
+  },
+  { value: "REGISTERED", label: "Enregistré", short: "Enregistré" },
+  { value: "DONE", label: "Formalisation terminée", short: "Terminée" },
 ];
+
+const LEGAL_STAGE_ORDER = LEGAL_STAGES.map((s) => s.value);
 
 const FEE_TYPES = [
   { value: "NOTARY", label: "Notaire / acte" },
@@ -148,11 +163,13 @@ export function FormalizationsPage() {
         décaissement.
       </div>
 
-      {list.isLoading || !list.data ? (
-        <Spinner />
-      ) : list.data.results.length === 0 ? (
-        <EmptyState message="Aucune formalisation de garantie." />
-      ) : (
+      <QueryStatus
+        isLoading={list.isLoading}
+        isError={list.isError}
+        isEmpty={!list.data?.results.length}
+        emptyMessage="Aucune formalisation de garantie."
+        onRetry={() => list.refetch()}
+      >
         <>
           <table className="table card">
             <thead>
@@ -166,7 +183,7 @@ export function FormalizationsPage() {
               </tr>
             </thead>
             <tbody>
-              {list.data.results.map((r) => (
+              {(list.data?.results ?? []).map((r) => (
                 <tr key={r.id}>
                   <td>
                     <code>{r.reference || "—"}</code>
@@ -199,10 +216,106 @@ export function FormalizationsPage() {
           </table>
           <PaginationBar
             page={page}
-            count={list.data.count}
+            count={list.data?.count ?? 0}
             onPageChange={setPage}
           />
         </>
+      </QueryStatus>
+    </div>
+  );
+}
+
+function CreditApplicationAutocomplete({
+  value,
+  onChange,
+  initialLabel,
+}: {
+  value: string;
+  onChange: (id: string, label: string, app?: CreditApplication | null) => void;
+  initialLabel?: string;
+}) {
+  const [query, setQuery] = useState(initialLabel ?? "");
+  const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState(Boolean(value));
+  const [debounced, setDebounced] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebounced(query.trim()), 250);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const { data, isFetching } = useQuery({
+    queryKey: ["credit-apps-search-form", debounced],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CreditApplication>>("/credit-applications/", {
+          params: { search: debounced, page_size: 8 },
+        })
+      ).data,
+    enabled: open && debounced.length >= 1 && !selected,
+  });
+
+  function pick(app: CreditApplication) {
+    const label = `${app.reference || app.id.slice(0, 8)} — ${app.client_display}`;
+    setQuery(label);
+    setSelected(true);
+    setOpen(false);
+    onChange(app.id, label, app);
+  }
+
+  function clear() {
+    setQuery("");
+    setSelected(false);
+    onChange("", "", null);
+  }
+
+  return (
+    <div className="client-ac" ref={ref}>
+      <div className={`ac-input${selected ? " picked" : ""}`}>
+        {selected ? <Check size={16} /> : <Search size={16} />}
+        <input
+          value={query}
+          placeholder="Référence dossier, nom client…"
+          onChange={(e) => {
+            setQuery(e.target.value);
+            setSelected(false);
+            setOpen(true);
+          }}
+          onFocus={() => !selected && setOpen(true)}
+        />
+        {(query || value) && (
+          <button type="button" className="ac-clear" onClick={clear}>
+            <X size={14} />
+          </button>
+        )}
+      </div>
+      {open && !selected && debounced.length >= 1 && (
+        <ul className="ac-dropdown">
+          {isFetching && <li className="muted small">Recherche…</li>}
+          {!isFetching && (data?.results.length ?? 0) === 0 && (
+            <li className="muted small">Aucun dossier trouvé.</li>
+          )}
+          {(data?.results ?? []).map((app) => (
+            <li key={app.id}>
+              <button type="button" onClick={() => pick(app)}>
+                <strong>{app.reference || app.id.slice(0, 8)}</strong>
+                <span className="muted small">
+                  {" "}
+                  — {app.client_display} · {app.product_label}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -212,7 +325,13 @@ export function FormalizationNewPage() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
+  const [searchMode, setSearchMode] = useState<"client" | "credit">(
+    searchParams.get("application") ? "credit" : "client",
+  );
   const [clientId, setClientId] = useState(searchParams.get("client") || "");
+  const [applicationId, setApplicationId] = useState(
+    searchParams.get("application") || "",
+  );
   const [guaranteeId, setGuaranteeId] = useState(
     searchParams.get("guarantee") || "",
   );
@@ -221,57 +340,63 @@ export function FormalizationNewPage() {
   const [comment, setComment] = useState("");
   const [error, setError] = useState<string | null>(null);
 
-  const guarantees = useQuery({
-    queryKey: ["guarantees", "for-formalization", clientId],
-    queryFn: async () =>
-      (
-        await api.get<Paginated<Guarantee>>("/guarantees/", {
-          params: { client: clientId, status: "ACTIVE", page_size: 100 },
-        })
-      ).data,
-    enabled: !!clientId,
-  });
+  const contextParams = useMemo(() => {
+    if (applicationId) return { application: applicationId };
+    if (clientId) return { client: clientId };
+    return null;
+  }, [clientId, applicationId]);
 
-  const openForms = useQuery({
-    queryKey: ["guarantee-formalizations", "open-by-client", clientId],
+  const context = useQuery({
+    queryKey: ["formalization-compose-context", contextParams],
     queryFn: async () =>
       (
-        await api.get<Paginated<GuaranteeFormalizationRequest>>(
-          "/guarantee-formalizations/",
-          { params: { client: clientId, page_size: 100 } },
+        await api.get<FormalizationComposeContext>(
+          "/guarantee-formalizations/compose-context/",
+          { params: contextParams! },
         )
       ).data,
-    enabled: !!clientId,
+    enabled: !!contextParams,
   });
 
-  const busyGuaranteeIds = useMemo(() => {
-    const set = new Set<string>();
-    for (const r of openForms.data?.results ?? []) {
-      if (OPEN_FORM_STATUSES.includes(r.status)) set.add(r.guarantee);
-    }
-    return set;
-  }, [openForms.data]);
+  const credits = context.data?.credits ?? [];
+  const allGuarantees = context.data?.guarantees ?? [];
 
-  const activeGuarantees = useMemo(() => {
-    const rows = guarantees.data?.results ?? [];
-    const free = rows.filter((g) => !busyGuaranteeIds.has(g.id));
-    return free.length > 0 ? free : rows;
-  }, [guarantees.data, busyGuaranteeIds]);
-
-  const showingAllActive =
-    (guarantees.data?.results ?? []).length > 0 &&
-    activeGuarantees.length === (guarantees.data?.results ?? []).length &&
-    busyGuaranteeIds.size > 0;
+  const visibleGuarantees = useMemo(() => {
+    if (!applicationId) return allGuarantees;
+    return allGuarantees.filter((g) => g.application === applicationId);
+  }, [allGuarantees, applicationId]);
 
   useEffect(() => {
     const gParam = searchParams.get("guarantee");
-    if (!gParam || !guarantees.data) return;
-    if (guarantees.data.results.some((g) => g.id === gParam)) {
+    if (!gParam || !context.data) return;
+    if (context.data.guarantees.some((g) => g.id === gParam)) {
       setGuaranteeId(gParam);
     }
-  }, [guarantees.data, searchParams]);
+  }, [context.data, searchParams]);
 
-  const canSubmit = !!clientId && !!guaranteeId;
+  useEffect(() => {
+    if (!guaranteeId) return;
+    if (!visibleGuarantees.some((g) => g.id === guaranteeId)) {
+      setGuaranteeId("");
+    }
+  }, [visibleGuarantees, guaranteeId]);
+
+  // Auto-sélection si un seul dossier / une seule garantie libre
+  useEffect(() => {
+    if (!context.data) return;
+    if (!applicationId && context.data.credits.length === 1) {
+      setApplicationId(context.data.credits[0].application_id);
+    }
+  }, [context.data, applicationId]);
+
+  useEffect(() => {
+    const free = visibleGuarantees.filter((g) => !g.formalization_busy);
+    if (free.length === 1 && !guaranteeId) {
+      setGuaranteeId(free[0].id);
+    }
+  }, [visibleGuarantees, guaranteeId]);
+
+  const canSubmit = !!guaranteeId;
 
   const create = useMutation({
     mutationFn: async () =>
@@ -289,13 +414,29 @@ export function FormalizationNewPage() {
       ).data,
     onSuccess: (data) => navigate(`/formalisations/${data.id}`),
     onError: (err: unknown) =>
-      setError(errMsg(err, "Création impossible (garantie ou dossier ouvert).")),
+      setError(
+        errMsg(
+          err,
+          "Création impossible (garantie hors dossier ou formalisation ouverte).",
+        ),
+      ),
   });
+
+  function resetSelection() {
+    setGuaranteeId("");
+    setError(null);
+  }
 
   function onClientPicked(id: string) {
     setClientId(id);
-    setGuaranteeId("");
-    setError(null);
+    setApplicationId("");
+    resetSelection();
+  }
+
+  function onCreditPicked(id: string, _label: string, app?: CreditApplication | null) {
+    setApplicationId(id);
+    if (app?.client) setClientId(app.client);
+    resetSelection();
   }
 
   if (!hasPerm(user, "guarantees.initiate_guaranteeformalizationrequest")) {
@@ -312,7 +453,7 @@ export function FormalizationNewPage() {
       <PageHeader
         icon={Stamp}
         title="Nouvelle formalisation"
-        subtitle="Sélectionnez une garantie active à constituer juridiquement"
+        subtitle="Recherchez un client ou un dossier — les garanties attachées apparaissent automatiquement"
         actions={
           <Link className="btn btn-ghost" to="/formalisations">
             <ArrowLeft />
@@ -322,7 +463,8 @@ export function FormalizationNewPage() {
       />
 
       <div className="callout callout-info" style={{ marginBottom: 14 }}>
-        La formalisation est parallèle au crédit et ne bloque pas le
+        La formalisation concerne uniquement les garanties mises en place sur
+        un dossier de crédit. Elle est parallèle et ne bloque pas le
         décaissement.
       </div>
 
@@ -340,29 +482,141 @@ export function FormalizationNewPage() {
             <section className="card form-section">
               <div className="card-title form-section-head">
                 <span className="form-section-icon">
-                  <UserRound size={18} />
+                  <Search size={18} />
                 </span>
                 <div className="form-section-heading">
-                  <span className="form-section-title">1. Client</span>
+                  <span className="form-section-title">1. Recherche</span>
                   <span className="form-section-desc">
-                    Choisissez le client titulaire de la garantie.
+                    Par client ou par dossier de crédit.
                   </span>
                 </div>
               </div>
-              <ClientAutocomplete
-                value={clientId}
-                onChange={(id) => onClientPicked(id)}
-              />
+              <div className="type-toggle compact" style={{ marginBottom: 14 }}>
+                <button
+                  type="button"
+                  className={`type-choice${searchMode === "client" ? " active" : ""}`}
+                  onClick={() => {
+                    setSearchMode("client");
+                    setApplicationId("");
+                    resetSelection();
+                  }}
+                >
+                  <UserRound size={16} /> Client
+                </button>
+                <button
+                  type="button"
+                  className={`type-choice${searchMode === "credit" ? " active" : ""}`}
+                  onClick={() => {
+                    setSearchMode("credit");
+                    resetSelection();
+                  }}
+                >
+                  <FolderOpen size={16} /> Dossier de crédit
+                </button>
+              </div>
+              {searchMode === "client" ? (
+                <ClientAutocomplete
+                  value={clientId}
+                  onChange={(id) => onClientPicked(id)}
+                />
+              ) : (
+                <CreditApplicationAutocomplete
+                  value={applicationId}
+                  onChange={onCreditPicked}
+                />
+              )}
             </section>
 
-            {!clientId ? (
+            {!contextParams ? (
               <section className="card form-section dation-compose-empty">
-                <EmptyState message="Sélectionnez un client pour afficher ses garanties actives." />
+                <EmptyState message="Sélectionnez un client ou un dossier pour afficher les garanties attachées." />
               </section>
-            ) : guarantees.isLoading ? (
+            ) : context.isLoading ? (
               <Spinner />
+            ) : context.isError ? (
+              <div className="form-error">
+                Impossible de charger le contexte (client / dossier).
+              </div>
             ) : (
               <>
+                {searchMode === "client" && credits.length > 0 && (
+                  <section className="card form-section">
+                    <div className="card-title form-section-head">
+                      <span className="form-section-icon">
+                        <FolderOpen size={18} />
+                      </span>
+                      <div className="form-section-heading">
+                        <span className="form-section-title">
+                          2. Dossier de crédit
+                        </span>
+                        <span className="form-section-desc">
+                          Filtrez sur le dossier dont les garanties seront
+                          formalisées.
+                        </span>
+                      </div>
+                    </div>
+                    <div className="dation-guarantee-list" role="list">
+                      {credits.map((c) => {
+                        const checked = applicationId === c.application_id;
+                        return (
+                          <label
+                            key={c.application_id}
+                            role="listitem"
+                            className={`dation-guarantee-row${checked ? " selected" : ""}`}
+                          >
+                            <input
+                              type="radio"
+                              name="formalization-credit"
+                              checked={checked}
+                              onChange={() => {
+                                setApplicationId(c.application_id);
+                                resetSelection();
+                              }}
+                            />
+                            <span className="dation-guarantee-body">
+                              <span className="dation-guarantee-title">
+                                {c.application_reference ||
+                                  c.application_id.slice(0, 8)}
+                                <span className="muted small">
+                                  {" "}
+                                  — {c.product_label}
+                                </span>
+                              </span>
+                              <span className="muted small">
+                                {c.guarantees_count} garantie
+                                {c.guarantees_count > 1 ? "s" : ""} attachée
+                                {c.guarantees_count > 1 ? "s" : ""}
+                              </span>
+                            </span>
+                            <span className="dation-guarantee-meta">
+                              <strong>
+                                {formatMoney(c.amount, c.currency)}
+                              </strong>
+                              <Badge
+                                value={c.application_status}
+                                label={c.application_status_display}
+                              />
+                            </span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    {applicationId && (
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ marginTop: 8 }}
+                        onClick={() => {
+                          setApplicationId("");
+                          resetSelection();
+                        }}
+                      >
+                        Voir toutes les garanties du client
+                      </button>
+                    )}
+                  </section>
+                )}
+
                 <section className="card form-section">
                   <div className="card-title form-section-head">
                     <span className="form-section-icon">
@@ -370,27 +624,28 @@ export function FormalizationNewPage() {
                     </span>
                     <div className="form-section-heading">
                       <span className="form-section-title">
-                        2. Garantie à formaliser
+                        {searchMode === "client" && credits.length > 0
+                          ? "3. Garantie à formaliser"
+                          : "2. Garantie à formaliser"}
                       </span>
                       <span className="form-section-desc">
-                        {showingAllActive
-                          ? "Garanties actives (certaines ont déjà une formalisation ouverte)."
-                          : "Garanties actives sans formalisation ouverte."}
+                        Garanties attachées au dossier de crédit — sélectionnez
+                        celle à mettre dans le circuit.
                       </span>
                     </div>
                     <div className="form-section-action">
                       <span className="muted small">
-                        {activeGuarantees.length} disponible
-                        {activeGuarantees.length > 1 ? "s" : ""}
+                        {visibleGuarantees.length} garantie
+                        {visibleGuarantees.length > 1 ? "s" : ""}
                       </span>
                     </div>
                   </div>
-                  {activeGuarantees.length === 0 ? (
-                    <EmptyState message="Aucune garantie active pour ce client." />
+                  {visibleGuarantees.length === 0 ? (
+                    <EmptyState message="Aucune garantie active attachée à un dossier de crédit." />
                   ) : (
                     <div className="dation-guarantee-list" role="list">
-                      {activeGuarantees.map((g) => {
-                        const busy = busyGuaranteeIds.has(g.id);
+                      {visibleGuarantees.map((g) => {
+                        const busy = Boolean(g.formalization_busy);
                         const checked = guaranteeId === g.id;
                         return (
                           <label
@@ -416,6 +671,11 @@ export function FormalizationNewPage() {
                                   </code>
                                 </span>
                               </span>
+                              {g.application_reference && (
+                                <span className="muted small">
+                                  Dossier {g.application_reference}
+                                </span>
+                              )}
                               {g.description && (
                                 <span className="dation-guarantee-desc">
                                   {g.description.slice(0, 140)}
@@ -428,9 +688,7 @@ export function FormalizationNewPage() {
                               )}
                             </span>
                             <span className="dation-guarantee-meta">
-                              <strong>
-                                {formatMoney(g.current_value)}
-                              </strong>
+                              <strong>{formatMoney(g.current_value)}</strong>
                               <Badge value={g.status} />
                             </span>
                           </label>
@@ -447,7 +705,7 @@ export function FormalizationNewPage() {
                     </span>
                     <div className="form-section-heading">
                       <span className="form-section-title">
-                        3. Notaire & commentaire
+                        Notaire & commentaire
                       </span>
                       <span className="form-section-desc">
                         Optionnel à la création — modifiable ensuite.
@@ -492,19 +750,29 @@ export function FormalizationNewPage() {
                 <Stamp size={18} />
                 <strong>Récapitulatif</strong>
               </div>
-              {!clientId ? (
-                <p className="muted small">Sélectionnez un client.</p>
+              {!contextParams ? (
+                <p className="muted small">
+                  Recherchez un client ou un dossier.
+                </p>
               ) : (
                 <dl className="def-list">
                   <div>
-                    <dt>Garanties actives</dt>
-                    <dd>{guarantees.data?.results.length ?? "…"}</dd>
+                    <dt>Client</dt>
+                    <dd>{context.data?.client_display || "…"}</dd>
+                  </div>
+                  <div>
+                    <dt>Dossiers</dt>
+                    <dd>{credits.length}</dd>
+                  </div>
+                  <div>
+                    <dt>Garanties attachées</dt>
+                    <dd>{visibleGuarantees.length}</dd>
                   </div>
                   <div>
                     <dt>Sélection</dt>
                     <dd>
                       {guaranteeId
-                        ? activeGuarantees.find((g) => g.id === guaranteeId)
+                        ? visibleGuarantees.find((g) => g.id === guaranteeId)
                             ?.reference || guaranteeId.slice(0, 8)
                         : "—"}
                     </dd>
@@ -521,7 +789,7 @@ export function FormalizationNewPage() {
                 className="btn btn-primary"
                 disabled={create.isPending || !canSubmit}
               >
-                {create.isPending ? "Création…" : "Créer le brouillon"}
+                {create.isPending ? "Création…" : "Mettre dans le circuit"}
               </button>
               <Link className="btn btn-ghost" to="/formalisations">
                 Annuler
@@ -778,7 +1046,14 @@ export function FormalizationDetailPage() {
     onError: (e) => setActionError(errMsg(e, "Upload impossible.")),
   });
 
-  if (detail.isLoading || !detail.data) return <Spinner />;
+  if (detail.isLoading) return <Spinner />;
+  if (detail.isError || !detail.data)
+    return (
+      <ErrorState
+        message="Impossible de charger la formalisation."
+        onRetry={() => detail.refetch()}
+      />
+    );
   const r = detail.data;
   const editable = EDITABLE_STATUSES.includes(r.status);
   const canCancel =
@@ -793,12 +1068,30 @@ export function FormalizationDetailPage() {
     canInitiate &&
     !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) &&
     COMPLETABLE_STAGES.includes(r.legal_stage);
+  const canUploadDocs =
+    canInitiate &&
+    !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status);
   const myTask =
     myTasks?.results.find(
       (t) =>
         t.target_meta?.kind === "FORMALISATION" && t.target_meta.id === r.id,
     ) ?? null;
   const fees: FormalizationFee[] = r.fees ?? [];
+  const stageIdx = LEGAL_STAGE_ORDER.indexOf(r.legal_stage);
+  const closed =
+    r.status === "COMPLETED" || r.legal_stage === "DONE";
+  const cancelled = ["CANCELLED", "REJECTED"].includes(r.status);
+  const proofLinks = [
+    r.acte_file_url
+      ? { label: "Projet / acte", href: r.acte_file_url }
+      : null,
+    r.acte_signed_file_url
+      ? { label: "Acte signé", href: r.acte_signed_file_url }
+      : null,
+    r.registration_proof_url
+      ? { label: "Preuve d'enregistrement", href: r.registration_proof_url }
+      : null,
+  ].filter(Boolean) as { label: string; href: string }[];
 
   return (
     <div>
@@ -871,9 +1164,34 @@ export function FormalizationDetailPage() {
         }
       />
 
+      <div className="client-banner">
+        <div className="client-banner-info">
+          <span className="client-banner-icon">
+            <Stamp size={26} />
+          </span>
+          <div>
+            <h2 className="client-banner-name">
+              {r.guarantee_reference || "Formalisation"}
+            </h2>
+            <div className="client-banner-meta">
+              <code>{r.reference}</code>
+              <Badge value={r.status} label={r.status_display} />
+              <Badge
+                value={r.legal_stage}
+                label={legalStageLabel(r.legal_stage, r.legal_stage_display)}
+              />
+              {r.application_reference && (
+                <span className="muted">Crédit {r.application_reference}</span>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+
       <div className="callout callout-info" style={{ marginBottom: 14 }}>
         La formalisation est parallèle au crédit et ne bloque pas le
-        décaissement.
+        décaissement. La garantie reste utilisable pendant le parcours
+        juridique.
       </div>
 
       {actionError && <div className="form-error">{actionError}</div>}
@@ -885,361 +1203,539 @@ export function FormalizationDetailPage() {
         </div>
       )}
 
-      <div className="detail-grid">
-        <Card title="Dossier">
-          <dl className="def-list two">
-            <div>
-              <dt>Statut</dt>
-              <dd>
-                <Badge value={r.status} label={r.status_display} />
-              </dd>
+      <div className="process-steps" aria-label="Parcours juridique">
+        {LEGAL_STAGES.map((s, i) => {
+          const done =
+            !cancelled && (closed || (stageIdx >= 0 && i < stageIdx));
+          const current =
+            !cancelled && !closed && stageIdx === i;
+          return (
+            <div
+              key={s.value}
+              className={`process-step${done ? " done" : ""}${
+                current ? " current" : ""
+              }`}
+            >
+              <span className="step-num">{i + 1}</span>
+              <span>
+                <strong>{s.short}</strong>
+                {current ? "En cours" : done ? "Fait" : "À venir"}
+              </span>
             </div>
-            <div>
-              <dt>Étape juridique</dt>
-              <dd>
-                <Badge
-                  value={r.legal_stage}
-                  label={legalStageLabel(
-                    r.legal_stage,
-                    r.legal_stage_display,
-                  )}
-                />
-              </dd>
-            </div>
-            <div>
-              <dt>Garantie</dt>
-              <dd>
-                <Link to={`/garanties/${r.guarantee}`}>
-                  {r.guarantee_reference || r.guarantee.slice(0, 8)}
-                </Link>
-              </dd>
-            </div>
-            <div>
-              <dt>Client</dt>
-              <dd>
-                {r.client ? (
-                  <Link to={`/clients/${r.client}`}>{r.client_display}</Link>
-                ) : (
-                  r.client_display
-                )}
-              </dd>
-            </div>
-            <div>
-              <dt>Frais client</dt>
-              <dd>{formatMoney(r.fees_client_total ?? null)}</dd>
-            </div>
-            <div>
-              <dt>Frais institution</dt>
-              <dd>{formatMoney(r.fees_institution_total ?? null)}</dd>
-            </div>
-            {r.completed_at && (
-              <div>
-                <dt>Clôturée le</dt>
-                <dd>{formatDate(r.completed_at)}</dd>
-              </div>
-            )}
-          </dl>
-          {r.comment && (
-            <p className="muted small" style={{ marginTop: 12 }}>
-              {r.comment}
-            </p>
-          )}
-        </Card>
+          );
+        })}
+      </div>
 
-        <Card title="Étape juridique">
-          {editable && canInitiate ? (
-            <div className="form-grid">
-              <label className="field">
-                <span>Nouvelle étape</span>
-                <select
-                  value={advanceStage}
-                  onChange={(e) => setAdvanceStage(e.target.value)}
-                >
-                  {LEGAL_STAGES.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              {(advanceStage === "AT_NOTARY" ||
-                advanceStage === "AWAITING_SIGNATURE") && (
-                <>
-                  <label className="field">
-                    <span>Notaire / étude</span>
-                    <input
-                      value={advanceNotaryName}
-                      onChange={(e) => setAdvanceNotaryName(e.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Réf. notaire</span>
-                    <input
-                      value={advanceNotaryRef}
-                      onChange={(e) => setAdvanceNotaryRef(e.target.value)}
-                    />
-                  </label>
-                </>
-              )}
-              {(advanceStage === "PENDING_REGISTRATION" ||
-                advanceStage === "REGISTERED") && (
-                <>
-                  <label className="field">
-                    <span>N° d&apos;enregistrement</span>
-                    <input
-                      value={advanceRegNumber}
-                      onChange={(e) => setAdvanceRegNumber(e.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Date d&apos;enregistrement</span>
-                    <input
-                      type="date"
-                      value={advanceRegDate}
-                      onChange={(e) => setAdvanceRegDate(e.target.value)}
-                    />
-                  </label>
-                  <label className="field">
-                    <span>Organisme</span>
-                    <input
-                      value={advanceRegAuth}
-                      onChange={(e) => setAdvanceRegAuth(e.target.value)}
-                    />
-                  </label>
-                </>
-              )}
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={
-                  !advanceStage ||
-                  advanceStage === r.legal_stage ||
-                  advance.isPending
-                }
-                onClick={() => advance.mutate()}
-              >
-                Avancer l&apos;étape
-              </button>
-            </div>
-          ) : (
+      <div className="detail-sections">
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <ShieldCheck size={17} /> Dossier
+              </>
+            }
+          >
             <dl className="def-list two">
               <div>
-                <dt>Étape</dt>
+                <dt>Statut</dt>
                 <dd>
-                  {legalStageLabel(r.legal_stage, r.legal_stage_display)}
+                  <Badge value={r.status} label={r.status_display} />
                 </dd>
               </div>
               <div>
-                <dt>Notaire</dt>
-                <dd>{r.notary_name || "—"}</dd>
-              </div>
-              <div>
-                <dt>Réf. notaire</dt>
-                <dd>{r.notary_reference || "—"}</dd>
-              </div>
-              <div>
-                <dt>N° enregistrement</dt>
-                <dd>{r.registration_number || "—"}</dd>
-              </div>
-              <div>
-                <dt>Date enregistrement</dt>
+                <dt>Étape juridique</dt>
                 <dd>
-                  {r.registration_date
-                    ? formatDate(r.registration_date)
-                    : "—"}
-                </dd>
-              </div>
-              <div>
-                <dt>Organisme</dt>
-                <dd>{r.registration_authority || "—"}</dd>
-              </div>
-            </dl>
-          )}
-        </Card>
-
-        {editable && canInitiate && (
-          <Card title="Notaire & enregistrement (brouillon)">
-            <div className="form-grid">
-              <label className="field">
-                <span>Notaire / étude</span>
-                <input
-                  value={draftNotaryName}
-                  onChange={(e) => setDraftNotaryName(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Réf. dossier notaire</span>
-                <input
-                  value={draftNotaryRef}
-                  onChange={(e) => setDraftNotaryRef(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Transmis au notaire le</span>
-                <input
-                  type="date"
-                  value={draftSentAt}
-                  onChange={(e) => setDraftSentAt(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Retour prévu</span>
-                <input
-                  type="date"
-                  value={draftExpectedReturn}
-                  onChange={(e) => setDraftExpectedReturn(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>N° d&apos;enregistrement</span>
-                <input
-                  value={draftRegNumber}
-                  onChange={(e) => setDraftRegNumber(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Date d&apos;enregistrement</span>
-                <input
-                  type="date"
-                  value={draftRegDate}
-                  onChange={(e) => setDraftRegDate(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Organisme</span>
-                <input
-                  value={draftRegAuth}
-                  onChange={(e) => setDraftRegAuth(e.target.value)}
-                />
-              </label>
-              <label className="field" style={{ gridColumn: "1 / -1" }}>
-                <span>Commentaire</span>
-                <textarea
-                  value={draftComment}
-                  onChange={(e) => setDraftComment(e.target.value)}
-                  rows={3}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={updateDraft.isPending}
-                onClick={() => updateDraft.mutate()}
-              >
-                Enregistrer le brouillon
-              </button>
-            </div>
-          </Card>
-        )}
-
-        <Card title="Frais">
-          {fees.length === 0 ? (
-            <p className="muted small">Aucun frais enregistré.</p>
-          ) : (
-            <ul className="link-list">
-              {fees.map((f) => (
-                <li key={f.id}>
-                  <span>
-                    <Receipt size={14} /> {f.fee_type_display}
-                    {f.label ? ` — ${f.label}` : ""}
-                    <em className="muted small"> · {f.payer_display}</em>
-                  </span>
-                  <span className="row-actions">
-                    <span className="num">{formatMoney(f.amount)}</span>
-                    {editable && canInitiate && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => removeFee.mutate(f.id)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
+                  <Badge
+                    value={r.legal_stage}
+                    label={legalStageLabel(
+                      r.legal_stage,
+                      r.legal_stage_display,
                     )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {editable && canInitiate && (
-            <div className="form-grid" style={{ marginTop: 12 }}>
-              <label className="field">
-                <span>Type</span>
-                <select
-                  value={feeType}
-                  onChange={(e) => setFeeType(e.target.value)}
-                >
-                  {FEE_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Montant</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={feeAmount}
-                  onChange={(e) => setFeeAmount(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Payeur</span>
-                <select
-                  value={feePayer}
-                  onChange={(e) => setFeePayer(e.target.value)}
-                >
-                  <option value="CLIENT">Client</option>
-                  <option value="INSTITUTION">Institution</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>Libellé</span>
-                <input
-                  value={feeLabel}
-                  onChange={(e) => setFeeLabel(e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!feeAmount || addFee.isPending}
-                onClick={() => addFee.mutate()}
-              >
-                <Plus size={14} />
-                Ajouter frais
-              </button>
-            </div>
-          )}
-        </Card>
+                  />
+                </dd>
+              </div>
+              <div>
+                <dt>Garantie</dt>
+                <dd>
+                  <Link to={`/garanties/${r.guarantee}`}>
+                    {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                  </Link>
+                </dd>
+              </div>
+              <div>
+                <dt>Client</dt>
+                <dd>
+                  {r.client ? (
+                    <Link to={`/clients/${r.client}`}>{r.client_display}</Link>
+                  ) : (
+                    r.client_display || "—"
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Dossier crédit</dt>
+                <dd>
+                  {r.application ? (
+                    <Link to={`/dossiers/${r.application}`}>
+                      {r.application_reference || r.application.slice(0, 8)}
+                    </Link>
+                  ) : (
+                    "—"
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt>Créée le</dt>
+                <dd>{formatDate(r.created_at)}</dd>
+              </div>
+              <div>
+                <dt>Frais client</dt>
+                <dd>{formatMoney(r.fees_client_total ?? null)}</dd>
+              </div>
+              <div>
+                <dt>Frais institution</dt>
+                <dd>{formatMoney(r.fees_institution_total ?? null)}</dd>
+              </div>
+              {r.completed_at && (
+                <div>
+                  <dt>Clôturée le</dt>
+                  <dd>{formatDate(r.completed_at)}</dd>
+                </div>
+              )}
+            </dl>
+            {!editable && r.comment && (
+              <p className="muted small" style={{ marginTop: 12 }}>
+                {r.comment}
+              </p>
+            )}
+          </Card>
 
-        <Card title="Pièces jointes">
-          {(docs.data ?? []).length === 0 ? (
-            <p className="muted small">Aucune pièce jointe.</p>
-          ) : (
-            <ul className="link-list">
-              {(docs.data ?? []).map((d) => (
-                <li key={d.id}>
-                  <span>
-                    <FileUp size={14} /> {d.name}
-                    <em className="muted small"> · {d.category_label}</em>
-                  </span>
-                  <a
-                    className="btn btn-ghost btn-sm"
-                    href={d.file}
-                    target="_blank"
-                    rel="noreferrer"
+          <Card
+            title={
+              <>
+                <Scale size={17} /> Circuit
+              </>
+            }
+          >
+            {!workflow.data?.instance ? (
+              <EmptyState
+                message={
+                  editable
+                    ? "Circuit non démarré — soumettez le dossier."
+                    : "Aucun circuit associé."
+                }
+              />
+            ) : (
+              <dl className="def-list two">
+                <div>
+                  <dt>Statut circuit</dt>
+                  <dd>
+                    <Badge value={workflow.data.instance.status} />
+                  </dd>
+                </div>
+                {workflow.data.instance.definition_code && (
+                  <div>
+                    <dt>Définition</dt>
+                    <dd>
+                      <code>{workflow.data.instance.definition_code}</code>
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            )}
+            {myTask && (
+              <div style={{ marginTop: 14 }}>
+                <p className="section-subtitle">
+                  <Gavel size={14} /> Décision — {myTask.step_name}
+                </p>
+                <DecisionPanel task={myTask} onDone={invalidateAll} />
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <Building2 size={17} /> Notaire &amp; enregistrement
+              </>
+            }
+          >
+            {editable && canInitiate ? (
+              <div className="form-grid">
+                <label className="field">
+                  <span>Notaire / étude</span>
+                  <input
+                    value={draftNotaryName}
+                    onChange={(e) => setDraftNotaryName(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Réf. dossier notaire</span>
+                  <input
+                    value={draftNotaryRef}
+                    onChange={(e) => setDraftNotaryRef(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Transmis au notaire le</span>
+                  <input
+                    type="date"
+                    value={draftSentAt}
+                    onChange={(e) => setDraftSentAt(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Retour prévu</span>
+                  <input
+                    type="date"
+                    value={draftExpectedReturn}
+                    onChange={(e) => setDraftExpectedReturn(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>N° d&apos;enregistrement</span>
+                  <input
+                    value={draftRegNumber}
+                    onChange={(e) => setDraftRegNumber(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Date d&apos;enregistrement</span>
+                  <input
+                    type="date"
+                    value={draftRegDate}
+                    onChange={(e) => setDraftRegDate(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Organisme</span>
+                  <input
+                    value={draftRegAuth}
+                    onChange={(e) => setDraftRegAuth(e.target.value)}
+                  />
+                </label>
+                <label className="field" style={{ gridColumn: "1 / -1" }}>
+                  <span>Commentaire</span>
+                  <textarea
+                    value={draftComment}
+                    onChange={(e) => setDraftComment(e.target.value)}
+                    rows={3}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={updateDraft.isPending}
+                  onClick={() => updateDraft.mutate()}
+                >
+                  Enregistrer
+                </button>
+              </div>
+            ) : (
+              <dl className="def-list two">
+                <div>
+                  <dt>Notaire</dt>
+                  <dd>{r.notary_name || "—"}</dd>
+                </div>
+                <div>
+                  <dt>Réf. notaire</dt>
+                  <dd>{r.notary_reference || "—"}</dd>
+                </div>
+                <div>
+                  <dt>Transmis le</dt>
+                  <dd>
+                    {r.sent_to_notary_at
+                      ? formatDate(r.sent_to_notary_at)
+                      : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Retour prévu</dt>
+                  <dd>
+                    {r.expected_return_date
+                      ? formatDate(r.expected_return_date)
+                      : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>N° enregistrement</dt>
+                  <dd>{r.registration_number || "—"}</dd>
+                </div>
+                <div>
+                  <dt>Date enregistrement</dt>
+                  <dd>
+                    {r.registration_date
+                      ? formatDate(r.registration_date)
+                      : "—"}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Organisme</dt>
+                  <dd>{r.registration_authority || "—"}</dd>
+                </div>
+              </dl>
+            )}
+          </Card>
+
+          <Card
+            title={
+              <>
+                <Landmark size={17} /> Avancer l&apos;étape
+              </>
+            }
+          >
+            {editable && canInitiate ? (
+              <>
+                <p className="muted small">
+                  Faites progresser le parcours juridique. Les champs
+                  contextuels s&apos;affichent selon l&apos;étape choisie.
+                </p>
+                <div className="form-grid" style={{ marginTop: 10 }}>
+                  <label className="field full-span">
+                    <span>Nouvelle étape</span>
+                    <select
+                      value={advanceStage}
+                      onChange={(e) => setAdvanceStage(e.target.value)}
+                    >
+                      {LEGAL_STAGES.filter((s) => s.value !== "DONE").map(
+                        (s) => (
+                          <option key={s.value} value={s.value}>
+                            {s.label}
+                          </option>
+                        ),
+                      )}
+                    </select>
+                  </label>
+                  {(advanceStage === "AT_NOTARY" ||
+                    advanceStage === "AWAITING_SIGNATURE") && (
+                    <>
+                      <label className="field">
+                        <span>Notaire / étude</span>
+                        <input
+                          value={advanceNotaryName}
+                          onChange={(e) =>
+                            setAdvanceNotaryName(e.target.value)
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Réf. notaire</span>
+                        <input
+                          value={advanceNotaryRef}
+                          onChange={(e) =>
+                            setAdvanceNotaryRef(e.target.value)
+                          }
+                        />
+                      </label>
+                    </>
+                  )}
+                  {(advanceStage === "PENDING_REGISTRATION" ||
+                    advanceStage === "REGISTERED") && (
+                    <>
+                      <label className="field">
+                        <span>N° d&apos;enregistrement</span>
+                        <input
+                          value={advanceRegNumber}
+                          onChange={(e) =>
+                            setAdvanceRegNumber(e.target.value)
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Date d&apos;enregistrement</span>
+                        <input
+                          type="date"
+                          value={advanceRegDate}
+                          onChange={(e) => setAdvanceRegDate(e.target.value)}
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Organisme</span>
+                        <input
+                          value={advanceRegAuth}
+                          onChange={(e) => setAdvanceRegAuth(e.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    disabled={
+                      !advanceStage ||
+                      advanceStage === r.legal_stage ||
+                      advance.isPending
+                    }
+                    onClick={() => advance.mutate()}
                   >
-                    Ouvrir
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-          {canInitiate &&
-            !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) && (
+                    Avancer l&apos;étape
+                  </button>
+                </div>
+              </>
+            ) : (
+              <dl className="def-list two">
+                <div>
+                  <dt>Étape actuelle</dt>
+                  <dd>
+                    {legalStageLabel(r.legal_stage, r.legal_stage_display)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Modification</dt>
+                  <dd className="muted">
+                    {cancelled
+                      ? "Dossier clôturé / annulé"
+                      : closed
+                        ? "Parcours terminé"
+                        : "Lecture seule (en validation)"}
+                  </dd>
+                </div>
+              </dl>
+            )}
+          </Card>
+        </div>
+
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <Receipt size={17} /> Frais
+              </>
+            }
+          >
+            {fees.length === 0 ? (
+              <p className="muted small">Aucun frais enregistré.</p>
+            ) : (
+              <ul className="link-list">
+                {fees.map((f) => (
+                  <li key={f.id}>
+                    <span>
+                      <Receipt size={14} /> {f.fee_type_display}
+                      {f.label ? ` — ${f.label}` : ""}
+                      <em className="muted small"> · {f.payer_display}</em>
+                    </span>
+                    <span className="row-actions">
+                      <span className="num">{formatMoney(f.amount)}</span>
+                      {editable && canInitiate && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => removeFee.mutate(f.id)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {editable && canInitiate && (
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span>Type</span>
+                  <select
+                    value={feeType}
+                    onChange={(e) => setFeeType(e.target.value)}
+                  >
+                    {FEE_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Montant</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={feeAmount}
+                    onChange={(e) => setFeeAmount(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Payeur</span>
+                  <select
+                    value={feePayer}
+                    onChange={(e) => setFeePayer(e.target.value)}
+                  >
+                    <option value="CLIENT">Client</option>
+                    <option value="INSTITUTION">Institution</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Libellé</span>
+                  <input
+                    value={feeLabel}
+                    onChange={(e) => setFeeLabel(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={!feeAmount || addFee.isPending}
+                  onClick={() => addFee.mutate()}
+                >
+                  <Plus size={14} />
+                  Ajouter frais
+                </button>
+              </div>
+            )}
+          </Card>
+
+          <Card
+            title={
+              <>
+                <ScrollText size={17} /> Pièces &amp; preuves
+              </>
+            }
+          >
+            {proofLinks.length > 0 && (
+              <ul className="link-list" style={{ marginBottom: 10 }}>
+                {proofLinks.map((p) => (
+                  <li key={p.href}>
+                    <span>
+                      <FileSignature size={14} /> {p.label}
+                    </span>
+                    <a
+                      className="btn btn-ghost btn-sm"
+                      href={p.href}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Ouvrir
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {(docs.data ?? []).length === 0 && proofLinks.length === 0 ? (
+              <p className="muted small">Aucune pièce jointe.</p>
+            ) : (docs.data ?? []).length > 0 ? (
+              <ul className="link-list">
+                {(docs.data ?? []).map((d) => (
+                  <li key={d.id}>
+                    <span>
+                      <FileUp size={14} /> {d.name}
+                      <em className="muted small"> · {d.category_label}</em>
+                    </span>
+                    <a
+                      className="btn btn-ghost btn-sm"
+                      href={d.file}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Ouvrir
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            {canUploadDocs && (
               <div className="form-grid" style={{ marginTop: 12 }}>
                 <label className="field">
                   <span>Fichier</span>
@@ -1281,37 +1777,8 @@ export function FormalizationDetailPage() {
                 </button>
               </div>
             )}
-        </Card>
-
-        {myTask && (
-          <Card title={`Décision — ${myTask.step_name}`}>
-            <div className="card-title-icon">
-              <Gavel size={16} />
-            </div>
-            <DecisionPanel task={myTask} onDone={invalidateAll} />
           </Card>
-        )}
-
-        <Card title="Circuit">
-          {!workflow.data?.instance ? (
-            <EmptyState
-              message={
-                editable
-                  ? "Circuit non démarré — soumettez le dossier."
-                  : "Aucun circuit associé."
-              }
-            />
-          ) : (
-            <dl className="def-list two">
-              <div>
-                <dt>Statut circuit</dt>
-                <dd>
-                  <Badge value={workflow.data.instance.status} />
-                </dd>
-              </div>
-            </dl>
-          )}
-        </Card>
+        </div>
       </div>
     </div>
   );

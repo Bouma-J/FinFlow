@@ -97,7 +97,7 @@ Checklist minimale :
 
 1. `DJANGO_SECRET_KEY` fort et unique  
 2. `DJANGO_DEBUG=False`, `DJANGO_ALLOWED_HOSTS` restreints  
-3. `DJANGO_SECURE_SSL_REDIRECT=True` derrière un reverse-proxy TLS  
+3. `DJANGO_SECURE_SSL_REDIRECT=True` derrière un reverse-proxy TLS (domaine **ou** IP : voir [13 §8.1](13-guide-deploiement-ubuntu.md#81-tls-et-hsts-sans-nom-de-domaine))  
 4. Postgres managé + sauvegardes ; `DB_CONN_MAX_AGE` adapté (0 avec PgBouncer transaction)  
 5. Redis dédié (broker + cache DB index distincts)  
 6. MinIO / S3 avec credentials non par défaut + lifecycle (`deploy/s3/lifecycle.json`)  
@@ -163,14 +163,16 @@ Scripts utiles :
 
 ## 7. Sauvegarde / restauration
 
+Mécanisme d’instance : `deploy/backup/backup.sh` (Postgres `-Fc` + MinIO +
+secrets chiffrés), `verify.sh`, `restore.sh --target drill|live`. Détail et
+cron : [13 — Déploiement Ubuntu §11](13-guide-deploiement-ubuntu.md).
+
 | Volume / composant | Action |
 |--------------------|--------|
-| PostgreSQL | `pg_dump` / snapshots cloud |
-| MinIO/S3 | versioning bucket + réplication |
-| Redis | non critique (cache/broker) |
-| Secrets | coffre-fort (pas dans git) |
-
-Ordre de restore typique : DB → fichiers GED → redémarrage API/workers → `migrate` si besoin.
+| PostgreSQL | inclus dans le snapshot (`pg_dump -Fc`) |
+| MinIO/S3 | miroir du bucket + versioning recommandé |
+| Redis | non sauvegardé (cache / files Celery) |
+| Secrets | `secrets.env.enc` dans le snapshot (`FIELD_ENCRYPTION_KEY`) |
 
 ## 8. Mise à jour d’une release
 

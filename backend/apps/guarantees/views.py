@@ -3,12 +3,11 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
-from apps.clients.models import Client
-from apps.common.viewsets import AgencyScopedViewSet, TenantScopedViewSet
-from apps.workflow.models import WorkflowInstance
-from django.contrib.contenttypes.models import ContentType
-
+from apps.common.scoped import get_for_tenant
 from apps.common.tenancy import get_current_tenant_id
+from apps.common.viewsets import AgencyScopedViewSet, TenantScopedViewSet
+from apps.clients.models import Client
+from apps.workflow.models import WorkflowInstance
 
 from .models import (
     DationAsset,
@@ -264,10 +263,7 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
         client_id = request.query_params.get("client")
         if not client_id:
             raise ValidationError({"client": "Obligatoire."})
-        try:
-            client = Client.objects.get(pk=client_id)
-        except Client.DoesNotExist as exc:
-            raise ValidationError({"client": "Client introuvable."}) from exc
+        client = get_for_tenant(Client, client_id, error_field="client")
         try:
             data = release_client_context(
                 client=client,
@@ -287,20 +283,14 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
         guarantee_id = request.data.get("guarantee")
         if not guarantee_id:
             raise ValidationError({"guarantee": "Obligatoire."})
-        try:
-            guarantee = Guarantee.objects.get(pk=guarantee_id)
-        except Guarantee.DoesNotExist as exc:
-            raise ValidationError({"guarantee": "Garantie introuvable."}) from exc
+        guarantee = get_for_tenant(Guarantee, guarantee_id, error_field="guarantee")
 
         loan = None
         loan_id = request.data.get("loan")
         if loan_id:
             from apps.credits.models import Loan
 
-            try:
-                loan = Loan.objects.get(pk=loan_id)
-            except Loan.DoesNotExist as exc:
-                raise ValidationError({"loan": "Prêt introuvable."}) from exc
+            loan = get_for_tenant(Loan, loan_id, error_field="loan")
 
         fees = request.data.get("fees") or []
         if fees and not isinstance(fees, list):
@@ -346,10 +336,7 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
             if loan_id:
                 from apps.credits.models import Loan
 
-                try:
-                    loan = Loan.objects.get(pk=loan_id)
-                except Loan.DoesNotExist as exc:
-                    raise ValidationError({"loan": "Prêt introuvable."}) from exc
+                loan = get_for_tenant(Loan, loan_id, error_field="loan")
             kwargs["loan"] = loan
         try:
             updated = update_release_request(req, **kwargs)
@@ -635,20 +622,14 @@ class DationRequestViewSet(TenantScopedViewSet):
         client_id = request.data.get("client")
         if not client_id:
             raise ValidationError({"client": "Obligatoire."})
-        try:
-            client = Client.objects.get(pk=client_id)
-        except Client.DoesNotExist as exc:
-            raise ValidationError({"client": "Client introuvable."}) from exc
+        client = get_for_tenant(Client, client_id, error_field="client")
 
         application = None
         app_id = request.data.get("application")
         if app_id:
             from apps.credits.models import CreditApplication
 
-            try:
-                application = CreditApplication.objects.get(pk=app_id)
-            except CreditApplication.DoesNotExist as exc:
-                raise ValidationError({"application": "Dossier introuvable."}) from exc
+            application = get_for_tenant(CreditApplication, app_id, error_field="application")
 
         guarantee_ids = request.data.get("guarantee_ids") or []
         if isinstance(guarantee_ids, str):
@@ -705,12 +686,7 @@ class DationRequestViewSet(TenantScopedViewSet):
             if app_id:
                 from apps.credits.models import CreditApplication
 
-                try:
-                    application = CreditApplication.objects.get(pk=app_id)
-                except CreditApplication.DoesNotExist as exc:
-                    raise ValidationError(
-                        {"application": "Dossier introuvable."}
-                    ) from exc
+                application = get_for_tenant(CreditApplication, app_id, error_field="application")
         kwargs = {
             "user": request.user,
             "comment": request.data.get("comment"),
@@ -957,6 +933,7 @@ class GuaranteeFormalizationRequestViewSet(TenantScopedViewSet):
     serializer_class = GuaranteeFormalizationRequestSerializer
     action_perms = {
         "create": ["guarantees.initiate_guaranteeformalizationrequest"],
+        "compose_context": ["guarantees.initiate_guaranteeformalizationrequest"],
         "update_draft": ["guarantees.initiate_guaranteeformalizationrequest"],
         "advance_stage": ["guarantees.initiate_guaranteeformalizationrequest"],
         "start": ["guarantees.initiate_guaranteeformalizationrequest"],
@@ -985,6 +962,49 @@ class GuaranteeFormalizationRequestViewSet(TenantScopedViewSet):
             "guarantees.initiate_guaranteeformalizationrequest"
         )
 
+    @action(detail=False, methods=["get"], url_path="compose-context")
+    def compose_context(self, request):
+        """
+        Recherche par client ou dossier → garanties attachées au crédit.
+        Query: ?client=<id> ou ?application=<id>
+        """
+        from apps.clients.models import Client
+        from apps.credits.models import CreditApplication
+        from apps.guarantees.formalization_services import (
+            formalization_compose_context,
+        )
+
+        if not self._can_initiate(request.user):
+            raise PermissionDenied(
+                "Droit initiate_guaranteeformalizationrequest requis."
+            )
+        client_id = (request.query_params.get("client") or "").strip()
+        app_id = (request.query_params.get("application") or "").strip()
+        if not client_id and not app_id:
+            raise ValidationError(
+                {"detail": "Indiquez client ou application."}
+            )
+        application = None
+        client = None
+        if app_id:
+            try:
+                application = CreditApplication.objects.select_related(
+                    "client", "product"
+                ).get(pk=app_id)
+            except CreditApplication.DoesNotExist as exc:
+                raise ValidationError(
+                    {"application": "Dossier introuvable."}
+                ) from exc
+        else:
+            client = get_for_tenant(Client, client_id, error_field="client")
+        try:
+            payload = formalization_compose_context(
+                client=client, application=application
+            )
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        return Response(payload)
+
     def create(self, request, *args, **kwargs):
         if not self._can_initiate(request.user):
             raise PermissionDenied(
@@ -993,12 +1013,7 @@ class GuaranteeFormalizationRequestViewSet(TenantScopedViewSet):
         guarantee_id = request.data.get("guarantee")
         if not guarantee_id:
             raise ValidationError({"guarantee": "Obligatoire."})
-        try:
-            guarantee = Guarantee.objects.get(pk=guarantee_id)
-        except Guarantee.DoesNotExist as exc:
-            raise ValidationError(
-                {"guarantee": "Garantie introuvable."}
-            ) from exc
+        guarantee = get_for_tenant(Guarantee, guarantee_id, error_field="guarantee")
 
         fees = request.data.get("fees") or []
         if fees and not isinstance(fees, list):

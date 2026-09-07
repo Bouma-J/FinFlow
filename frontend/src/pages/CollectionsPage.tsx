@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDollarSign, Download } from "lucide-react";
-import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type {
@@ -17,10 +17,9 @@ import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import {
   Badge,
-  EmptyState,
   PageHeader,
   PaginationBar,
-  Spinner,
+  QueryStatus,
   formatMoney,
 } from "@/components/ui";
 
@@ -52,20 +51,41 @@ const ESCALATION_STAGES: {
 
 export function CollectionsPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { user } = useAuth();
   const qc = useQueryClient();
+  const canManageCase = hasPerm(user, "collections.change_collectioncase");
   const [page, setPage] = useState(1);
   const [parClass, setParClass] = useState("");
   const [stage, setStage] = useState("");
   const [openOnly, setOpenOnly] = useState(true);
-  const [mine, setMine] = useState(true);
-  const [followupDue, setFollowupDue] = useState(false);
+  const [mine, setMine] = useState(!canManageCase);
+  const [unassigned, setUnassigned] = useState(false);
+  const [followupDue, setFollowupDue] = useState(() =>
+    Boolean(
+      (location.state as { followupDue?: boolean } | null)?.followupDue,
+    ),
+  );
+  const [brokenPromises, setBrokenPromises] = useState(false);
   const [search, setSearch] = useState("");
+  const [dashScope, setDashScope] = useState<"mine" | "team">(
+    canManageCase ? "team" : "mine",
+  );
   const [showRules, setShowRules] = useState(false);
   const [ruleDays, setRuleDays] = useState("31");
   const [ruleStage, setRuleStage] =
     useState<Exclude<CollectionStage, "CLOSED">>("PRECONTENTIOUS");
   const [ruleLabel, setRuleLabel] = useState("");
+  const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fromHub = (location.state as { followupDue?: boolean } | null)
+      ?.followupDue;
+    if (fromHub) {
+      setFollowupDue(true);
+      setPage(1);
+    }
+  }, [location.state]);
 
   const canManageRules = hasPerm(
     user,
@@ -73,11 +93,12 @@ export function CollectionsPage() {
   );
 
   const dashboard = useQuery({
-    queryKey: ["collection-agent-dashboard"],
+    queryKey: ["collection-agent-dashboard", dashScope],
     queryFn: async () =>
       (
         await api.get<AgentCollectionDashboard>(
           "/collection-cases/agent-dashboard/",
+          { params: { scope: dashScope } },
         )
       ).data,
   });
@@ -93,7 +114,7 @@ export function CollectionsPage() {
       ).data,
   });
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [
       "collection-cases",
       page,
@@ -101,7 +122,9 @@ export function CollectionsPage() {
       stage,
       openOnly,
       mine,
+      unassigned,
       followupDue,
+      brokenPromises,
       search,
     ],
     queryFn: async () =>
@@ -113,12 +136,61 @@ export function CollectionsPage() {
             ...(stage ? { stage } : {}),
             ...(openOnly ? { open: 1 } : {}),
             ...(mine ? { mine: 1 } : {}),
+            ...(unassigned ? { unassigned: 1 } : {}),
             ...(followupDue ? { followup_due: 1 } : {}),
+            ...(brokenPromises ? { broken_promises: 1 } : {}),
             ...(search.trim() ? { search: search.trim() } : {}),
             ordering: followupDue ? "next_action_date" : "-days_overdue",
           },
         })
       ).data,
+  });
+
+  const refreshOverdue = useMutation({
+    mutationFn: async () => {
+      const res = await api.post(
+        "/collection-cases/refresh-overdue/",
+        {},
+        { validateStatus: (s) => s === 200 || s === 202 },
+      );
+      return { httpStatus: res.status, data: res.data as Record<string, unknown> };
+    },
+    onSuccess: async (payload) => {
+      const invalidate = () => {
+        qc.invalidateQueries({ queryKey: ["collection-cases"] });
+        qc.invalidateQueries({ queryKey: ["collection-agent-dashboard"] });
+      };
+      invalidate();
+      setRefreshNotice(null);
+      const taskId =
+        typeof payload.data?.task_id === "string"
+          ? payload.data.task_id
+          : null;
+      if (payload.httpStatus === 202 && taskId) {
+        setRefreshNotice("Recalcul en cours…");
+        try {
+          const { pollAsyncTask } = await import("@/utils/pollAsyncTask");
+          await pollAsyncTask(taskId, {
+            intervalMs: 3000,
+            maxAttempts: 40,
+            onTick: invalidate,
+          });
+          invalidate();
+          setRefreshNotice("Retards recalculés.");
+        } catch (e) {
+          setRefreshNotice(
+            e instanceof Error
+              ? e.message
+              : "Échec du recalcul des retards.",
+          );
+        }
+      } else if (payload.httpStatus === 200) {
+        setRefreshNotice("Retards recalculés.");
+      }
+    },
+    onError: () => {
+      setRefreshNotice("Impossible de lancer le recalcul des retards.");
+    },
   });
 
   const rules = useQuery({
@@ -166,6 +238,23 @@ export function CollectionsPage() {
     addRule.mutate();
   }
 
+  function applyKpiFilter(
+    kind: "mine" | "followups" | "broken" | "unassigned",
+  ) {
+    setPage(1);
+    setFollowupDue(kind === "followups");
+    setBrokenPromises(kind === "broken");
+    setUnassigned(kind === "unassigned");
+    if (kind === "mine") {
+      setMine(true);
+      setUnassigned(false);
+    } else if (kind === "unassigned") {
+      setMine(false);
+    } else if (dashScope === "team") {
+      setMine(false);
+    }
+  }
+
   async function exportCsv() {
     const res = await api.get("/collection-cases/export/", {
       params: {
@@ -173,7 +262,9 @@ export function CollectionsPage() {
         ...(stage ? { stage } : {}),
         ...(openOnly ? { open: 1 } : {}),
         ...(mine ? { mine: 1 } : {}),
+        ...(unassigned ? { unassigned: 1 } : {}),
         ...(followupDue ? { followup_due: 1 } : {}),
+        ...(brokenPromises ? { broken_promises: 1 } : {}),
         ...(search.trim() ? { search: search.trim() } : {}),
         ordering: followupDue ? "next_action_date" : "-days_overdue",
       },
@@ -196,30 +287,113 @@ export function CollectionsPage() {
         title="Recouvrement"
         subtitle="Dossiers en retard, encaissements et suivi terrain"
         actions={
-          <button type="button" className="btn btn-ghost btn-sm" onClick={exportCsv}>
-            <Download size={14} /> Export CSV
-          </button>
+          <div className="row-actions" style={{ gap: 8 }}>
+            {canManageCase && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={refreshOverdue.isPending}
+                onClick={() => refreshOverdue.mutate()}
+              >
+                {refreshOverdue.isPending
+                  ? "Lancement…"
+                  : "Recalculer les retards"}
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={exportCsv}
+            >
+              <Download size={14} /> Export CSV
+            </button>
+          </div>
         }
       />
 
+      {refreshNotice && (
+        <p
+          className={
+            refreshNotice.includes("Échec") ||
+            refreshNotice.includes("Impossible") ||
+            refreshNotice.includes("Délai")
+              ? "form-error"
+              : "muted"
+          }
+          style={{ marginBottom: 10 }}
+        >
+          {refreshNotice}
+        </p>
+      )}
+
+      {canManageCase && (
+        <div className="row-actions" style={{ marginBottom: 10, gap: 8 }}>
+          <button
+            type="button"
+            className={`btn btn-sm ${dashScope === "mine" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setDashScope("mine")}
+          >
+            Mes indicateurs
+          </button>
+          <button
+            type="button"
+            className={`btn btn-sm ${dashScope === "team" ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => setDashScope("team")}
+          >
+            Équipe / filiale
+          </button>
+        </div>
+      )}
+
       {dash && (
         <div className="mini-kpis" style={{ marginBottom: 16 }}>
-          <div className="mini-kpi">
+          <button
+            type="button"
+            className="mini-kpi"
+            onClick={() => {
+              setPage(1);
+              setFollowupDue(false);
+              setBrokenPromises(false);
+              setUnassigned(false);
+              setMine(dashScope === "mine");
+            }}
+            title="Filtrer le portefeuille"
+          >
             <span className="mk-value">{dash.assigned_open}</span>
-            <span className="mk-label">Mon portefeuille</span>
-          </div>
-          <div className="mini-kpi">
+            <span className="mk-label">
+              {dashScope === "team" ? "Dossiers ouverts" : "Mon portefeuille"}
+            </span>
+          </button>
+          {dashScope === "team" && (
+            <button
+              type="button"
+              className="mini-kpi"
+              onClick={() => applyKpiFilter("unassigned")}
+            >
+              <span className="mk-value">{dash.unassigned_open ?? 0}</span>
+              <span className="mk-label">Non affectés</span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="mini-kpi"
+            onClick={() => applyKpiFilter("followups")}
+          >
             <span className="mk-value">{dash.followups_due}</span>
             <span className="mk-label">Actions dues</span>
-          </div>
+          </button>
           <div className="mini-kpi">
             <span className="mk-value">{dash.pending_promises}</span>
             <span className="mk-label">Promesses en cours</span>
           </div>
-          <div className="mini-kpi">
+          <button
+            type="button"
+            className="mini-kpi"
+            onClick={() => applyKpiFilter("broken")}
+          >
             <span className="mk-value">{dash.broken_promises_30d}</span>
             <span className="mk-label">Promesses rompues (30 j)</span>
-          </div>
+          </button>
           <div className="mini-kpi">
             <span className="mk-value">
               {formatMoney(dash.repayments_this_month_amount)}
@@ -361,9 +535,22 @@ export function CollectionsPage() {
             onChange={(e) => {
               setPage(1);
               setMine(e.target.checked);
+              if (e.target.checked) setUnassigned(false);
             }}
           />
           <span>Mon portefeuille</span>
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={unassigned}
+            onChange={(e) => {
+              setPage(1);
+              setUnassigned(e.target.checked);
+              if (e.target.checked) setMine(false);
+            }}
+          />
+          <span>Non affectés</span>
         </label>
         <label className="checkbox">
           <input
@@ -375,6 +562,17 @@ export function CollectionsPage() {
             }}
           />
           <span>Actions dues</span>
+        </label>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={brokenPromises}
+            onChange={(e) => {
+              setPage(1);
+              setBrokenPromises(e.target.checked);
+            }}
+          />
+          <span>Promesses rompues</span>
         </label>
         {canManageRules && (
           <button
@@ -480,11 +678,13 @@ export function CollectionsPage() {
         </div>
       )}
 
-      {isLoading || !data ? (
-        <Spinner />
-      ) : data.results.length === 0 ? (
-        <EmptyState message="Aucun dossier de recouvrement." />
-      ) : (
+      <QueryStatus
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={!data?.results.length}
+        emptyMessage="Aucun dossier de recouvrement."
+        onRetry={() => refetch()}
+      >
         <>
           <table className="table card">
             <thead>
@@ -501,7 +701,7 @@ export function CollectionsPage() {
               </tr>
             </thead>
             <tbody>
-              {data.results.map((c) => (
+              {(data?.results ?? []).map((c) => (
                 <tr
                   key={c.id}
                   className="row-clickable"
@@ -532,9 +732,13 @@ export function CollectionsPage() {
               ))}
             </tbody>
           </table>
-          <PaginationBar page={page} count={data.count} onPageChange={setPage} />
+          <PaginationBar
+            page={page}
+            count={data?.count ?? 0}
+            onPageChange={setPage}
+          />
         </>
-      )}
+      </QueryStatus>
     </div>
   );
 }

@@ -5,7 +5,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api/client";
 import type { CreditApplication } from "@/api/types";
 import { CreditApplicationForm } from "@/components/CreditApplicationForm";
-import { PageHeader, Spinner } from "@/components/ui";
+import { ErrorState, PageHeader, Spinner } from "@/components/ui";
 
 const EDITABLE_STATUSES = ["DRAFT", "RETURNED"];
 
@@ -13,14 +13,21 @@ export function CreditApplicationEditPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
 
-  const { data: app, isLoading } = useQuery({
+  const { data: app, isLoading, isError, refetch } = useQuery({
     queryKey: ["credit-application", id],
     queryFn: async () =>
       (await api.get<CreditApplication>(`/credit-applications/${id}/`)).data,
     enabled: !!id,
   });
 
-  if (isLoading || !app) return <Spinner />;
+  if (isLoading) return <Spinner />;
+  if (isError || !app)
+    return (
+      <ErrorState
+        message="Impossible de charger le dossier de crédit."
+        onRetry={() => refetch()}
+      />
+    );
 
   const editable = EDITABLE_STATUSES.includes(app.status);
 

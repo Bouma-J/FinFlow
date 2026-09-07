@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { api } from "@/api/client";
 import type { Paginated, Permission, Role } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Card, EmptyState, PageHeader, Spinner, TenantScopeNotice } from "@/components/ui";
+import { Card, PageHeader, QueryStatus, Spinner, TenantScopeNotice } from "@/components/ui";
 
 export function AdminRolesPage() {
   const qc = useQueryClient();
@@ -114,11 +114,13 @@ export function AdminRolesPage() {
 
       <div className="detail-grid stacked">
         <Card title="Rôles de la filiale">
-          {roles.isLoading || !roles.data ? (
-            <Spinner />
-          ) : roles.data.results.length === 0 ? (
-            <EmptyState message="Aucun rôle pour cette filiale." />
-          ) : (
+          <QueryStatus
+            isLoading={roles.isLoading}
+            isError={roles.isError}
+            isEmpty={!roles.data?.results.length}
+            emptyMessage="Aucun rôle pour cette filiale."
+            onRetry={() => roles.refetch()}
+          >
             <table className="table">
               <thead>
                 <tr>
@@ -129,7 +131,7 @@ export function AdminRolesPage() {
                 </tr>
               </thead>
               <tbody>
-                {roles.data.results.map((r) => (
+                {(roles.data?.results ?? []).map((r) => (
                   <tr key={r.id}>
                     <td>{r.name}</td>
                     <td className="num">{r.permissions.length}</td>
@@ -146,7 +148,7 @@ export function AdminRolesPage() {
                 ))}
               </tbody>
             </table>
-          )}
+          </QueryStatus>
         </Card>
 
         <Card

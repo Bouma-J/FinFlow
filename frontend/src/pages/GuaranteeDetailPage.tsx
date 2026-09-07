@@ -33,6 +33,7 @@ import { hasPerm } from "@/auth/permissions";
 import {
   Badge,
   Card,
+  ErrorState,
   PageHeader,
   Spinner,
   formatDate,
@@ -112,7 +113,7 @@ export function GuaranteeDetailPage({
   const qc = useQueryClient();
   const { user } = useAuth();
 
-  const { data: g, isLoading } = useQuery({
+  const { data: g, isLoading, isError, refetch } = useQuery({
     queryKey: ["guarantee", id],
     queryFn: async () => (await api.get<Guarantee>(`/guarantees/${id}/`)).data,
     enabled: !!id,
@@ -149,7 +150,15 @@ export function GuaranteeDetailPage({
     },
   });
 
-  if (isLoading || !g) return <Spinner />;
+  if (isLoading) return <Spinner />;
+  if (isError || !g) {
+    return (
+      <ErrorState
+        message="Impossible de charger la garantie."
+        onRetry={() => refetch()}
+      />
+    );
+  }
 
   const backTo = appId ? `/dossiers/${appId}` : "/garanties";
   const isMortgage = g.guarantee_type === "MORTGAGE";
@@ -167,6 +176,7 @@ export function GuaranteeDetailPage({
     hasPerm(user, "guarantees.initiate_guaranteereleaserequest");
   const canFormalize =
     g.status === "ACTIVE" &&
+    !!g.application &&
     !openFormalization.data &&
     !g.formalized_at &&
     hasPerm(user, "guarantees.initiate_guaranteeformalizationrequest");
@@ -241,7 +251,7 @@ export function GuaranteeDetailPage({
                 {canFormalize && (
                   <Link
                     className="btn btn-primary"
-                    to={`/formalisations/nouvelle?client=${g.client}&guarantee=${g.id}`}
+                    to={`/formalisations/nouvelle?client=${g.client}&application=${g.application}&guarantee=${g.id}`}
                   >
                     <Stamp />
                     Formaliser

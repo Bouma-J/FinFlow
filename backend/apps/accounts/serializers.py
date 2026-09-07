@@ -5,7 +5,11 @@ from apps.common.tenancy import get_current_tenant_id
 from apps.tenants.models import Agency
 
 from .models import DataScope, Delegation, TenantRole, User
-from .services import create_tenant_role, validate_groups_for_tenant
+from .services import (
+    create_tenant_role,
+    validate_groups_for_tenant,
+    validate_sod_role_assignment,
+)
 
 
 class PermissionSerializer(serializers.ModelSerializer):
@@ -179,6 +183,15 @@ class UserSerializer(serializers.ModelSerializer):
             )
             if is_group and not attrs.get("is_staff", True):
                 pass  # autoriser désactivation staff groupe
+        groups = attrs.get("groups")
+        if groups is not None:
+            tenant = attrs.get("tenant", getattr(self.instance, "tenant", None))
+            if tenant is not None:
+                try:
+                    validate_groups_for_tenant(tenant.id, groups)
+                    validate_sod_role_assignment(groups)
+                except ValueError as exc:
+                    raise serializers.ValidationError({"group_ids": str(exc)})
         return self._validate_user_scope(attrs)
 
     def _validate_user_scope(self, attrs):
@@ -372,6 +385,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             if groups and not as_admin:
                 try:
                     validate_groups_for_tenant(attrs["tenant"].id, groups)
+                    validate_sod_role_assignment(groups)
                 except ValueError as exc:
                     raise serializers.ValidationError({"group_ids": str(exc)})
         elif tenant is not None:
@@ -418,6 +432,7 @@ class UserCreateSerializer(serializers.ModelSerializer):
             if groups:
                 try:
                     validate_groups_for_tenant(user.tenant_id, groups)
+                    validate_sod_role_assignment(groups)
                 except ValueError as exc:
                     raise serializers.ValidationError({"group_ids": str(exc)})
                 user.groups.add(*groups)
@@ -646,6 +661,7 @@ class MeSerializer(serializers.ModelSerializer):
     permissions = serializers.SerializerMethodField()
     roles = serializers.SerializerMethodField()
     tenant_branding = serializers.SerializerMethodField()
+    features = serializers.SerializerMethodField()
     agencies_detail = AgencySummarySerializer(
         source="agencies", many=True, read_only=True
     )
@@ -657,6 +673,7 @@ class MeSerializer(serializers.ModelSerializer):
             "tenant", "agency", "agencies_detail", "data_scope",
             "is_group_level", "is_staff", "is_superuser", "mfa_enabled",
             "must_change_password", "roles", "permissions", "tenant_branding",
+            "features",
         ]
 
     def get_permissions(self, obj):
@@ -668,6 +685,11 @@ class MeSerializer(serializers.ModelSerializer):
             tr = getattr(group, "tenant_role", None)
             names.append(tr.name if tr else group.name)
         return names
+
+    def get_features(self, obj):
+        from django.conf import settings
+
+        return {"sms": bool(getattr(settings, "FEATURE_SMS", False))}
 
     def get_tenant_branding(self, obj):
         from apps.common.storage_urls import tenant_logo_url
@@ -689,12 +711,81 @@ class MeSerializer(serializers.ModelSerializer):
 
 class DelegationSerializer(serializers.ModelSerializer):
     is_currently_valid = serializers.BooleanField(read_only=True)
+    delegator_display = serializers.SerializerMethodField()
+    delegate_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Delegation
         fields = [
-            "id", "delegator", "delegate", "reason",
-            "start_date", "end_date", "is_active",
-            "is_currently_valid", "created_at",
+            "id",
+            "delegator",
+            "delegator_display",
+            "delegate",
+            "delegate_display",
+            "reason",
+            "start_date",
+            "end_date",
+            "is_active",
+            "is_currently_valid",
+            "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = [
+            "id",
+            "created_at",
+            "delegator_display",
+            "delegate_display",
+            "is_currently_valid",
+        ]
+
+    def get_delegator_display(self, obj):
+        user = obj.delegator
+        if user is None:
+            return ""
+        return user.get_full_name() or user.username
+
+    def get_delegate_display(self, obj):
+        user = obj.delegate
+        if user is None:
+            return ""
+        return user.get_full_name() or user.username
+
+    def validate(self, attrs):
+        delegator = attrs.get("delegator")
+        delegate = attrs.get("delegate")
+        if self.instance is not None:
+            if delegator is None:
+                delegator = self.instance.delegator
+            if delegate is None:
+                delegate = self.instance.delegate
+        if delegator and delegate and delegator.pk == delegate.pk:
+            raise serializers.ValidationError(
+                {"delegate": "Le délégataire doit être distinct du délégant."}
+            )
+        start = attrs.get("start_date")
+        end = attrs.get("end_date")
+        if self.instance is not None:
+            if start is None:
+                start = self.instance.start_date
+            if end is None:
+                end = self.instance.end_date
+        if start and end and end < start:
+            raise serializers.ValidationError(
+                {"end_date": "La date de fin doit être postérieure ou égale au début."}
+            )
+        return attrs
+
+
+class DelegationGiveSerializer(serializers.Serializer):
+    """Création self-service : le délégant est l'utilisateur connecté."""
+
+    delegate = serializers.UUIDField()
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=255)
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+
+    def validate(self, attrs):
+        if attrs["end_date"] < attrs["start_date"]:
+            raise serializers.ValidationError(
+                {"end_date": "La date de fin doit être postérieure ou égale au début."}
+            )
+        return attrs

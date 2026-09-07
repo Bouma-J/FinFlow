@@ -1,7 +1,47 @@
+import copy
+
 from rest_framework import serializers
+
+from apps.common.secret_crypto import encrypt_auth_config
 
 from .models import CoreBankingConnector, IntegrationLog
 from .perfect_defaults import perfect_auth_config, perfect_mapping_rules
+
+
+def _redact_mapping_rules_for_api(rules: dict | None) -> dict:
+    """Masque callback_secret à la lecture API (flag configuré seulement)."""
+    out = copy.deepcopy(rules or {})
+    disbursement = out.get("disbursement")
+    if isinstance(disbursement, dict):
+        secret = (disbursement.get("callback_secret") or "").strip()
+        disbursement["callback_secret_configured"] = bool(secret)
+        disbursement["callback_secret"] = ""
+        out["disbursement"] = disbursement
+    return out
+
+
+def _merge_mapping_rules(existing: dict | None, incoming: dict | None) -> dict:
+    """
+    Fusionne mapping_rules ; un callback_secret vide conserve l'existant
+    (même logique que auth_config password).
+    """
+    merged = copy.deepcopy(existing or {})
+    incoming = copy.deepcopy(incoming or {})
+    for key, value in incoming.items():
+        if key == "disbursement" and isinstance(value, dict):
+            prev = dict(merged.get("disbursement") or {})
+            new_secret = value.get("callback_secret", None)
+            for dk, dv in value.items():
+                if dk == "callback_secret":
+                    continue
+                prev[dk] = dv
+            if new_secret not in (None, ""):
+                prev["callback_secret"] = new_secret
+            # Si clé absente du payload, ne pas toucher au secret existant.
+            merged["disbursement"] = prev
+        else:
+            merged[key] = value
+    return merged
 
 
 class CoreBankingConnectorSerializer(serializers.ModelSerializer):
@@ -18,6 +58,13 @@ class CoreBankingConnectorSerializer(serializers.ModelSerializer):
             "mapping_rules": {"required": False},
         }
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["mapping_rules"] = _redact_mapping_rules_for_api(
+            data.get("mapping_rules")
+        )
+        return data
+
     def create(self, validated_data):
         """Applique les défauts Perfect si auth / mapping absents."""
         protocol = validated_data.get("protocol") or CoreBankingConnector.Protocol.REST
@@ -31,6 +78,10 @@ class CoreBankingConnectorSerializer(serializers.ModelSerializer):
             elif "scope" not in auth:
                 auth = {**perfect_auth_config(), **auth}
                 validated_data["auth_config"] = auth
+        if "auth_config" in validated_data:
+            validated_data["auth_config"] = encrypt_auth_config(
+                validated_data["auth_config"]
+            )
         return super().create(validated_data)
 
     def update(self, instance, validated_data):
@@ -44,7 +95,12 @@ class CoreBankingConnectorSerializer(serializers.ModelSerializer):
                 merged[key] = value
             if "scope" not in merged:
                 merged["scope"] = perfect_auth_config()["scope"]
-            validated_data["auth_config"] = merged
+            validated_data["auth_config"] = encrypt_auth_config(merged)
+        if "mapping_rules" in validated_data:
+            validated_data["mapping_rules"] = _merge_mapping_rules(
+                instance.mapping_rules,
+                validated_data.get("mapping_rules"),
+            )
         return super().update(instance, validated_data)
 
 

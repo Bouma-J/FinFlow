@@ -29,15 +29,20 @@ class DocumentCategoryViewSet(TenantScopedViewSet):
 
 
 class DocumentViewSet(TenantScopedViewSet):
-    queryset = Document.objects.select_related("category", "uploaded_by").all()
+    queryset = Document.objects.select_related(
+        "category", "uploaded_by", "content_type"
+    ).all()
     serializer_class = DocumentSerializer
     action_perms = {
         "download": ["documents.view_document"],
         "upload_url": ["documents.add_document"],
         "expiring_soon": ["documents.view_document"],
+        "restore": ["documents.change_document"],
     }
-    filterset_fields = ["category", "content_type", "object_id"]
-    search_fields = ["name"]
+    filterset_fields = ["category", "content_type", "object_id", "category__code"]
+    search_fields = ["name", "category__label", "category__code"]
+    ordering_fields = ["created_at", "name", "expiry_date", "size_bytes"]
+    ordering = ["-created_at"]
 
     def perform_create(self, serializer):
         instance = serializer.save(uploaded_by=self.request.user)
@@ -49,12 +54,23 @@ class DocumentViewSet(TenantScopedViewSet):
         bump_ged_usage(instance.tenant_id, instance.size_bytes)
 
     def perform_destroy(self, instance):
-        size = int(instance.size_bytes or 0)
-        tenant_id = instance.tenant_id
-        super().perform_destroy(instance)
-        from .quotas import bump_ged_usage
+        # Soft-delete : rétention fichier + quota jusqu'à purge hard.
+        instance.soft_delete(user=self.request.user)
 
-        bump_ged_usage(tenant_id, -size)
+    @action(detail=True, methods=["post"])
+    def restore(self, request, pk=None):
+        """Restaure un document soft-deleted (droit change_document)."""
+        doc = (
+            Document.including_deleted.filter(pk=pk)
+            .filter(tenant_id=get_current_tenant_id())
+            .first()
+        )
+        if doc is None:
+            raise Http404()
+        if not doc.is_deleted:
+            return Response({"detail": "Document déjà actif."})
+        doc.restore(user=request.user)
+        return Response(DocumentSerializer(doc, context={"request": request}).data)
 
     @action(detail=True, methods=["get"])
     def download(self, request, pk=None):
@@ -80,11 +96,22 @@ class DocumentViewSet(TenantScopedViewSet):
                 "L'upload présigné n'est disponible qu'avec STORAGE_BACKEND=s3."
             )
         filename = (request.data.get("filename") or "upload.bin").strip()
+        size = request.data.get("size")
+        try:
+            size_int = int(size) if size is not None and str(size).strip() != "" else None
+        except (TypeError, ValueError):
+            size_int = None
+        from apps.common.upload_validation import assert_upload_meta
+
+        filename = assert_upload_meta(filename=filename, size=size_int)
         content_type = (
             request.data.get("content_type") or "application/octet-stream"
         )
         tenant_id = get_current_tenant_id() or "group"
-        category = request.data.get("category") or "misc"
+        from apps.common.files import safe_filename
+
+        raw_category = (request.data.get("category") or "misc").strip()
+        category = safe_filename(raw_category.replace("/", "_")) or "misc"
         key = f"documents/{tenant_id}/{category}/{uuid.uuid4().hex}_{filename}"
         payload = generate_presigned_upload(
             key=key, content_type=content_type, expires=900

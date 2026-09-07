@@ -8,7 +8,7 @@ from django.utils import timezone
 logger = logging.getLogger("finflow")
 
 
-@shared_task(ignore_result=True)
+@shared_task(ignore_result=True, soft_time_limit=120, time_limit=180)
 def flag_sla_breaches():
     """Repère les tâches d'approbation hors SLA et notifie (dédup 24 h)."""
     from apps.notifications.models import NotificationLog

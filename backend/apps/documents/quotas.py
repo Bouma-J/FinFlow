@@ -21,13 +21,19 @@ def recalculate_tenant_ged_usage(tenant_id) -> int:
 
 @transaction.atomic
 def assert_ged_quota(tenant, additional_bytes: int) -> None:
-    """Lève ValidationError si le quota serait dépassé."""
+    """Lève ValidationError si le quota serait dépassé (sous verrou ligne)."""
     from rest_framework import serializers
+    from apps.tenants.models import Tenant
 
     if tenant is None:
         return
-    used = int(tenant.ged_used_bytes or 0)
-    quota = int(tenant.ged_quota_bytes or 0)
+    locked = (
+        Tenant.objects.select_for_update().filter(pk=tenant.pk).first()
+    )
+    if locked is None:
+        return
+    used = int(locked.ged_used_bytes or 0)
+    quota = int(locked.ged_quota_bytes or 0)
     if quota <= 0:
         return
     if used + int(additional_bytes) > quota:

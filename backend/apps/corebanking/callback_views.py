@@ -12,17 +12,17 @@ class CreditDisbursementCallbackView(APIView):
     Callback Perfect pour une demande de crédit / décaissement.
 
     POST /api/v1/cbs/callbacks/crd/<application_id>/
-    Header optionnel : X-CBS-Callback-Secret (si configuré sur le connecteur).
+    Header requis : X-CBS-Callback-Secret (doit correspondre à callback_secret
+    du connecteur — les callbacks sans secret sont refusés).
     """
 
     permission_classes = [AllowAny]
     authentication_classes = []
 
     def post(self, request, application_id):
+        # Header uniquement — pas de ?secret= (fuite logs proxy / Referer).
         secret = (
-            request.headers.get("X-CBS-Callback-Secret")
-            or request.query_params.get("secret")
-            or ""
+            request.headers.get("X-CBS-Callback-Secret") or ""
         ).strip() or None
         try:
             result = apply_cbs_callback(

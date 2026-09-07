@@ -10,14 +10,19 @@
 # Le script demande les domaines, mots de passe DB/MinIO, e-mail Certbot, etc.,
 # installe Docker/Nginx, génère le .env, démarre Compose prod, configure TLS.
 #
-# Variante sans domaine (accès par IP en HTTP) :
+# Variante sans domaine (accès par IP, HTTP ou HTTPS) :
 #   sudo bash deploy/ubuntu-install-ip.sh
+#   sudo bash deploy/tls-ip/enable-ip-tls.sh /opt/finflow
+#
+# Mise à jour d'une instance déjà déployée :
+#   sudo bash deploy/ubuntu-update.sh
 # =========================================================================
 set -euo pipefail
 
 REPO_URL_DEFAULT="https://github.com/Bouma-J/FinFlow.git"
 INSTALL_DIR_DEFAULT="/opt/finflow"
 COMPOSE_FILES="-f docker-compose.yml -f docker-compose.prod.yml"
+DEPLOY_MODE="domain"
 
 # Couleurs (si TTY)
 if [[ -t 1 ]]; then
@@ -79,6 +84,11 @@ ask_yes_no() {
 
 rand_secret() {
   openssl rand -base64 48 | tr -d '\n'
+}
+
+rand_fernet_key() {
+  # Clé Fernet (32 octets, base64 url-safe) pour chiffrement SMTP / secrets au repos
+  openssl rand -base64 32 | tr '+/' '-_' | tr -d '\n'
 }
 
 rand_password() {
@@ -220,6 +230,7 @@ write_env_file() {
     env_line FRONTEND_BASE_URL "https://${APP_DOMAIN}"
     echo 'SEED_DEMO="0"'
     echo 'SMTP_SSL_VERIFY="1"'
+    env_line FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
     echo
     env_line POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
     echo
@@ -229,6 +240,7 @@ write_env_file() {
     echo 'AWS_S3_URL_PROTOCOL="https:"'
     echo 'AWS_STORAGE_BUCKET_NAME="finflow-documents"'
     echo
+    # Pile e-mail : backend SMTP + worker Celery (alertes async) via Compose
     env_line EMAIL_BACKEND "$EMAIL_BACKEND"
     env_line EMAIL_HOST "$EMAIL_HOST"
     env_line EMAIL_PORT "$EMAIL_PORT"
@@ -264,7 +276,7 @@ server {
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 120s;
-        client_max_body_size 100m;
+        client_max_body_size 25m;
     }
 }
 EOF
@@ -281,7 +293,7 @@ server {
 
     ignore_invalid_headers off;
     proxy_buffering off;
-    client_max_body_size 100m;
+    client_max_body_size 25m;
 
     location / {
         proxy_pass http://127.0.0.1:9000;
@@ -366,30 +378,85 @@ write_helpers() {
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$dir"
+if [[ -f "$dir/deploy/compose-files.sh" ]]; then
+  exec docker compose \$(bash "$dir/deploy/compose-files.sh" "$dir") "\$@"
+fi
 exec docker compose $COMPOSE_FILES "\$@"
 EOF
   chmod +x "$dir/scripts/finflow"
 
-  cat > "$dir/scripts/backup-db.sh" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-STAMP=$(date +%Y%m%d_%H%M%S)
-OUT=/var/backups/finflow
-DIR="$(cd "$(dirname "$0")/.." && pwd)"
-mkdir -p "$OUT"
-cd "$DIR"
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
-  pg_dump -U finflow finflow | gzip > "$OUT/finflow_${STAMP}.sql.gz"
-find "$OUT" -name 'finflow_*.sql.gz' -mtime +14 -delete
-echo "Backup OK: $OUT/finflow_${STAMP}.sql.gz"
-EOF
-  chmod +x "$dir/scripts/backup-db.sh"
-  mkdir -p /var/backups/finflow
+  if [[ -f "$dir/deploy/backup/wire-install.sh" ]]; then
+    bash "$dir/deploy/backup/wire-install.sh" "$dir"
+  else
+    warn "deploy/backup/wire-install.sh absent — cron de snapshot non installé."
+  fi
+
+  echo "$DEPLOY_MODE" > "$dir/.finflow-deploy-mode"
+  chmod 644 "$dir/.finflow-deploy-mode"
+
+  if [[ -f "$dir/deploy/ubuntu-update.sh" ]]; then
+    chmod +x "$dir/deploy/ubuntu-update.sh"
+    ln -sf "$dir/deploy/ubuntu-update.sh" "$dir/scripts/update.sh"
+    ln -sf "$dir/deploy/ubuntu-update.sh" /usr/local/bin/finflow-update
+  fi
 
   if [[ ! -e /usr/local/bin/finflow ]]; then
     ln -sf "$dir/scripts/finflow" /usr/local/bin/finflow
+  else
+    ln -sf "$dir/scripts/finflow" /usr/local/bin/finflow
   fi
-  ok "Helpers : finflow, $dir/scripts/backup-db.sh"
+  ok "Helpers : finflow, finflow-update, $dir/scripts/backup.sh"
+}
+
+post_deploy_commands() {
+  local dir="$1"
+  cd "$dir"
+  log "Post-déploiement : migrations, rôles, bootstrap filiales…"
+  # shellcheck disable=SC2086
+  docker compose $COMPOSE_FILES exec -T backend \
+    python manage.py migrate --noinput \
+    && ok "Migrations OK." \
+    || warn "migrate à relancer."
+
+  # shellcheck disable=SC2086
+  docker compose $COMPOSE_FILES exec -T backend \
+    python manage.py sync_role_packs \
+    && ok "Packs de rôles synchronisés." \
+    || warn "sync_role_packs à relancer plus tard."
+
+  # shellcheck disable=SC2086
+  docker compose $COMPOSE_FILES exec -T backend \
+    python manage.py bootstrap_all_tenants \
+    && ok "Filiales bootstrapées (circuits ML / Dation / Formalisation)." \
+    || warn "bootstrap_all_tenants : aucune filiale encore, ou à relancer après création."
+
+  log "Vérification pile e-mail (cryptography, backend SMTP, worker)…"
+  # shellcheck disable=SC2086
+  if docker compose $COMPOSE_FILES exec -T backend \
+    python manage.py shell -c "
+from django.conf import settings
+from cryptography.fernet import Fernet  # noqa: F401
+from apps.common.secret_crypto import encrypt_str, decrypt_str
+assert decrypt_str(encrypt_str('install-check')) == 'install-check'
+backend = settings.EMAIL_BACKEND or ''
+assert 'smtp' in backend.lower(), backend
+print('OK EMAIL_BACKEND=smtp')
+print('OK SMTP_SSL_VERIFY=', getattr(settings, 'SMTP_SSL_VERIFY', None))
+print('OK FIELD_ENCRYPTION=', 'set' if (getattr(settings, 'FIELD_ENCRYPTION_KEY', '') or '').strip() else 'derived')
+print('OK DEFAULT_FROM_EMAIL=', settings.DEFAULT_FROM_EMAIL)
+"
+  then
+    ok "Pile crypto / settings e-mail OK."
+  else
+    warn "Vérification e-mail incomplète — contrôlez les logs backend."
+  fi
+
+  # shellcheck disable=SC2086
+  if docker compose $COMPOSE_FILES ps --status running 2>/dev/null | grep -qE '[[:space:]]worker[[:space:]]'; then
+    ok "Worker Celery actif (envoi async des alertes)."
+  else
+    warn "Worker Celery non détecté — les alertes e-mail async ne partiront pas."
+  fi
 }
 
 print_summary() {
@@ -409,12 +476,19 @@ ${C_OK}════════════════════════�
     1. Créer un super-utilisateur :
          cd ${INSTALL_DIR}
          finflow exec backend python manage.py createsuperuser
-    2. Synchroniser les packs de rôles :
-         finflow exec backend python manage.py sync_role_packs
-    3. Planifier les sauvegardes DB (cron 02:30) :
-         ${INSTALL_DIR}/scripts/backup-db.sh
+    2. Vérifier bootstrap (si filiales déjà créées) :
+         finflow exec backend python manage.py bootstrap_all_tenants
+    3. E-mail : Administration → Alertes e-mail (SMTP filiale) + bouton Test
+       (repli global déjà dans .env si configuré à l'install)
+    4. Sauvegardes : cron 02:30 déjà posé (/etc/cron.d/finflow-backup).
+       Épreuve : ${INSTALL_DIR}/scripts/restore.sh --target drill --snapshot <dir>
+       Sinistre : … --target live --confirm=RESTORE
+    5. Mises à jour ultérieures :
+         sudo finflow-update
+         # ou : sudo bash ${INSTALL_DIR}/deploy/ubuntu-update.sh
 
-  Conservez précieusement le fichier ${INSTALL_DIR}/.env (secrets).
+  Conservez précieusement le fichier ${INSTALL_DIR}/.env (secrets,
+  dont FIELD_ENCRYPTION_KEY — ne pas régénérer après sauvegarde de mots de passe SMTP).
 
 EOF
 }
@@ -461,8 +535,14 @@ collect_inputs() {
   prompt_secret "DJANGO_SECRET_KEY" "$GEN_DJANGO"
   DJANGO_SECRET_KEY="$REPLY"
 
+  GEN_FERNET="$(rand_fernet_key)"
+  prompt_secret "FIELD_ENCRYPTION_KEY (chiffrement mots de passe SMTP filiale)" "$GEN_FERNET"
+  FIELD_ENCRYPTION_KEY="$REPLY"
+  [[ -n "$FIELD_ENCRYPTION_KEY" ]] || die "FIELD_ENCRYPTION_KEY obligatoire."
+
   echo
-  if ask_yes_no "Configurer un SMTP global maintenant ? (sinon console / UI filiale)" "n"; then
+  SMTP_GLOBAL_CONFIGURED=0
+  if ask_yes_no "Configurer un SMTP global maintenant ? (sinon UI filiale Admin → Alertes)" "y"; then
     EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"
     prompt "SMTP host" "smtp.gmail.com"
     EMAIL_HOST="$REPLY"
@@ -476,8 +556,14 @@ collect_inputs() {
     EMAIL_HOST_PASSWORD="$REPLY"
     prompt "DEFAULT_FROM_EMAIL" "FIN_FLOW <noreply@${APP_DOMAIN}>"
     DEFAULT_FROM_EMAIL="$REPLY"
+    [[ -n "$EMAIL_HOST" ]] || die "SMTP host obligatoire."
+    [[ -n "$EMAIL_HOST_USER" ]] || die "SMTP user obligatoire."
+    [[ -n "$EMAIL_HOST_PASSWORD" ]] || die "SMTP password obligatoire."
+    SMTP_GLOBAL_CONFIGURED=1
   else
-    EMAIL_BACKEND="django.core.mail.backends.console.EmailBackend"
+    # Toujours le backend SMTP en prod : sans credentials = repli UI filiale
+    # (évite le backend console qui fait croire à un envoi réussi).
+    EMAIL_BACKEND="django.core.mail.backends.smtp.EmailBackend"
     EMAIL_HOST=""
     EMAIL_PORT="587"
     EMAIL_USE_TLS="True"
@@ -485,6 +571,7 @@ collect_inputs() {
     EMAIL_HOST_USER=""
     EMAIL_HOST_PASSWORD=""
     DEFAULT_FROM_EMAIL="FIN_FLOW <noreply@${APP_DOMAIN}>"
+    warn "SMTP global vide — configurez chaque filiale dans Administration → Alertes e-mail."
   fi
 
   echo
@@ -510,6 +597,8 @@ collect_inputs() {
   echo "  MinIO domain: $MINIO_DOMAIN"
   echo "  DB user     : finflow"
   echo "  MinIO user  : $MINIO_ROOT_USER"
+  echo "  SMTP global : $([[ $SMTP_GLOBAL_CONFIGURED -eq 1 ]] && echo "oui ($EMAIL_HOST)" || echo "non — UI filiale")"
+  echo "  E-mail pile : SMTP backend + SSL verify + Fernet + worker Celery"
   echo "  UFW         : $([[ $SETUP_UFW -eq 1 ]] && echo oui || echo non)"
   echo "  TLS         : $([[ $SETUP_TLS -eq 1 ]] && echo oui || echo non)"
   echo "----------------------------------"
@@ -545,13 +634,8 @@ main() {
     echo "  http://${APP_DOMAIN}"
   fi
 
-  # Sync role packs (non bloquant)
-  cd "$INSTALL_DIR"
-  # shellcheck disable=SC2086
-  docker compose $COMPOSE_FILES exec -T backend \
-    python manage.py sync_role_packs >/dev/null 2>&1 \
-    && ok "Packs de rôles synchronisés." \
-    || warn "sync_role_packs à relancer plus tard."
+  # Sync post-déploiement (migrations, rôles, circuits)
+  post_deploy_commands "$INSTALL_DIR"
 
   print_summary
 }

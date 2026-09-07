@@ -10,9 +10,17 @@ import { formatMoney } from "@/components/ui";
 type Decision = "APPROVED" | "REJECTED" | "RETURNED";
 type Opinion = "FAVORABLE" | "FAVORABLE_SOUS_RESERVE" | "DEFAVORABLE";
 
-const OPINIONS: { value: Opinion; label: string }[] = [
+const CREDIT_OPINIONS: { value: Opinion; label: string }[] = [
   { value: "FAVORABLE", label: WORKFLOW_LABELS.opinion.FAVORABLE },
-  { value: "FAVORABLE_SOUS_RESERVE", label: WORKFLOW_LABELS.opinion.FAVORABLE_SOUS_RESERVE },
+  {
+    value: "FAVORABLE_SOUS_RESERVE",
+    label: WORKFLOW_LABELS.opinion.FAVORABLE_SOUS_RESERVE,
+  },
+  { value: "DEFAVORABLE", label: WORKFLOW_LABELS.opinion.DEFAVORABLE },
+];
+
+const PROCESS_OPINIONS: { value: Opinion; label: string }[] = [
+  { value: "FAVORABLE", label: WORKFLOW_LABELS.opinion.FAVORABLE },
   { value: "DEFAVORABLE", label: WORKFLOW_LABELS.opinion.DEFAVORABLE },
 ];
 
@@ -36,6 +44,9 @@ export function DecisionPanel({
   const [error, setError] = useState<string | null>(null);
 
   const isDecisional = task.step_kind === "DECISIONAL";
+  const isCredit =
+    task.target_meta?.kind === "CREDIT" || Boolean(task.application);
+  const opinions = isCredit ? CREDIT_OPINIONS : PROCESS_OPINIONS;
 
   const { data: rejectReasons } = useQuery({
     queryKey: ["reject-reasons"],
@@ -43,7 +54,7 @@ export function DecisionPanel({
       (await api.get<Paginated<RejectReason>>("/reject-reasons/")).data,
   });
 
-  const appli = task.application;
+  const appli = isCredit ? task.application : undefined;
   const cur = appli?.currency ?? "XOF";
   const currentProposed = appli?.amount_proposed ?? appli?.amount_requested ?? "";
 
@@ -57,14 +68,16 @@ export function DecisionPanel({
     }) => {
       const payload: Record<string, unknown> = { decision, comment };
       if (opinion) payload.opinion = opinion;
-      if (decision === "APPROVED" && amount) payload.proposed_amount = amount;
+      if (isCredit && decision === "APPROVED" && amount) {
+        payload.proposed_amount = amount;
+      }
       if (decision === "REJECTED" && rejectReasonId) {
         payload.reject_reason = rejectReasonId;
       }
       if (decision === "RETURNED" && returnToSubmitter) {
         payload.return_to_submitter = true;
       }
-      if (opinion === "FAVORABLE_SOUS_RESERVE") {
+      if (isCredit && opinion === "FAVORABLE_SOUS_RESERVE") {
         payload.reserves = reservesText
           .split("\n")
           .map((l) => l.trim())
@@ -112,7 +125,11 @@ export function DecisionPanel({
         setError("Veuillez sélectionner un avis.");
         return;
       }
-      if (opinion === "FAVORABLE_SOUS_RESERVE" && !reservesText.trim()) {
+      if (
+        isCredit &&
+        opinion === "FAVORABLE_SOUS_RESERVE" &&
+        !reservesText.trim()
+      ) {
         setError("Les réserves sont obligatoires pour un avis favorable sous réserve.");
         return;
       }
@@ -164,7 +181,7 @@ export function DecisionPanel({
       <fieldset className="opinion-fieldset">
         <legend>Avis *</legend>
         <div className="opinion-radios">
-          {OPINIONS.map((o) => (
+          {opinions.map((o) => (
             <label key={o.value} className="opinion-radio">
               <input
                 type="radio"
@@ -189,7 +206,7 @@ export function DecisionPanel({
         )}
       </fieldset>
 
-      {opinion === "FAVORABLE_SOUS_RESERVE" && (
+      {isCredit && opinion === "FAVORABLE_SOUS_RESERVE" && (
         <label className="field">
           <span>Réserves / conditions * (une par ligne)</span>
           <textarea
@@ -202,16 +219,20 @@ export function DecisionPanel({
       )}
 
       <div className="form-grid two-col">
-        <label className="field">
-          <span>Montant proposé (en cas de validation)</span>
-          <input
-            type="number"
-            min={0}
-            placeholder={String(currentProposed)}
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
-        </label>
+        {isCredit ? (
+          <label className="field">
+            <span>Montant proposé (en cas de validation)</span>
+            <input
+              type="number"
+              min={0}
+              placeholder={String(currentProposed)}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+            />
+          </label>
+        ) : (
+          <div />
+        )}
         <label className="field">
           <span>Motif de rejet (si rejet)</span>
           <select

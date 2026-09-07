@@ -3,6 +3,7 @@ import json
 from rest_framework import serializers
 
 from apps.clients.serializers import PhonesInputField
+from apps.common.storage_urls import file_download_url
 
 from .models import Surety, SuretyDocument, SuretyEngagement, SuretyPhone
 
@@ -23,15 +24,112 @@ class SuretyEngagementSerializer(serializers.ModelSerializer):
     surety_photo = serializers.ImageField(
         source="surety.photo", read_only=True
     )
+    status_display = serializers.CharField(
+        source="get_status_display", read_only=True
+    )
+    engagement_type_display = serializers.CharField(
+        source="get_engagement_type_display", read_only=True
+    )
+    application_reference = serializers.CharField(
+        source="application.reference", read_only=True, default=None
+    )
+    client_display = serializers.SerializerMethodField()
+    contract_id = serializers.SerializerMethodField()
+    contract_status = serializers.SerializerMethodField()
+    contract_status_display = serializers.SerializerMethodField()
+    contract_file_url = serializers.SerializerMethodField()
+    contract_signed_file_url = serializers.SerializerMethodField()
+    contract_template_name = serializers.SerializerMethodField()
 
     class Meta:
         model = SuretyEngagement
         fields = [
-            "id", "surety", "surety_display", "surety_activity", "surety_type",
-            "surety_id_document_scan", "surety_photo",
-            "application", "amount", "signed_date", "status", "created_at",
+            "id",
+            "surety",
+            "surety_display",
+            "surety_activity",
+            "surety_type",
+            "surety_id_document_scan",
+            "surety_photo",
+            "application",
+            "application_reference",
+            "client_display",
+            "amount",
+            "engagement_type",
+            "engagement_type_display",
+            "signed_date",
+            "status",
+            "status_display",
+            "notes",
+            "released_at",
+            "called_at",
+            "contract_id",
+            "contract_status",
+            "contract_status_display",
+            "contract_file_url",
+            "contract_signed_file_url",
+            "contract_template_name",
+            "created_at",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = [
+            "id",
+            "status",
+            "released_at",
+            "called_at",
+            "created_at",
+        ]
+
+    def get_client_display(self, obj) -> str:
+        client = getattr(obj.application, "client", None)
+        if not client:
+            return ""
+        return getattr(client, "display_name", str(client))
+
+    def _contract(self, obj):
+        return obj.active_contract
+
+    def get_contract_id(self, obj):
+        c = self._contract(obj)
+        return str(c.id) if c else None
+
+    def get_contract_status(self, obj):
+        c = self._contract(obj)
+        return c.status if c else None
+
+    def get_contract_status_display(self, obj):
+        c = self._contract(obj)
+        return c.get_status_display() if c else None
+
+    def get_contract_file_url(self, obj):
+        c = self._contract(obj)
+        return file_download_url(c.file) if c and c.file else None
+
+    def get_contract_signed_file_url(self, obj):
+        c = self._contract(obj)
+        return (
+            file_download_url(c.signed_file)
+            if c and c.signed_file
+            else None
+        )
+
+    def get_contract_template_name(self, obj):
+        c = self._contract(obj)
+        return c.template_name if c else None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        surety = instance.surety
+        data["surety_id_document_scan"] = (
+            file_download_url(surety.id_document_scan)
+            if surety and surety.id_document_scan
+            else None
+        )
+        data["surety_photo"] = (
+            file_download_url(surety.photo)
+            if surety and surety.photo
+            else None
+        )
+        return data
 
 
 class SuretyPhoneSerializer(serializers.ModelSerializer):
@@ -48,8 +146,6 @@ class SuretyDocumentSerializer(serializers.ModelSerializer):
 
     def to_representation(self, instance):
         data = super().to_representation(instance)
-        from apps.common.storage_urls import file_download_url
-
         data["file"] = file_download_url(instance.file)
         return data
 
@@ -121,6 +217,9 @@ class SuretySerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "is_active", "created_at"]
 
     def validate(self, attrs):
+        from apps.common.upload_validation import validate_attrs_uploads
+
+        attrs = validate_attrs_uploads(attrs, self.context, check_quota=True)
         surety_type = attrs.get("surety_type") or getattr(
             self.instance, "surety_type", Surety.SuretyType.PHYSICAL
         )

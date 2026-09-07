@@ -6,7 +6,7 @@ from celery import shared_task
 logger = logging.getLogger("finflow")
 
 
-@shared_task(ignore_result=True)
+@shared_task(ignore_result=True, soft_time_limit=600, time_limit=660)
 def retry_cbs_integrations(limit: int = 50):
     """Rejoue les opérations CBS marquées RETRY."""
     from apps.corebanking.models import IntegrationLog

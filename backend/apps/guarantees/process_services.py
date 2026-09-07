@@ -53,13 +53,20 @@ class ProcessError(Exception):
 
 
 def _next_reference(prefix: str, model, tenant_id) -> str:
+    """Référence quotidienne unique — verrou tenant pour éviter les courses."""
+    from apps.tenants.models import Tenant
+
     today = timezone.now().strftime("%Y%m%d")
-    count = (
-        model.all_tenants.filter(tenant_id=tenant_id, created_at__date=date.today())
-        .count()
-        + 1
-    )
-    return f"{prefix}-{today}-{count:04d}"
+    with transaction.atomic():
+        # Sérialise les allocations de référence pour cette filiale.
+        Tenant.objects.select_for_update().filter(pk=tenant_id).first()
+        count = (
+            model.all_tenants.filter(
+                tenant_id=tenant_id, created_at__date=date.today()
+            ).count()
+            + 1
+        )
+        return f"{prefix}-{today}-{count:04d}"
 
 
 def _loan_cbs_ref(loan) -> str:

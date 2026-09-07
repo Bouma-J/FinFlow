@@ -177,6 +177,15 @@ class GeneratedContract(TenantScopedModel, AuthoredModel):
         related_name="generated_contracts",
         verbose_name="dossier",
     )
+    surety_engagement = models.ForeignKey(
+        "sureties.SuretyEngagement",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="generated_contracts",
+        verbose_name="engagement de caution",
+        help_text="Renseigné pour les contrats de cautionnement liés à une caution.",
+    )
     template = models.ForeignKey(
         ContractTemplate,
         on_delete=models.SET_NULL,

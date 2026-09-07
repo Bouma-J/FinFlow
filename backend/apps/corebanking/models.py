@@ -44,6 +44,12 @@ class CoreBankingConnector(TenantScopedModel):
     def __str__(self):
         return f"{self.name} ({self.get_protocol_display()})"
 
+    def get_auth_config_decrypted(self) -> dict:
+        """auth_config avec mots de passe / tokens déchiffrés."""
+        from apps.common.secret_crypto import decrypt_auth_config
+
+        return decrypt_auth_config(self.auth_config)
+
 
 class IntegrationLog(TenantScopedModel):
     """Journal d'un échange avec un Core Banking (traçabilité et reprise)."""

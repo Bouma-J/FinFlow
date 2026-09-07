@@ -421,7 +421,14 @@ def cancel_application(application, user=None):
 
 def _assert_disbursement_prerequisites(application):
     """Contrôles communs avant demande ou exécution du décaissement."""
-    from apps.contracts.services import missing_required_contracts
+    from apps.contracts.services import (
+        missing_required_contracts,
+        missing_surety_signed_contracts,
+    )
+    from apps.credits.instruction_policy import get_instruction_policy
+    from apps.guarantees.formalization_services import (
+        missing_formalizations_for_disbursement,
+    )
     from apps.workflow.services import has_pending_conditions
 
     if has_pending_conditions(application):
@@ -437,10 +444,32 @@ def _assert_disbursement_prerequisites(application):
             "générés (" + ", ".join(missing) + ")."
         )
 
+    policy = get_instruction_policy(application.tenant_id)
+    if policy.require_surety_signed_contracts:
+        surety_missing = missing_surety_signed_contracts(application)
+        if surety_missing:
+            raise WorkflowError(
+                "Le décaissement est impossible : contrats de cautionnement "
+                "manquants ou non signés (" + ", ".join(surety_missing) + ")."
+            )
+
+    if policy.require_formalization_before_disbursement:
+        form_missing = missing_formalizations_for_disbursement(application)
+        if form_missing:
+            raise WorkflowError(
+                "Le décaissement est impossible : formalisation de garanties "
+                "non clôturée (" + ", ".join(form_missing) + ")."
+            )
+
 
 @transaction.atomic
 def request_disbursement(application, user=None):
     """Initie une demande de décaissement (validation par les opérations)."""
+    application = (
+        CreditApplication.objects.select_for_update()
+        .select_related("client", "product")
+        .get(pk=application.pk)
+    )
     if application.status not in (
         CreditApplication.Status.APPROVED,
         CreditApplication.Status.CONTRACT_GENERATED,
@@ -470,6 +499,10 @@ def request_disbursement(application, user=None):
 @transaction.atomic
 def cancel_disbursement_request(application):
     """Annule une demande de décaissement et restaure le statut précédent."""
+    application = (
+        CreditApplication.objects.select_for_update()
+        .get(pk=application.pk)
+    )
     if application.status != CreditApplication.Status.DISBURSEMENT_PENDING:
         raise WorkflowError("Aucune demande de décaissement en attente.")
 
@@ -496,28 +529,36 @@ def cancel_disbursement_request(application):
     return application
 
 
-@transaction.atomic
 def disburse_application(application, disburse_date=None, *, skip_cbs=False):
     """Crée le prêt et l'échéancier après approbation, avec push CBS Perfect.
 
-    1. Prérequis métier (réserves, contrats)
-    2. Soumission CBS ``crd/simple`` (sauf ``skip_cbs`` / mode LOCAL)
-    3. Création locale ``Loan`` + échéancier + refs CBS
-
-    Le capital du prêt = montant accordé (référence). Les frais ne sont pas
-    soustraits ici : le CBS les prélève sur le montant décaissé.
+    Saga courte :
+    1. Verrou + prérequis (transaction courte)
+    2. Soumission CBS hors transaction (HTTP)
+    3. Création Loan + échéancier sous verrou (idempotent si déjà décaissé)
     """
-    if application.status not in (
-        CreditApplication.Status.APPROVED,
-        CreditApplication.Status.CONTRACT_GENERATED,
-        CreditApplication.Status.DISBURSEMENT_PENDING,
-    ):
-        raise WorkflowError(
-            "Le dossier doit être approuvé ou en attente de validation "
-            "du décaissement."
-        )
+    app_id = application.pk
 
-    _assert_disbursement_prerequisites(application)
+    with transaction.atomic():
+        application = (
+            CreditApplication.objects.select_for_update()
+            .select_related("client", "product")
+            .get(pk=app_id)
+        )
+        if application.status == CreditApplication.Status.DISBURSED:
+            existing = Loan.objects.filter(application_id=app_id).first()
+            if existing:
+                return existing
+        if application.status not in (
+            CreditApplication.Status.APPROVED,
+            CreditApplication.Status.CONTRACT_GENERATED,
+            CreditApplication.Status.DISBURSEMENT_PENDING,
+        ):
+            raise WorkflowError(
+                "Le dossier doit être approuvé ou en attente de validation "
+                "du décaissement."
+            )
+        _assert_disbursement_prerequisites(application)
 
     cbs_result = None
     if not skip_cbs:
@@ -532,74 +573,104 @@ def disburse_application(application, disburse_date=None, *, skip_cbs=False):
     disburse_date = disburse_date or date.today()
     from .amounts import reference_amount
 
-    principal = reference_amount(application) or application.amount_requested
-    rate = application.interest_rate or application.product.interest_rate
-    periodicity = application.periodicity
-    savings_rate = application.mandatory_savings_rate or 0
-    mechanism = application.repayment_mechanism or "DEGRESSIVE"
-    first_due = application.first_due_date or _next_business_day(
-        _add_periods(disburse_date, periodicity, 1)
-    )
+    with transaction.atomic():
+        application = (
+            CreditApplication.objects.select_for_update()
+            .select_related("client", "product")
+            .get(pk=app_id)
+        )
+        existing = Loan.objects.filter(application_id=app_id).first()
+        if existing is not None:
+            return existing
+        if application.status == CreditApplication.Status.DISBURSED:
+            existing = Loan.objects.filter(application_id=app_id).first()
+            if existing:
+                return existing
+            raise WorkflowError(
+                "Dossier marqué décaissé sans prêt local — intervention requise."
+            )
+        if application.status not in (
+            CreditApplication.Status.APPROVED,
+            CreditApplication.Status.CONTRACT_GENERATED,
+            CreditApplication.Status.DISBURSEMENT_PENDING,
+        ):
+            raise WorkflowError(
+                "Le statut du dossier a changé pendant l'appel CBS. "
+                "Réessayez le décaissement."
+            )
 
-    loan_kwargs = {
-        "tenant_id": application.tenant_id,
-        "application": application,
-        "principal": principal,
-        "interest_rate": rate,
-        "mandatory_savings_rate": savings_rate,
-        "duration_months": application.duration_months,
-        "disbursed_at": disburse_date,
-        "first_due_date": first_due,
-    }
-    if cbs_result:
-        loan_kwargs.update(
-            {
-                "core_banking_reference": (
-                    cbs_result.get("num_contrat")
-                    or cbs_result.get("ref_demande")
-                    or ""
-                )[:100],
-                "cbs_external_id": str(cbs_result.get("external_id") or "")[:100],
-                "cbs_demande_number": str(cbs_result.get("num_demande") or "")[:100],
-                "cbs_demande_ref": str(cbs_result.get("ref_demande") or "")[:100],
-                "cbs_contract_number": str(cbs_result.get("num_contrat") or "")[:100],
-                "cbs_disbursement_status": "SUBMITTED",
-                "cbs_disbursement_payload": cbs_result.get("raw") or {},
-            }
+        principal = reference_amount(application) or application.amount_requested
+        rate = application.interest_rate or application.product.interest_rate
+        periodicity = application.periodicity
+        savings_rate = application.mandatory_savings_rate or 0
+        mechanism = application.repayment_mechanism or "DEGRESSIVE"
+        first_due = application.first_due_date or _next_business_day(
+            _add_periods(disburse_date, periodicity, 1)
         )
 
-    loan = Loan.objects.create(**loan_kwargs)
+        loan_kwargs = {
+            "tenant_id": application.tenant_id,
+            "application": application,
+            "principal": principal,
+            "interest_rate": rate,
+            "mandatory_savings_rate": savings_rate,
+            "duration_months": application.duration_months,
+            "disbursed_at": disburse_date,
+            "first_due_date": first_due,
+        }
+        if cbs_result:
+            loan_kwargs.update(
+                {
+                    "core_banking_reference": (
+                        cbs_result.get("num_contrat")
+                        or cbs_result.get("ref_demande")
+                        or ""
+                    )[:100],
+                    "cbs_external_id": str(cbs_result.get("external_id") or "")[:100],
+                    "cbs_demande_number": str(
+                        cbs_result.get("num_demande") or ""
+                    )[:100],
+                    "cbs_demande_ref": str(cbs_result.get("ref_demande") or "")[:100],
+                    "cbs_contract_number": str(
+                        cbs_result.get("num_contrat") or ""
+                    )[:100],
+                    "cbs_disbursement_status": "SUBMITTED",
+                    "cbs_disbursement_payload": cbs_result.get("raw") or {},
+                }
+            )
 
-    schedule = compute_amortization_schedule(
-        principal, rate, application.duration_months,
-        periodicity=periodicity, start_date=disburse_date,
-        first_due_date=first_due, savings_rate=savings_rate,
-        mechanism=mechanism,
-        tenant_id=application.tenant_id,
-    )
-    Installment.objects.bulk_create([
-        Installment(
-            loan=loan,
-            tenant_id=loan.tenant_id,
-            number=row["number"],
-            due_date=row["due_date"],
-            principal_due=row["principal"],
-            interest_due=row["interest"],
-            savings_due=row["savings"],
-            total_due=row["total"],
+        loan = Loan.objects.create(**loan_kwargs)
+
+        schedule = compute_amortization_schedule(
+            principal, rate, application.duration_months,
+            periodicity=periodicity, start_date=disburse_date,
+            first_due_date=first_due, savings_rate=savings_rate,
+            mechanism=mechanism,
+            tenant_id=application.tenant_id,
         )
-        for row in schedule
-    ])
+        Installment.objects.bulk_create([
+            Installment(
+                loan=loan,
+                tenant_id=loan.tenant_id,
+                number=row["number"],
+                due_date=row["due_date"],
+                principal_due=row["principal"],
+                interest_due=row["interest"],
+                savings_due=row["savings"],
+                total_due=row["total"],
+            )
+            for row in schedule
+        ])
 
-    application.status = CreditApplication.Status.DISBURSED
-    application.disbursed_at = timezone.now()
-    application.disbursement_previous_status = ""
-    application.save(
-        update_fields=[
-            "status",
-            "disbursed_at",
-            "disbursement_previous_status",
-            "updated_at",
-        ]
-    )
-    return loan
+        application.status = CreditApplication.Status.DISBURSED
+        application.disbursed_at = timezone.now()
+        application.disbursement_previous_status = ""
+        application.save(
+            update_fields=[
+                "status",
+                "disbursed_at",
+                "disbursement_previous_status",
+                "updated_at",
+            ]
+        )
+        return loan

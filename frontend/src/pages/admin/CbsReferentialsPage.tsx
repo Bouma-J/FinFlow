@@ -7,9 +7,8 @@ import type { CbsCatalogItem, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
   Card,
-  EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   TenantScopeNotice,
 } from "@/components/ui";
 
@@ -206,11 +205,13 @@ export function AdminCbsReferentialsPage() {
         </form>
       </Card>
 
-      {items.isLoading || !items.data ? (
-        <Spinner />
-      ) : items.data.results.length === 0 ? (
-        <EmptyState message="Aucun élément. Créez-en ou relancez le bootstrap filiale." />
-      ) : (
+      <QueryStatus
+        isLoading={items.isLoading}
+        isError={items.isError}
+        isEmpty={!items.data?.results.length}
+        emptyMessage="Aucun élément. Créez-en ou relancez le bootstrap filiale."
+        onRetry={() => items.refetch()}
+      >
         <table className="table card" style={{ marginTop: 20 }}>
           <thead>
             <tr>
@@ -222,7 +223,7 @@ export function AdminCbsReferentialsPage() {
             </tr>
           </thead>
           <tbody>
-            {items.data.results.map((row) => (
+            {(items.data?.results ?? []).map((row) => (
               <tr key={row.id}>
                 <td>{row.code}</td>
                 <td>{row.label}</td>
@@ -261,7 +262,7 @@ export function AdminCbsReferentialsPage() {
             ))}
           </tbody>
         </table>
-      )}
+      </QueryStatus>
     </div>
   );
 }

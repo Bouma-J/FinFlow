@@ -22,11 +22,13 @@ env = environ.Env(
     GROUP_CONSOLIDATION_CURRENCY=(str, "XOF"),
     DB_CONN_MAX_AGE=(int, 60),
     AUDIT_RETENTION_DAYS=(int, 365),
+    GED_SOFT_DELETE_RETENTION_DAYS=(int, 90),
     DASHBOARD_CACHE_TTL=(int, 45),
     ME_CACHE_TTL=(int, 60),
     CATALOG_CACHE_TTL=(int, 120),
     REPORTING_SNAPSHOT_MAX_AGE_SECONDS=(int, 3600),
     TENANT_ISOLATION_MODE=(str, "shared"),
+    FEATURE_SMS=(bool, False),
 )
 
 # Chargement du fichier .env s'il existe
@@ -36,7 +38,13 @@ if env_file.exists():
 
 SECRET_KEY = env("DJANGO_SECRET_KEY", default="insecure-dev-key-change-me")
 DEBUG = env("DJANGO_DEBUG")
+
+# OpenAPI / Swagger : on en DEBUG ; forcer via ENABLE_API_DOCS=1 en prod si besoin
+ENABLE_API_DOCS = env.bool("ENABLE_API_DOCS", default=DEBUG)
 ALLOWED_HOSTS = env("DJANGO_ALLOWED_HOSTS")
+FEATURE_SMS = env.bool("FEATURE_SMS", default=False)
+# Fernet url-safe key (32 bytes b64). Vide = dérivée de SECRET_KEY.
+FIELD_ENCRYPTION_KEY = env("FIELD_ENCRYPTION_KEY", default="")
 
 # ---------------------------------------------------------------------------
 # Applications
@@ -240,6 +248,12 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_TASK_SERIALIZER = "json"
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TIMEZONE = TIME_ZONE
+# Robustesse sous charge / crash worker
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+CELERY_WORKER_PREFETCH_MULTIPLIER = 1
+CELERY_TASK_SOFT_TIME_LIMIT = env.int("CELERY_TASK_SOFT_TIME_LIMIT", default=300)
+CELERY_TASK_TIME_LIMIT = env.int("CELERY_TASK_TIME_LIMIT", default=360)
 
 # Cache Redis (throttle multi-workers, lectures chaudes futures)
 _redis_cache_url = env("REDIS_CACHE_URL", default="")
@@ -288,6 +302,7 @@ PUBLIC_API_BASE_URL = env("PUBLIC_API_BASE_URL", default="")
 STORAGE_BACKEND = env("STORAGE_BACKEND")
 GROUP_CONSOLIDATION_CURRENCY = env("GROUP_CONSOLIDATION_CURRENCY")
 AUDIT_RETENTION_DAYS = env("AUDIT_RETENTION_DAYS")
+GED_SOFT_DELETE_RETENTION_DAYS = env("GED_SOFT_DELETE_RETENTION_DAYS")
 DASHBOARD_CACHE_TTL = env("DASHBOARD_CACHE_TTL")
 ME_CACHE_TTL = env("ME_CACHE_TTL")
 CATALOG_CACHE_TTL = env("CATALOG_CACHE_TTL")
@@ -321,10 +336,14 @@ if STORAGE_BACKEND == "s3":
     AWS_S3_URL_PROTOCOL = env("AWS_S3_URL_PROTOCOL", default="http:")
 
 # Formats et taille autorisés pour la GED (paramétrable)
-GED_MAX_UPLOAD_SIZE_MB = 25
+GED_MAX_UPLOAD_SIZE_MB = env.int("GED_MAX_UPLOAD_SIZE_MB", default=25)
 GED_ALLOWED_EXTENSIONS = [
     "pdf", "jpg", "jpeg", "png", "tiff", "docx", "xlsx",
 ]
+
+# Aligné sur la GED : rejette tôt les corps trop gros (complément nginx 25m)
+DATA_UPLOAD_MAX_MEMORY_SIZE = GED_MAX_UPLOAD_SIZE_MB * 1024 * 1024
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # au-delà → fichier temporaire
 
 LOGGING = {
     "version": 1,

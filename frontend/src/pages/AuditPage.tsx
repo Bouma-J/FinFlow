@@ -6,16 +6,15 @@ import { api } from "@/api/client";
 import type { AuditLog, Paginated } from "@/api/types";
 import {
   Badge,
-  EmptyState,
   PageHeader,
   PaginationBar,
-  Spinner,
+  QueryStatus,
   formatDate,
 } from "@/components/ui";
 
 export function AuditPage() {
   const [page, setPage] = useState(1);
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["audit-logs", page],
     queryFn: async () =>
       (await api.get<Paginated<AuditLog>>("/audit-logs/", { params: { page } }))
@@ -29,11 +28,13 @@ export function AuditPage() {
         title="Piste d'audit"
         subtitle="Traçabilité des opérations"
       />
-      {isLoading || !data ? (
-        <Spinner />
-      ) : data.results.length === 0 ? (
-        <EmptyState message="Aucune opération journalisée." />
-      ) : (
+      <QueryStatus
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={!data?.results.length}
+        emptyMessage="Aucune opération journalisée."
+        onRetry={() => refetch()}
+      >
         <>
           <table className="table card">
             <thead>
@@ -47,7 +48,7 @@ export function AuditPage() {
               </tr>
             </thead>
             <tbody>
-              {data.results.map((log) => (
+              {(data?.results ?? []).map((log) => (
                 <tr key={log.id}>
                   <td>{formatDate(log.timestamp)}</td>
                   <td>
@@ -61,9 +62,9 @@ export function AuditPage() {
               ))}
             </tbody>
           </table>
-          <PaginationBar page={page} count={data.count} onPageChange={setPage} />
+          <PaginationBar page={page} count={data?.count ?? 0} onPageChange={setPage} />
         </>
-      )}
+      </QueryStatus>
     </div>
   );
 }

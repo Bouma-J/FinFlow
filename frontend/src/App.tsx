@@ -1,11 +1,28 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import {
+  PERM_ADMIN_AGENCIES,
+  PERM_ADMIN_ALERTS,
+  PERM_ADMIN_AUDIT,
+  PERM_ADMIN_CBS_REF,
+  PERM_ADMIN_CIRCUITS,
+  PERM_ADMIN_CONNECTORS,
+  PERM_ADMIN_CONTRACTS,
+  PERM_ADMIN_DELEGATIONS,
+  PERM_ADMIN_POLICY,
+  PERM_ADMIN_PRODUCTS,
+  PERM_ADMIN_REFERENTIALS,
+  PERM_ADMIN_ROLES,
+  PERM_ADMIN_USERS,
+  PERM_AFTER_SALES,
   PERM_CLIENTS,
+  PERM_CLIENTS_CHANGE,
   PERM_COLLECTIONS,
   PERM_CREDIT_CREATE,
   PERM_CREDITS,
+  PERM_DASHBOARD,
   PERM_DATIONS,
+  PERM_DOCUMENTS,
   PERM_FORMALIZATIONS,
   PERM_GUARANTEES,
   PERM_LEGAL_PARTIES,
@@ -30,7 +47,10 @@ import { FinancialAnalysisPage } from "@/pages/FinancialAnalysisPage";
 import { CreditApplicationNewPage } from "@/pages/CreditApplicationNewPage";
 import { CreditApplicationsPage } from "@/pages/CreditApplicationsPage";
 import { DashboardPage } from "@/pages/DashboardPage";
+import { DocumentsPage } from "@/pages/DocumentsPage";
+import { GroupConsolidationPage } from "@/pages/GroupConsolidationPage";
 import { GuaranteeAddPage } from "@/pages/GuaranteeAddPage";
+import { LoansPage } from "@/pages/LoansPage";
 import { GuaranteeDetailPage } from "@/pages/GuaranteeDetailPage";
 import { GuaranteeEditPage } from "@/pages/GuaranteeEditPage";
 import { GuaranteesPage } from "@/pages/GuaranteesPage";
@@ -50,8 +70,9 @@ import {
   FormalizationsPage,
 } from "@/pages/FormalizationsPage";
 import { CollectionsPage } from "@/pages/CollectionsPage";
+import { AfterSalesHubPage } from "@/pages/AfterSalesHubPage";
 import { CollectionCaseDetailPage } from "@/pages/CollectionCaseDetailPage";
-import { LegalPartiesPage } from "@/pages/LegalPartiesPage";
+import { LegalPartiesPage } from "@/pages/admin/LegalPartiesPage";
 import { LitigationDetailPage } from "@/pages/LitigationDetailPage";
 import { SuretyEngagementAddPage } from "@/pages/SuretyEngagementAddPage";
 import { LoginPage } from "@/pages/LoginPage";
@@ -65,10 +86,12 @@ import { SuretyEditPage } from "@/pages/SuretyEditPage";
 import { TasksPage } from "@/pages/TasksPage";
 import { AdminAgenciesPage } from "@/pages/admin/AgenciesPage";
 import { AdminTenantsPage } from "@/pages/admin/TenantsPage";
+import { AdminBusinessReferentialsPage } from "@/pages/admin/BusinessReferentialsPage";
 import { AdminConnectorsPage } from "@/pages/admin/ConnectorsPage";
 import { AdminContractsPage } from "@/pages/admin/ContractsAdminPage";
 import { AdminNotificationsPage } from "@/pages/admin/NotificationsPage";
 import { AdminCreditPolicyPage } from "@/pages/admin/CreditPolicyPage";
+import { AdminDelegationsPage } from "@/pages/admin/DelegationsPage";
 import { AdminProductsPage } from "@/pages/admin/ProductsAdminPage";
 import { AdminCbsReferentialsPage } from "@/pages/admin/CbsReferentialsPage";
 import { AdminRolesPage } from "@/pages/admin/RolesPage";
@@ -95,7 +118,14 @@ export default function App() {
           </ProtectedRoute>
         }
       >
-        <Route path="/" element={<DashboardPage />} />
+        <Route
+          path="/"
+          element={
+            <PermissionRoute anyOf={PERM_DASHBOARD}>
+              <DashboardPage />
+            </PermissionRoute>
+          }
+        />
         <Route path="/profil" element={<ProfilePage />} />
         <Route
           path="/clients"
@@ -116,7 +146,7 @@ export default function App() {
         <Route
           path="/clients/:id/modifier"
           element={
-            <PermissionRoute anyOf={PERM_CLIENTS}>
+            <PermissionRoute anyOf={PERM_CLIENTS_CHANGE}>
               <ClientEditPage />
             </PermissionRoute>
           }
@@ -126,6 +156,22 @@ export default function App() {
           element={
             <PermissionRoute anyOf={PERM_CREDITS}>
               <CreditApplicationsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/prets"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <LoansPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/admin/consolidation"
+          element={
+            <PermissionRoute anyOf={PERM_DASHBOARD}>
+              <GroupConsolidationPage />
             </PermissionRoute>
           }
         />
@@ -266,6 +312,14 @@ export default function App() {
           }
         />
         <Route
+          path="/apres-vente"
+          element={
+            <PermissionRoute anyOf={PERM_AFTER_SALES}>
+              <AfterSalesHubPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
           path="/mains-levees"
           element={
             <PermissionRoute anyOf={PERM_RELEASES}>
@@ -342,6 +396,14 @@ export default function App() {
           }
         />
         <Route
+          path="/documents"
+          element={
+            <PermissionRoute anyOf={PERM_DOCUMENTS}>
+              <DocumentsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
           path="/recouvrement"
           element={
             <PermissionRoute anyOf={PERM_COLLECTIONS}>
@@ -367,11 +429,7 @@ export default function App() {
         />
         <Route
           path="/intervenants-juridiques"
-          element={
-            <PermissionRoute anyOf={PERM_LEGAL_PARTIES}>
-              <LegalPartiesPage />
-            </PermissionRoute>
-          }
+          element={<Navigate to="/admin/intervenants-juridiques" replace />}
         />
         <Route
           path="/simulateur"
@@ -394,7 +452,9 @@ export default function App() {
           path="/admin/agences"
           element={
             <AdminRoute>
-              <AdminAgenciesPage />
+              <PermissionRoute anyOf={PERM_ADMIN_AGENCIES}>
+                <AdminAgenciesPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -402,7 +462,9 @@ export default function App() {
           path="/admin/utilisateurs"
           element={
             <AdminRoute>
-              <AdminUsersPage />
+              <PermissionRoute anyOf={PERM_ADMIN_USERS}>
+                <AdminUsersPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -410,7 +472,9 @@ export default function App() {
           path="/admin/roles"
           element={
             <AdminRoute>
-              <AdminRolesPage />
+              <PermissionRoute anyOf={PERM_ADMIN_ROLES}>
+                <AdminRolesPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -418,7 +482,9 @@ export default function App() {
           path="/admin/produits"
           element={
             <AdminRoute>
-              <AdminProductsPage />
+              <PermissionRoute anyOf={PERM_ADMIN_PRODUCTS}>
+                <AdminProductsPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -426,7 +492,29 @@ export default function App() {
           path="/admin/referentiels-cbs"
           element={
             <AdminRoute>
-              <AdminCbsReferentialsPage />
+              <PermissionRoute anyOf={PERM_ADMIN_CBS_REF}>
+                <AdminCbsReferentialsPage />
+              </PermissionRoute>
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/referentiels-metier"
+          element={
+            <AdminRoute>
+              <PermissionRoute anyOf={PERM_ADMIN_REFERENTIALS}>
+                <AdminBusinessReferentialsPage />
+              </PermissionRoute>
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/intervenants-juridiques"
+          element={
+            <AdminRoute>
+              <PermissionRoute anyOf={PERM_LEGAL_PARTIES}>
+                <LegalPartiesPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -434,7 +522,19 @@ export default function App() {
           path="/admin/circuits"
           element={
             <AdminRoute>
-              <AdminWorkflowPage />
+              <PermissionRoute anyOf={PERM_ADMIN_CIRCUITS}>
+                <AdminWorkflowPage />
+              </PermissionRoute>
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/delegations"
+          element={
+            <AdminRoute>
+              <PermissionRoute anyOf={PERM_ADMIN_DELEGATIONS}>
+                <AdminDelegationsPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -442,7 +542,9 @@ export default function App() {
           path="/admin/contrats"
           element={
             <AdminRoute>
-              <AdminContractsPage />
+              <PermissionRoute anyOf={PERM_ADMIN_CONTRACTS}>
+                <AdminContractsPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -450,7 +552,9 @@ export default function App() {
           path="/admin/connecteurs"
           element={
             <AdminRoute>
-              <AdminConnectorsPage />
+              <PermissionRoute anyOf={PERM_ADMIN_CONNECTORS}>
+                <AdminConnectorsPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -458,7 +562,9 @@ export default function App() {
           path="/admin/alertes"
           element={
             <AdminRoute>
-              <AdminNotificationsPage />
+              <PermissionRoute anyOf={PERM_ADMIN_ALERTS}>
+                <AdminNotificationsPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -466,7 +572,9 @@ export default function App() {
           path="/admin/politique-credit"
           element={
             <AdminRoute>
-              <AdminCreditPolicyPage />
+              <PermissionRoute anyOf={PERM_ADMIN_POLICY}>
+                <AdminCreditPolicyPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />
@@ -474,7 +582,9 @@ export default function App() {
           path="/admin/audit"
           element={
             <AdminRoute>
-              <AuditPage />
+              <PermissionRoute anyOf={PERM_ADMIN_AUDIT}>
+                <AuditPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />

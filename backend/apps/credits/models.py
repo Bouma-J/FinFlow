@@ -793,6 +793,23 @@ class CreditInstructionPolicy(TenantScopedModel):
         "autoriser le rattachement de garanties pendant le circuit",
         default=False,
     )
+    require_surety_signed_contracts = models.BooleanField(
+        "exiger un contrat de cautionnement signé avant décaissement",
+        default=True,
+        help_text=(
+            "Si le dossier a des engagements de caution actifs, chaque caution "
+            "doit avoir un contrat SURETY généré et signé avant décaissement."
+        ),
+    )
+    require_formalization_before_disbursement = models.BooleanField(
+        "exiger la formalisation des garanties avant décaissement",
+        default=False,
+        help_text=(
+            "Si activé, les garanties hypothécaires / gages / nantissements "
+            "rattachés au dossier doivent être formalisées (formalized_at) "
+            "avant décaissement. Désactivé par défaut (processus parallèle)."
+        ),
+    )
 
     class Meta:
         verbose_name = "politique d'instruction crédit"

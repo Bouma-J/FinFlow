@@ -7,8 +7,12 @@ from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from apps.common.access import apply_data_scope
-from apps.common.permissions import HasModelPermission
-from apps.common.storage_urls import CLIENT_FILE_FIELDS, image_content_type
+from apps.common.permissions import HasModelPermission, MustChangePasswordGate
+from apps.common.storage_urls import (
+    CLIENT_FILE_FIELDS,
+    image_content_type,
+    verify_client_file_token,
+)
 from apps.common.tenancy import get_current_tenant_id
 from apps.common.viewsets import AgencyScopedMixin, AgencyScopedViewSet
 
@@ -69,9 +73,9 @@ class ClientViewSet(AgencyScopedViewSet):
     serializer_class = ClientSerializer
     enforce_model_permissions = True
     action_perms = {
-        # Ouverture navigateur sans JWT (proxy / URL présignée en amont).
-        "photo": [],
-        "files": [],
+        # Accès fichier : JWT + view_client, ou jeton signé court (?token=).
+        "photo": ["clients.view_client"],
+        "files": ["clients.view_client"],
         "cbs_preview": ["clients.add_client"],
         "cbs_import": ["clients.add_client"],
     }
@@ -88,10 +92,17 @@ class ClientViewSet(AgencyScopedViewSet):
     TENANT_READ_ACTIONS = frozenset({"list", "retrieve", "photo", "files"})
 
     def get_permissions(self):
-        # Les <img> / onglets navigateur n'envoient pas le JWT.
         if self.action in ("photo", "files"):
-            return [AllowAny()]
-        return [IsAuthenticated(), HasModelPermission()]
+            # Jeton signé (URLs <img>) : pas de JWT ; sinon auth + droit view.
+            token = (self.request.query_params.get("token") or "").strip()
+            if token:
+                return [AllowAny()]
+            return [
+                IsAuthenticated(),
+                MustChangePasswordGate(),
+                HasModelPermission(),
+            ]
+        return super().get_permissions()
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -120,8 +131,26 @@ class ClientViewSet(AgencyScopedViewSet):
                 status=400,
             )
 
-        # all_tenants : pas de contexte tenant sur une ouverture navigateur.
-        client = Client.all_tenants.filter(pk=pk).first()
+        token = (self.request.query_params.get("token") or "").strip()
+        user = getattr(self.request, "user", None)
+        authenticated = bool(user and user.is_authenticated)
+
+        if token:
+            # Jeton lié à (client_id, field) — pas d'accès cross-tenant par UUID seul.
+            if not verify_client_file_token(token, pk, field):
+                return _unavailable_file_response(
+                    "Lien expiré ou invalide. Rouvrez la fiche client.",
+                    status=403,
+                )
+            client = Client.all_tenants.filter(pk=pk).first()
+        elif authenticated:
+            client = self.get_queryset().filter(pk=pk).first()
+        else:
+            return _unavailable_file_response(
+                "Authentification requise pour accéder à ce document.",
+                status=401,
+            )
+
         if client is None:
             return _unavailable_file_response(
                 "Client introuvable. Vérifiez le lien ou reconnectez-vous."
@@ -153,7 +182,7 @@ class ClientViewSet(AgencyScopedViewSet):
 
         response = FileResponse(handle, content_type=content_type)
         response["Content-Disposition"] = f'inline; filename="{filename}"'
-        response["Cache-Control"] = "private, max-age=3600"
+        response["Cache-Control"] = "private, max-age=300"
         return response
 
     @action(detail=True, methods=["get"], url_path="photo")
@@ -169,7 +198,6 @@ class ClientViewSet(AgencyScopedViewSet):
     def files(self, request, pk=None, field=None):
         """Sert un document client (scan pièce, IFU, RCCM…) via l'API."""
         return self._serve_client_file(pk, field or "")
-
     @action(detail=False, methods=["post"], url_path="cbs-preview")
     def cbs_preview(self, request):
         """Prévisualise un adhérent CBS avant création (données non éditables)."""

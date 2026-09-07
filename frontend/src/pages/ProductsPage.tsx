@@ -6,9 +6,8 @@ import type { CreditProduct, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
   Badge,
-  EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   TenantScopeNotice,
   formatMoney,
 } from "@/components/ui";
@@ -17,7 +16,7 @@ export function ProductsPage() {
   const { user, activeTenant } = useAuth();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["credit-products", activeTenant, user?.tenant],
     queryFn: async () =>
       (await api.get<Paginated<CreditProduct>>("/credit-products/")).data,
@@ -44,11 +43,13 @@ export function ProductsPage() {
         title="Produits de crédit"
         subtitle="Catalogue de la filiale"
       />
-      {isLoading || !data ? (
-        <Spinner />
-      ) : data.results.length === 0 ? (
-        <EmptyState message="Aucun produit paramétré." />
-      ) : (
+      <QueryStatus
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={!data?.results.length}
+        emptyMessage="Aucun produit paramétré."
+        onRetry={() => refetch()}
+      >
         <table className="table card">
           <thead>
             <tr>
@@ -62,7 +63,7 @@ export function ProductsPage() {
             </tr>
           </thead>
           <tbody>
-            {data.results.map((p) => (
+            {(data?.results ?? []).map((p) => (
               <tr key={p.id}>
                 <td>{p.code}</td>
                 <td>{p.label}</td>
@@ -77,7 +78,7 @@ export function ProductsPage() {
             ))}
           </tbody>
         </table>
-      )}
+      </QueryStatus>
     </div>
   );
 }

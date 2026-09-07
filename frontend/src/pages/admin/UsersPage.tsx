@@ -5,7 +5,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { api } from "@/api/client";
 import type { AdminUser, Agency, DataScope, Paginated, Role, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Card, EmptyState, PageHeader, PaginationBar, Spinner, TenantScopeNotice } from "@/components/ui";
+import { Card, PageHeader, PaginationBar, QueryStatus, TenantScopeNotice } from "@/components/ui";
 
 const DATA_SCOPE_OPTIONS: { value: DataScope; label: string }[] = [
   { value: "OWN", label: "Ses propres dossiers uniquement" },
@@ -833,11 +833,13 @@ export function AdminUsersPage() {
         </Card>
       )}
 
-      {users.isLoading || !users.data ? (
-        <Spinner />
-      ) : users.data.results.length === 0 ? (
-        <EmptyState message="Aucun utilisateur pour cette filiale." />
-      ) : (
+      <QueryStatus
+        isLoading={users.isLoading}
+        isError={users.isError}
+        isEmpty={!users.data?.results.length}
+        emptyMessage="Aucun utilisateur pour cette filiale."
+        onRetry={() => users.refetch()}
+      >
         <>
         <table className="table card">
           <thead>
@@ -853,7 +855,7 @@ export function AdminUsersPage() {
             </tr>
           </thead>
           <tbody>
-            {users.data.results.map((u) => (
+            {(users.data?.results ?? []).map((u) => (
               <tr key={u.id}>
                 <td>{u.username}</td>
                 <td className="small">{u.email || <span className="muted">—</span>}</td>
@@ -931,11 +933,11 @@ export function AdminUsersPage() {
         </table>
         <PaginationBar
           page={page}
-          count={users.data.count}
+          count={users.data?.count ?? 0}
           onPageChange={setPage}
         />
         </>
-      )}
+      </QueryStatus>
 
       {resetTarget && (
         <div

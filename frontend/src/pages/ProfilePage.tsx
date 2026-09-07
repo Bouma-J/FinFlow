@@ -1,13 +1,25 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { UserRound } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
+import type { Delegation, DelegationColleague } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { Card, PageHeader } from "@/components/ui";
+import { Badge, Card, PageHeader } from "@/components/ui";
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function plusDaysISO(days: number) {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
 
 export function ProfilePage() {
   const { user, refreshUser } = useAuth();
+  const qc = useQueryClient();
   const [profile, setProfile] = useState({
     first_name: user?.first_name ?? "",
     last_name: user?.last_name ?? "",
@@ -23,13 +35,34 @@ export function ProfilePage() {
   const [pwdMsg, setPwdMsg] = useState<string | null>(null);
   const [pwdError, setPwdError] = useState<string | null>(null);
 
+  const [delegateId, setDelegateId] = useState("");
+  const [startDate, setStartDate] = useState(todayISO);
+  const [endDate, setEndDate] = useState(() => plusDaysISO(7));
+  const [reason, setReason] = useState("");
+  const [delMsg, setDelMsg] = useState<string | null>(null);
+  const [delError, setDelError] = useState<string | null>(null);
+
+  const mine = useQuery({
+    queryKey: ["my-delegations"],
+    queryFn: async () =>
+      (await api.get<Delegation[]>("/delegations/mine/")).data,
+  });
+
+  const colleagues = useQuery({
+    queryKey: ["delegation-colleagues"],
+    queryFn: async () =>
+      (await api.get<DelegationColleague[]>("/delegations/colleagues/")).data,
+  });
+
   const saveProfile = useMutation({
     mutationFn: async () =>
-      (await api.patch("/users/me/", {
-        first_name: profile.first_name,
-        last_name: profile.last_name,
-        email: profile.email,
-      })).data,
+      (
+        await api.patch("/users/me/", {
+          first_name: profile.first_name,
+          last_name: profile.last_name,
+          email: profile.email,
+        })
+      ).data,
     onSuccess: async () => {
       await refreshUser();
       setProfileMsg("Profil mis à jour.");
@@ -67,6 +100,47 @@ export function ProfilePage() {
     },
   });
 
+  const give = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post<Delegation>("/delegations/give/", {
+          delegate: delegateId,
+          start_date: startDate,
+          end_date: endDate,
+          reason,
+        })
+      ).data,
+    onSuccess: () => {
+      setDelError(null);
+      setDelMsg("Délégation créée. Le délégataire verra vos tâches en attente.");
+      setReason("");
+      qc.invalidateQueries({ queryKey: ["my-delegations"] });
+    },
+    onError: (err: unknown) => {
+      setDelMsg(null);
+      const data = (err as { response?: { data?: unknown } })?.response?.data;
+      setDelError(
+        typeof data === "string"
+          ? data
+          : data && typeof data === "object"
+            ? Object.values(data as Record<string, unknown>)
+                .flat()
+                .map(String)
+                .join(" · ")
+            : "Création impossible.",
+      );
+    },
+  });
+
+  const revoke = useMutation({
+    mutationFn: async (id: string) =>
+      (await api.post(`/delegations/${id}/revoke/`)).data,
+    onSuccess: () => {
+      setDelMsg("Délégation révoquée.");
+      qc.invalidateQueries({ queryKey: ["my-delegations"] });
+    },
+  });
+
   if (!user) return null;
 
   function onProfile(e: FormEvent) {
@@ -89,6 +163,20 @@ export function ProfilePage() {
     }
     changePwd.mutate();
   }
+
+  function onGive(e: FormEvent) {
+    e.preventDefault();
+    setDelError(null);
+    setDelMsg(null);
+    if (!delegateId) {
+      setDelError("Choisissez un délégataire.");
+      return;
+    }
+    give.mutate();
+  }
+
+  const given = (mine.data ?? []).filter((d) => d.delegator === user.id);
+  const received = (mine.data ?? []).filter((d) => d.delegate === user.id);
 
   return (
     <div className="page-shell">
@@ -140,6 +228,117 @@ export function ProfilePage() {
             Enregistrer le profil
           </button>
         </form>
+      </Card>
+
+      <Card title="Délégations de pouvoirs">
+        <p className="muted small" style={{ marginBottom: 12 }}>
+          Pendant votre absence, le délégataire pourra traiter vos tâches de
+          circuit (approbations).
+        </p>
+        <form className="stack" onSubmit={onGive}>
+          <div className="form-grid two-col">
+            <label className="field">
+              <span>Délégataire *</span>
+              <select
+                value={delegateId}
+                onChange={(e) => setDelegateId(e.target.value)}
+                required
+              >
+                <option value="">— choisir un collègue —</option>
+                {(colleagues.data ?? []).map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.display_name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Motif</span>
+              <input
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Congé, mission…"
+              />
+            </label>
+            <label className="field">
+              <span>Début *</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                required
+              />
+            </label>
+            <label className="field">
+              <span>Fin *</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                required
+              />
+            </label>
+          </div>
+          {delError && <div className="form-error">{delError}</div>}
+          {delMsg && <p className="muted small">{delMsg}</p>}
+          <button className="btn btn-primary btn-sm" disabled={give.isPending}>
+            Déléguer mes pouvoirs
+          </button>
+        </form>
+
+        <h4 style={{ marginTop: 20, marginBottom: 8 }}>Données</h4>
+        {given.length === 0 ? (
+          <p className="muted small">Aucune délégation donnée.</p>
+        ) : (
+          <ul className="stack" style={{ gap: 8 }}>
+            {given.map((d) => (
+              <li key={d.id} className="row-actions" style={{ gap: 8 }}>
+                <span>
+                  → {d.delegate_display} ({d.start_date} → {d.end_date})
+                </span>
+                <Badge
+                  value={d.is_currently_valid ? "success" : "info"}
+                  label={
+                    d.is_currently_valid
+                      ? "En cours"
+                      : d.is_active
+                        ? "Inactive"
+                        : "Révoquée"
+                  }
+                />
+                {d.is_active && (
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm"
+                    disabled={revoke.isPending}
+                    onClick={() => revoke.mutate(d.id)}
+                  >
+                    Révoquer
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <h4 style={{ marginTop: 20, marginBottom: 8 }}>Reçues</h4>
+        {received.length === 0 ? (
+          <p className="muted small">Aucune délégation reçue.</p>
+        ) : (
+          <ul className="stack" style={{ gap: 8 }}>
+            {received.map((d) => (
+              <li key={d.id} className="row-actions" style={{ gap: 8 }}>
+                <span>
+                  ← {d.delegator_display} ({d.start_date} → {d.end_date})
+                </span>
+                <Badge
+                  value={d.is_currently_valid ? "success" : "info"}
+                  label={d.is_currently_valid ? "En cours" : "Inactive"}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
       </Card>
 
       <Card title="Changer mon mot de passe">

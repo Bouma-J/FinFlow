@@ -1,3 +1,4 @@
+from django.db import transaction
 from django.utils import timezone
 from rest_framework.decorators import action
 from rest_framework.exceptions import ValidationError
@@ -27,6 +28,10 @@ from .serializers import (
 )
 from .services import (
     WorkflowError,
+    assert_decision_coverage,
+    clone_workflow_definition,
+    compute_decision_gaps,
+    effective_group_ids,
     ensure_definition_editable,
     lift_condition,
     process_decision,
@@ -40,6 +45,47 @@ class WorkflowDefinitionViewSet(TenantScopedViewSet):
     serializer_class = WorkflowDefinitionSerializer
     filterset_fields = ["target_type", "is_active"]
     search_fields = ["code", "name"]
+    action_perms = {
+        "clone": ["workflow.add_workflowdefinition"],
+    }
+
+    def perform_update(self, serializer):
+        """Interdit d'activer un circuit laissant des montants sans décideur.
+
+        L'activation est le moment où le circuit devient opposable aux
+        dossiers : c'est là que le contrôle a un sens. Un circuit inactif reste
+        librement modifiable pendant sa construction.
+        """
+        activating = (
+            serializer.validated_data.get("is_active") is True
+            and not serializer.instance.is_active
+        )
+        if activating:
+            try:
+                assert_decision_coverage(serializer.instance)
+            except WorkflowError as exc:
+                raise ValidationError(str(exc))
+        super().perform_update(serializer)
+
+    @action(detail=True, methods=["post"])
+    def clone(self, request, pk=None):
+        """Duplique le circuit en version N+1 (étapes incluses)."""
+        source = self.get_object()
+        deactivate = request.data.get("deactivate_source", True)
+        if isinstance(deactivate, str):
+            deactivate = deactivate.lower() not in ("0", "false", "no")
+        try:
+            clone = clone_workflow_definition(
+                source,
+                user=request.user,
+                deactivate_source=bool(deactivate),
+            )
+        except WorkflowError as exc:
+            raise ValidationError(str(exc))
+        return Response(
+            WorkflowDefinitionSerializer(clone, context={"request": request}).data,
+            status=201,
+        )
 
 
 class ApprovalStepViewSet(TenantScopedViewSet):
@@ -53,17 +99,44 @@ class ApprovalStepViewSet(TenantScopedViewSet):
         except WorkflowError as exc:
             raise ValidationError(str(exc))
 
+    def _guard_no_new_gap(self, definition, write):
+        """Applique `write` en refusant qu'il ouvre un trou de décision.
+
+        On compare la couverture avant et après : un circuit déjà troué reste
+        modifiable (il est en construction, et le diagnostic est exposé par
+        l'API), mais un circuit actif et sain ne peut pas être dégradé.
+
+        Un circuit encore sans étape compte comme en construction, sans quoi
+        l'ajout de sa première étape consultative serait refusé.
+        """
+        existing = list(definition.steps.all())
+        had_gaps = not existing or bool(
+            compute_decision_gaps(definition, steps=existing)
+        )
+        with transaction.atomic():
+            write()
+            if definition.is_active and not had_gaps:
+                try:
+                    assert_decision_coverage(definition)
+                except WorkflowError as exc:
+                    raise ValidationError(str(exc))
+
     def perform_create(self, serializer):
-        self._guard_editable(serializer.validated_data["definition"])
-        super().perform_create(serializer)
+        definition = serializer.validated_data["definition"]
+        self._guard_editable(definition)
+        parent = super()
+        self._guard_no_new_gap(definition, lambda: parent.perform_create(serializer))
 
     def perform_update(self, serializer):
-        self._guard_editable(serializer.instance.definition)
-        super().perform_update(serializer)
+        definition = serializer.instance.definition
+        self._guard_editable(definition)
+        parent = super()
+        self._guard_no_new_gap(definition, lambda: parent.perform_update(serializer))
 
     def perform_destroy(self, instance):
-        self._guard_editable(instance.definition)
-        instance.delete()
+        definition = instance.definition
+        self._guard_editable(definition)
+        self._guard_no_new_gap(definition, instance.delete)
 
 
 class WorkflowInstanceViewSet(TenantScopedReadOnlyViewSet):
@@ -155,12 +228,15 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
 
     @action(detail=False, methods=["get"])
     def my_pending(self, request):
-        """Tâches en attente pour les rôles de l'utilisateur connecté."""
-        group_ids = request.user.groups.values_list("id", flat=True)
-        qs = self.get_queryset().filter(
-            status=ApprovalTask.Status.PENDING,
-            step__required_group_id__in=group_ids,
-        )
+        """Tâches en attente pour les rôles de l'utilisateur (y compris délégations)."""
+        if request.user.is_superuser or getattr(request.user, "is_group_level", False):
+            qs = self.get_queryset().filter(status=ApprovalTask.Status.PENDING)
+        else:
+            group_ids = effective_group_ids(request.user)
+            qs = self.get_queryset().filter(
+                status=ApprovalTask.Status.PENDING,
+                step__required_group_id__in=group_ids,
+            )
         page = self.paginate_queryset(qs)
         serializer = self.get_serializer(page or qs, many=True)
         if page is not None:
@@ -183,7 +259,7 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
         )
 
         user = request.user
-        group_ids = set(user.groups.values_list("id", flat=True))
+        group_ids = effective_group_ids(user)
         see_all = user.is_superuser or getattr(user, "is_group_level", False)
 
         instances = (

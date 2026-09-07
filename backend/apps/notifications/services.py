@@ -11,6 +11,7 @@ import logging
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.utils import timezone
 from django.utils.html import escape
 
 from .mail import send_email_for_tenant
@@ -133,6 +134,8 @@ def _describe_target(instance) -> dict:
 def _users_for_group(group, tenant_id):
     from django.db.models import Q
 
+    from apps.accounts.models import Delegation
+
     if group is None:
         return User.objects.none()
     qs = User.objects.filter(
@@ -141,7 +144,31 @@ def _users_for_group(group, tenant_id):
     ).exclude(email="")
     if tenant_id:
         qs = qs.filter(Q(tenant_id=tenant_id) | Q(is_group_level=True)).distinct()
-    return qs
+
+    member_ids = list(qs.values_list("id", flat=True))
+    today = timezone.now().date()
+    delegate_ids = list(
+        Delegation.objects.filter(
+            delegator_id__in=member_ids,
+            is_active=True,
+            start_date__lte=today,
+            end_date__gte=today,
+        ).values_list("delegate_id", flat=True)
+    )
+    if not delegate_ids:
+        return qs
+
+    delegates = User.objects.filter(
+        id__in=delegate_ids,
+        is_active=True,
+    ).exclude(email="")
+    if tenant_id:
+        delegates = delegates.filter(
+            Q(tenant_id=tenant_id) | Q(is_group_level=True)
+        )
+    return User.objects.filter(
+        Q(pk__in=member_ids) | Q(pk__in=delegates.values_list("id", flat=True))
+    ).distinct()
 
 
 def _emails(users) -> list[str]:

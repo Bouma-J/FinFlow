@@ -1,7 +1,6 @@
-import os
-
-from django.conf import settings
 from rest_framework import serializers
+
+from apps.common.storage_urls import file_download_url
 
 from .models import Document, DocumentCategory
 
@@ -15,41 +14,125 @@ class DocumentCategorySerializer(serializers.ModelSerializer):
 
 class DocumentSerializer(serializers.ModelSerializer):
     category_label = serializers.CharField(source="category.label", read_only=True)
+    category_code = serializers.CharField(source="category.code", read_only=True)
+    uploaded_by_name = serializers.SerializerMethodField()
+    related_type = serializers.SerializerMethodField()
+    related_label = serializers.SerializerMethodField()
+    related_path = serializers.SerializerMethodField()
+    file_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Document
         fields = [
-            "id", "category", "category_label", "name", "file", "mime_type",
-            "size_bytes", "sha256", "version", "issue_date", "expiry_date",
-            "content_type", "object_id", "uploaded_by", "created_at",
+            "id",
+            "category",
+            "category_label",
+            "category_code",
+            "name",
+            "file",
+            "file_url",
+            "mime_type",
+            "size_bytes",
+            "sha256",
+            "version",
+            "issue_date",
+            "expiry_date",
+            "content_type",
+            "object_id",
+            "related_type",
+            "related_label",
+            "related_path",
+            "uploaded_by",
+            "uploaded_by_name",
+            "origin_key",
+            "is_deleted",
+            "deleted_at",
+            "created_at",
         ]
         read_only_fields = [
-            "id", "mime_type", "size_bytes", "sha256",
-            "uploaded_by", "created_at",
+            "id",
+            "mime_type",
+            "size_bytes",
+            "sha256",
+            "uploaded_by",
+            "created_at",
+            "origin_key",
+            "is_deleted",
+            "deleted_at",
+            "category_code",
+            "category_label",
+            "uploaded_by_name",
+            "related_type",
+            "related_label",
+            "related_path",
+            "file_url",
         ]
 
+    def get_uploaded_by_name(self, obj) -> str:
+        user = obj.uploaded_by
+        if not user:
+            return ""
+        return user.get_full_name() or user.get_username()
+
+    def get_related_type(self, obj) -> str:
+        ct = obj.content_type
+        if not ct:
+            return ""
+        return f"{ct.app_label}.{ct.model}"
+
+    def get_related_label(self, obj) -> str:
+        related = obj.related_object
+        if related is None:
+            return ""
+        for attr in ("reference", "display_name", "name"):
+            val = getattr(related, attr, None)
+            if val:
+                return str(val)
+        return str(related)
+
+    def get_related_path(self, obj) -> str | None:
+        """Chemin SPA vers l'objet lié (évite les deep links cassés côté front)."""
+        ct = obj.content_type
+        if not ct or not obj.object_id:
+            return None
+        oid = str(obj.object_id)
+        key = f"{ct.app_label}.{ct.model}"
+        if key == "credits.creditapplication":
+            return f"/dossiers/{oid}"
+        if key == "guarantees.guaranteereleaserequest":
+            return f"/mains-levees/{oid}"
+        if key == "guarantees.dationrequest":
+            return f"/dations/{oid}"
+        if key == "guarantees.guaranteeformalizationrequest":
+            return f"/formalisations/{oid}"
+        if key == "guarantees.guarantee":
+            return f"/garanties/{oid}"
+        if key == "collections.litigationfile":
+            related = obj.related_object
+            case_id = getattr(related, "case_id", None) if related else None
+            if case_id:
+                return f"/recouvrement/{case_id}/contentieux/{oid}"
+            return None
+        if key == "collections.collectioncase":
+            return f"/recouvrement/{oid}"
+        return None
+
+    def get_file_url(self, obj) -> str | None:
+        return file_download_url(obj.file) if obj.file else None
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data["file"] = file_download_url(instance.file) if instance.file else None
+        return data
+
     def validate_file(self, value):
-        max_bytes = settings.GED_MAX_UPLOAD_SIZE_MB * 1024 * 1024
-        if value.size > max_bytes:
-            raise serializers.ValidationError(
-                f"Fichier trop volumineux (max {settings.GED_MAX_UPLOAD_SIZE_MB} Mo)."
-            )
-        ext = os.path.splitext(value.name)[1].lower().lstrip(".")
-        if ext not in settings.GED_ALLOWED_EXTENSIONS:
-            raise serializers.ValidationError(
-                f"Extension « {ext} » non autorisée."
-            )
-        request = self.context.get("request")
-        tenant = getattr(getattr(request, "user", None), "tenant", None)
-        if tenant is None and request is not None:
-            from apps.common.tenancy import get_current_tenant_id
-            from apps.tenants.models import Tenant
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
 
-            tid = get_current_tenant_id()
-            if tid:
-                tenant = Tenant.objects.filter(pk=tid).first()
-        if tenant is not None:
-            from .quotas import assert_ged_quota
-
-            assert_ged_quota(tenant, value.size)
-        return value
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=True,
+        )

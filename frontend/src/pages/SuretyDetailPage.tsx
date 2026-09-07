@@ -4,6 +4,7 @@ import {
   Building2,
   Contact,
   FileText,
+  HandCoins,
   IdCard,
   ImageOff,
   Pencil,
@@ -19,7 +20,8 @@ import { api } from "@/api/client";
 import { CLIENT_LABELS, type Surety } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
-import { Badge, Card, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
+import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
+import { Badge, Card, ErrorState, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
 
 function label(map: Record<string, string>, key: string) {
   return map[key] || key || "—";
@@ -78,8 +80,10 @@ export function SuretyDetailPage({
   const backTo = appId ? `/dossiers/${appId}` : "/cautions";
   const canEdit = manageable && hasPerm(user, "sureties.change_surety");
   const canDelete = manageable && hasPerm(user, "sureties.delete_surety");
+  const canManageEng = hasPerm(user, "sureties.change_suretyengagement");
+  const canContracts = hasPerm(user, "contracts.add_generatedcontract");
 
-  const { data: s, isLoading } = useQuery({
+  const { data: s, isLoading, isError, refetch } = useQuery({
     queryKey: ["surety", id],
     queryFn: async () => (await api.get<Surety>(`/sureties/${id}/`)).data,
     enabled: !!id,
@@ -93,7 +97,15 @@ export function SuretyDetailPage({
     },
   });
 
-  if (isLoading || !s) return <Spinner />;
+  if (isLoading) return <Spinner />;
+  if (isError || !s) {
+    return (
+      <ErrorState
+        message="Impossible de charger la caution."
+        onRetry={() => refetch()}
+      />
+    );
+  }
 
   const isMoral = s.surety_type === "MORAL";
   const typeLabel = isMoral ? "personne morale" : "personne physique";
@@ -171,6 +183,11 @@ export function SuretyDetailPage({
               <span className={`dot-status ${s.is_active ? "on" : "off"}`}>
                 {s.is_active ? "Active" : "Inactive"}
               </span>
+              <span className="muted">
+                Plafond {formatMoney(s.commitment_ceiling)} · Engagé{" "}
+                {formatMoney(s.total_committed)} · Dispo{" "}
+                {formatMoney(s.available_ceiling)}
+              </span>
             </div>
           </div>
         </div>
@@ -192,7 +209,75 @@ export function SuretyDetailPage({
         )}
       </div>
 
-      <div className="detail-grid">
+      <div className="detail-sections">
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <HandCoins size={17} /> Plafond &amp; risque
+              </>
+            }
+          >
+            <dl className="def-list two">
+              <div>
+                <dt>Plafond</dt>
+                <dd>{formatMoney(s.commitment_ceiling)}</dd>
+              </div>
+              <div>
+                <dt>Engagé (actif + appelé)</dt>
+                <dd>{formatMoney(s.total_committed)}</dd>
+              </div>
+              <div>
+                <dt>Disponible</dt>
+                <dd>{formatMoney(s.available_ceiling)}</dd>
+              </div>
+              <div>
+                <dt>Engagements</dt>
+                <dd>{s.engagements?.length ?? 0}</dd>
+              </div>
+            </dl>
+          </Card>
+
+          <Card
+            title={
+              <>
+                <HandCoins size={17} /> Historique des engagements
+              </>
+            }
+          >
+            {(s.engagements?.length ?? 0) === 0 ? (
+              <p className="muted small">Aucun engagement enregistré.</p>
+            ) : (
+              <ul className="link-list stacked">
+                {(s.engagements ?? []).map((e) => (
+                  <li key={e.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
+                    <div className="row-actions" style={{ width: "100%" }}>
+                      <span>
+                        <Link to={`/dossiers/${e.application}`}>
+                          {e.application_reference || e.application.slice(0, 8)}
+                        </Link>
+                        {e.client_display ? (
+                          <em className="muted small"> · {e.client_display}</em>
+                        ) : null}
+                      </span>
+                      <span className="muted small">
+                        {formatDate(e.created_at)}
+                      </span>
+                    </div>
+                    <SuretyEngagementActions
+                      engagement={e}
+                      canManage={canManageEng}
+                      canContracts={canContracts}
+                      invalidateKeys={[["surety", id]]}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+
+        <div className="detail-sections-row full">
         <Card
           title={
             <>
@@ -347,6 +432,7 @@ export function SuretyDetailPage({
             )}
           </SubSection>
         </Card>
+        </div>
       </div>
     </div>
   );

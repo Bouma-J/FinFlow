@@ -39,6 +39,8 @@ class IntegrationLogViewSet(TenantScopedReadOnlyViewSet):
     }
     filterset_fields = ["connector", "status", "direction", "operation"]
     search_fields = ["operation", "external_reference", "idempotency_key"]
+    ordering_fields = ["created_at", "status", "operation"]
+    ordering = ["-created_at"]
 
     @action(detail=True, methods=["post"])
     def retry(self, request, pk=None):

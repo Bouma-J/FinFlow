@@ -2,6 +2,7 @@
 Logique métier du moteur de workflow (démarrage, décisions, réserves).
 """
 from datetime import timedelta
+from decimal import Decimal
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
@@ -65,6 +66,98 @@ def ensure_definition_editable(definition):
 def _applicable_steps(definition, amount, risk_level):
     steps = definition.steps.order_by("order")
     return [s for s in steps if s.applies_to(amount, risk_level)]
+
+
+# Plus petit écart de montant distinguable : sert à exprimer « juste au-dessus
+# du plafond d'une étape », les montants étant stockés à deux décimales.
+DECISION_GAP_EPSILON = Decimal("0.01")
+
+
+def compute_decision_gaps(definition, steps=None):
+    """Tranches de montant qu'aucune étape décisionnelle ne couvre.
+
+    Un dossier tombant dans une telle tranche est approuvé sur les seuls avis
+    consultatifs : aucun décideur n'intervient formellement. Le circuit
+    fonctionne, mais la gouvernance est absente — d'où ce diagnostic.
+
+    Seules les étapes décisionnelles inconditionnelles en risque sont retenues :
+    une étape soumise à un `min_risk_level` ne peut pas garantir qu'un décideur
+    intervienne pour les dossiers moins risqués.
+
+    Retourne une liste de tuples ``(borne_basse, borne_haute_incluse_ou_None)``.
+    `steps` permet de réutiliser un prefetch et d'éviter une requête.
+    """
+    steps = list(definition.steps.all() if steps is None else steps)
+    if not steps:
+        # Circuit sans étape : en cours de création, rien à diagnostiquer.
+        return []
+
+    deciders = [
+        s
+        for s in steps
+        if s.step_kind == ApprovalStep.StepKind.DECISIONAL
+        and s.min_risk_level is None
+    ]
+
+    # L'applicabilité d'une étape ne change qu'en deux points : à son
+    # `min_amount` (elle devient applicable) et juste après son `max_amount`
+    # (elle cesse de l'être). Ces bornes découpent l'axe des montants en
+    # tranches sur lesquelles l'ensemble des étapes applicables est constant.
+    breakpoints = {Decimal("0")}
+    for step in steps:
+        if step.min_amount is not None and step.min_amount > 0:
+            breakpoints.add(step.min_amount)
+        if step.max_amount is not None:
+            breakpoints.add(step.max_amount + DECISION_GAP_EPSILON)
+    ordered = sorted(breakpoints)
+
+    gaps = []
+    for index, low in enumerate(ordered):
+        next_low = ordered[index + 1] if index + 1 < len(ordered) else None
+        if any(d.applies_to(low, None) for d in deciders):
+            continue
+        high = None if next_low is None else next_low - DECISION_GAP_EPSILON
+        # Fusionne avec la tranche précédente si elles se touchent, pour ne pas
+        # présenter à l'administrateur un trou unique découpé en morceaux.
+        previous = gaps[-1] if gaps else None
+        contiguous = (
+            previous is not None
+            and previous[1] is not None
+            and previous[1] + DECISION_GAP_EPSILON == low
+        )
+        if contiguous:
+            previous[1] = high
+        else:
+            gaps.append([low, high])
+
+    return [(low, high) for low, high in gaps]
+
+
+def _format_amount(value):
+    return f"{value:,.2f}".replace(",", " ")
+
+
+def format_decision_gaps(gaps):
+    """Rend les tranches non couvertes lisibles pour un administrateur."""
+    parts = []
+    for low, high in gaps:
+        if high is None:
+            parts.append(f"à partir de {_format_amount(low)}")
+        else:
+            parts.append(f"de {_format_amount(low)} à {_format_amount(high)}")
+    return ", ".join(parts)
+
+
+def assert_decision_coverage(definition, steps=None):
+    """Refuse un circuit laissant une tranche de montant sans décideur."""
+    gaps = compute_decision_gaps(definition, steps=steps)
+    if gaps:
+        raise WorkflowError(
+            "Ce circuit laisse des montants sans étape décisionnelle "
+            f"({format_decision_gaps(gaps)}) : les dossiers concernés seraient "
+            "approuvés sur de simples avis consultatifs. Passez une étape en "
+            "« Décisionnelle » ou ajustez les seuils."
+        )
 
 
 def _get_credit_application(instance):
@@ -320,19 +413,28 @@ def user_can_act(user, step):
         return True
     if step.required_group_id is None:
         return False
-    if user.groups.filter(id=step.required_group_id).exists():
-        return True
+    return step.required_group_id in effective_group_ids(user)
 
+
+def effective_group_ids(user) -> set[int]:
+    """Groupes dont l'utilisateur est membre, ou via délégation active.
+
+    Utilisé pour les boîtes de tâches, KPIs et (côté décision) ``user_can_act``.
+    """
+    if not (user and getattr(user, "is_authenticated", False)):
+        return set()
+    ids = set(user.groups.values_list("id", flat=True))
     from apps.accounts.models import Delegation
 
     today = timezone.now().date()
-    return Delegation.objects.filter(
+    delegated = Delegation.objects.filter(
         delegate_id=user.id,
         is_active=True,
         start_date__lte=today,
         end_date__gte=today,
-        delegator__groups__id=step.required_group_id,
-    ).exists()
+    ).values_list("delegator__groups__id", flat=True)
+    ids.update(gid for gid in delegated if gid is not None)
+    return ids
 
 
 def cancel_active_workflows_for_target(target) -> int:
@@ -360,14 +462,71 @@ def cancel_active_workflows_for_target(target) -> int:
     return len(instances)
 
 
-def _check_self_validation(user, application):
-    """Interdit au soumissionnaire de valider son propre dossier."""
+@transaction.atomic
+def clone_workflow_definition(source, *, user=None, deactivate_source=True):
+    """Crée une nouvelle version du circuit avec copie des étapes."""
+    from django.db.models import Max
+
+    tenant_id = source.tenant_id
+    max_version = (
+        WorkflowDefinition.all_tenants.filter(
+            tenant_id=tenant_id, code=source.code
+        ).aggregate(m=Max("version"))["m"]
+        or source.version
+    )
+    clone = WorkflowDefinition.all_tenants.create(
+        tenant_id=tenant_id,
+        code=source.code,
+        name=source.name,
+        target_type=source.target_type,
+        version=max_version + 1,
+        is_active=True,
+    )
+    if deactivate_source and source.is_active:
+        source.is_active = False
+        source.save(update_fields=["is_active", "updated_at"])
+
+    for step in source.steps.all().order_by("order", "created_at"):
+        ApprovalStep.all_tenants.create(
+            tenant_id=tenant_id,
+            definition=clone,
+            name=step.name,
+            order=step.order,
+            required_group_id=step.required_group_id,
+            mode=step.mode,
+            step_kind=step.step_kind,
+            min_amount=step.min_amount,
+            max_amount=step.max_amount,
+            min_risk_level=step.min_risk_level,
+            sla_hours=step.sla_hours,
+            allow_return=step.allow_return,
+        )
+    return (
+        WorkflowDefinition.all_tenants.prefetch_related("steps")
+        .get(pk=clone.pk)
+    )
+
+
+def _check_self_validation(user, instance):
+    """Interdit à l'initiateur de valider son propre dossier / processus."""
     if user.is_superuser:
         return
-    submitter_id = application.submitted_by_id
-    if submitter_id and submitter_id == user.id:
+    application = _get_credit_application(instance)
+    if application is not None:
+        submitter_id = application.submitted_by_id
+        if submitter_id and submitter_id == user.id:
+            raise WorkflowError(
+                "Vous ne pouvez pas statuer sur un dossier que vous avez soumis."
+            )
+        return
+
+    target = instance.target
+    if target is None:
+        return
+    creator_id = getattr(target, "created_by_id", None)
+    if creator_id and creator_id == user.id:
         raise WorkflowError(
-            "Vous ne pouvez pas statuer sur un dossier que vous avez soumis."
+            "Vous ne pouvez pas statuer sur un processus que vous avez initié."
         )
 
 
@@ -617,10 +776,17 @@ def process_decision(
         )
 
     application = _get_credit_application(instance)
-    if application:
-        _check_self_validation(user, application)
+    _check_self_validation(user, instance)
 
     validated_opinion = _validate_opinion(task, decision, opinion, reserves)
+    if (
+        validated_opinion == ApprovalTask.Opinion.FAVORABLE_SOUS_RESERVE
+        and application is None
+    ):
+        raise WorkflowError(
+            "Les réserves (avis favorable sous réserve) ne s'appliquent "
+            "qu'aux dossiers de crédit."
+        )
 
     task.acted_by = user
     task.acted_at = timezone.now()

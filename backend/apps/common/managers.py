@@ -1,5 +1,6 @@
 """Managers et QuerySets appliquant l'isolation multi-tenants."""
 from django.db import models
+from django.utils import timezone
 
 from .tenancy import get_current_tenant_id, is_group_context
 
@@ -19,6 +20,22 @@ class TenantQuerySet(models.QuerySet):
         return self.filter(tenant_id=tenant_id)
 
 
+class SoftDeleteTenantQuerySet(TenantQuerySet):
+    def delete(self):
+        return models.QuerySet.update(
+            self, is_deleted=True, deleted_at=timezone.now()
+        )
+
+    def hard_delete(self):
+        return models.QuerySet.delete(self)
+
+    def alive(self):
+        return self.filter(is_deleted=False)
+
+    def dead(self):
+        return self.filter(is_deleted=True)
+
+
 class TenantManager(models.Manager):
     """Manager par défaut : renvoie uniquement les données du tenant courant."""
 
@@ -26,8 +43,26 @@ class TenantManager(models.Manager):
         return TenantQuerySet(self.model, using=self._db).for_current_tenant()
 
 
+class SoftDeleteTenantManager(TenantManager):
+    """Tenant courant + exclusion des enregistrements soft-deleted."""
+
+    def get_queryset(self):
+        return (
+            SoftDeleteTenantQuerySet(self.model, using=self._db)
+            .for_current_tenant()
+            .alive()
+        )
+
+
 class AllTenantsManager(models.Manager):
     """Manager d'échappement explicite (admin, migrations, tâches système)."""
 
     def get_queryset(self):
         return TenantQuerySet(self.model, using=self._db)
+
+
+class SoftDeleteAllTenantsManager(AllTenantsManager):
+    """Toutes filiales, hors soft-deleted (batchs / miroirs)."""
+
+    def get_queryset(self):
+        return SoftDeleteTenantQuerySet(self.model, using=self._db).alive()

@@ -1,7 +1,8 @@
 """Services métier : formalisation / constitution juridique des garanties.
 
-Processus parallèle au crédit — ne bloque jamais le décaissement.
-La garantie reste ACTIVE et collatéralisable pendant toute la formalisation.
+Par défaut le processus est parallèle au crédit (ne bloque pas le décaissement).
+La politique filiale ``require_formalization_before_disbursement`` peut le rendre
+bloquant via ``missing_formalizations_for_disbursement``.
 """
 from __future__ import annotations
 
@@ -29,6 +30,30 @@ _OPEN_FORM_STATUSES = (
     GuaranteeFormalizationRequest.Status.RETURNED,
     GuaranteeFormalizationRequest.Status.APPROVED,
 )
+
+# Types de garanties typiquement soumis à publicité / formalisation juridique.
+_FORMALIZABLE_TYPES = (
+    Guarantee.GuaranteeType.MORTGAGE,
+    Guarantee.GuaranteeType.PLEDGE,
+    Guarantee.GuaranteeType.LIEN,
+)
+
+
+def missing_formalizations_for_disbursement(application) -> list[str]:
+    """
+    Références des garanties encore non formalisées pour un dossier.
+    Retourne [] si aucune garantie formalisable n'est rattachée.
+    """
+    qs = Guarantee.objects.filter(
+        application_id=application.pk,
+        status=Guarantee.Status.ACTIVE,
+        guarantee_type__in=_FORMALIZABLE_TYPES,
+        formalized_at__isnull=True,
+    )
+    return [
+        g.reference or str(g.pk)
+        for g in qs.only("id", "reference")
+    ]
 
 _EDITABLE_STATUSES = (
     GuaranteeFormalizationRequest.Status.DRAFT,
@@ -139,13 +164,19 @@ def initiate_formalization_request(
     as_draft=True,
 ):
     """
-    Ouvre un dossier de formalisation sur une garantie ACTIVE.
+    Ouvre un dossier de formalisation sur une garantie ACTIVE
+    rattachée à un dossier de crédit.
 
     N'altère pas le statut de la garantie (reste ACTIVE) → décaissement non bloqué.
     """
     if guarantee.status != Guarantee.Status.ACTIVE:
         raise ProcessError(
             "Seule une garantie active peut faire l'objet d'une formalisation."
+        )
+    if not guarantee.application_id:
+        raise ProcessError(
+            "La formalisation ne concerne que les garanties attachées "
+            "à un dossier de crédit."
         )
     if GuaranteeFormalizationRequest.objects.filter(
         guarantee=guarantee,
@@ -177,6 +208,96 @@ def initiate_formalization_request(
     if as_draft:
         return req
     return start_formalization_progress(req, user=user)
+
+
+def formalization_compose_context(*, client=None, application=None) -> dict:
+    """
+    Contexte pour composer une formalisation :
+    recherche par client ou par dossier de crédit → garanties attachées.
+    """
+    from apps.credits.models import CreditApplication
+    from apps.guarantees.serializers import GuaranteeSerializer
+
+    if application is None and client is None:
+        raise ProcessError("Indiquez un client ou un dossier de crédit.")
+
+    if application is not None:
+        client = application.client
+        apps_qs = CreditApplication.objects.filter(pk=application.pk)
+        guarantees_qs = Guarantee.objects.filter(
+            application_id=application.pk,
+            status=Guarantee.Status.ACTIVE,
+        )
+    else:
+        apps_qs = CreditApplication.objects.filter(client_id=client.pk)
+        guarantees_qs = Guarantee.objects.filter(
+            client_id=client.pk,
+            status=Guarantee.Status.ACTIVE,
+            application_id__isnull=False,
+        )
+
+    busy_ids = set(
+        GuaranteeFormalizationRequest.objects.filter(
+            guarantee_id__in=guarantees_qs.values_list("id", flat=True),
+            status__in=_OPEN_FORM_STATUSES,
+        ).values_list("guarantee_id", flat=True)
+    )
+
+    guarantees_qs = guarantees_qs.select_related(
+        "application", "agency", "client"
+    ).order_by("-created_at")
+
+    # Dossiers ayant au moins une garantie attachée (ou le dossier ciblé).
+    if application is None:
+        app_ids_with_gar = set(
+            Guarantee.objects.filter(
+                client_id=client.pk,
+                status=Guarantee.Status.ACTIVE,
+                application_id__isnull=False,
+            ).values_list("application_id", flat=True)
+        )
+        apps_qs = apps_qs.filter(pk__in=app_ids_with_gar)
+
+    apps = apps_qs.select_related("product").order_by("-created_at")
+    gar_count_by_app: dict = {}
+    for g in guarantees_qs:
+        if g.application_id:
+            gar_count_by_app[g.application_id] = (
+                gar_count_by_app.get(g.application_id, 0) + 1
+            )
+
+    credits = []
+    for app in apps:
+        credits.append(
+            {
+                "application_id": str(app.pk),
+                "application_reference": app.reference,
+                "application_status": app.status,
+                "application_status_display": app.get_status_display(),
+                "product_label": (
+                    getattr(app.product, "label", "") if app.product_id else ""
+                ),
+                "amount": str(app.amount_requested or 0),
+                "currency": getattr(app, "currency", None) or "XOF",
+                "guarantees_count": gar_count_by_app.get(app.pk, 0),
+            }
+        )
+
+    busy_id_strs = {str(b) for b in busy_ids}
+    guarantees_data = GuaranteeSerializer(guarantees_qs, many=True).data
+    for row in guarantees_data:
+        row["formalization_busy"] = str(row["id"]) in busy_id_strs
+
+    return {
+        "client_id": str(client.pk),
+        "client_display": getattr(client, "display_name", str(client)),
+        "application_id": str(application.pk) if application else None,
+        "application_reference": (
+            application.reference if application else None
+        ),
+        "credits": credits,
+        "guarantees": guarantees_data,
+    }
 
 
 @transaction.atomic

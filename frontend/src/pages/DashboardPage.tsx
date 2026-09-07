@@ -37,6 +37,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import {
   EmptyState,
+  ErrorState,
   Spinner,
   StatCard,
   formatMoney,
@@ -399,7 +400,7 @@ export function DashboardPage() {
     return p;
   }, [activeTenant, filters, scope, user?.id]);
 
-  const { data, isLoading, isFetching } = useQuery({
+  const { data, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ["dashboard", queryParams],
     queryFn: async () =>
       (
@@ -605,8 +606,13 @@ export function DashboardPage() {
           )}
       </section>
 
-      {isLoading || !data ? (
+      {isLoading ? (
         <Spinner />
+      ) : isError || !data ? (
+        <ErrorState
+          message="Impossible de charger le tableau de bord."
+          onRetry={() => refetch()}
+        />
       ) : (
         <>
           <KpiSection title="Pipeline crédit">

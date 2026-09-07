@@ -73,7 +73,8 @@ import { ApprovalConditionsCard } from "@/components/ApprovalConditionsCard";
 import { CollateralSummaryCard } from "@/components/CollateralSummaryCard";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import { RenewGuaranteesPanel } from "@/components/RenewGuaranteesPanel";
-import { Badge, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
+import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
+import { Badge, ErrorState, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
 
 interface WorkflowInstance {
   id: string;
@@ -1324,18 +1325,42 @@ function TemplateRow({
   const [error, setError] = useState<string | null>(null);
 
   const generate = useMutation({
-    mutationFn: async () =>
-      (
-        await api.post("/generated-contracts/generate/", {
+    mutationFn: async () => {
+      const res = await api.post(
+        "/generated-contracts/generate/",
+        {
           application: appId,
           template: tpl.id,
           extra_values: values,
-        })
-      ).data,
-    onSuccess: () => {
+        },
+        { validateStatus: (s) => s === 200 || s === 201 || s === 202 },
+      );
+      return { status: res.status, data: res.data as Record<string, unknown> };
+    },
+    onSuccess: async (payload) => {
       setError(null);
       setOpenForm(false);
       onDone();
+      const taskId =
+        typeof payload.data?.task_id === "string"
+          ? payload.data.task_id
+          : null;
+      if (
+        (payload.status === 202 || payload.data?.status === "queued") &&
+        taskId
+      ) {
+        try {
+          const { pollAsyncTask } = await import("@/utils/pollAsyncTask");
+          await pollAsyncTask(taskId, { onTick: onDone, maxAttempts: 30 });
+          onDone();
+        } catch (e) {
+          setError(
+            e instanceof Error
+              ? e.message
+              : "La génération du contrat a échoué.",
+          );
+        }
+      }
     },
     onError: (e) =>
       setError(extractApiError(e, "La génération du contrat a échoué.")),
@@ -1610,7 +1635,7 @@ export function CreditApplicationDetailPage() {
   const [showSchedule, setShowSchedule] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const { data: app, isLoading } = useQuery({
+  const { data: app, isLoading, isError, refetch } = useQuery({
     queryKey: ["credit-application", id],
     queryFn: async () =>
       (await api.get<CreditApplication>(`/credit-applications/${id}/`)).data,
@@ -1824,7 +1849,15 @@ export function CreditApplicationDetailPage() {
     });
   }, [myTasks, id]);
 
-  if (isLoading || !app) return <Spinner />;
+  if (isLoading) return <Spinner />;
+  if (isError || !app) {
+    return (
+      <ErrorState
+        message="Impossible de charger le dossier de crédit."
+        onRetry={() => refetch()}
+      />
+    );
+  }
 
   // Un dossier peut avoir plusieurs instances (cycles renvoyés/annulés puis
   // re-soumis) : on privilégie le cycle actif, sinon le plus récent.
@@ -1851,6 +1884,7 @@ export function CreditApplicationDetailPage() {
   const canAddContract = hasPerm(user, "contracts.add_generatedcontract");
   const canAddGuarantee = hasPerm(user, "guarantees.add_guarantee");
   const canAddSurety = hasPerm(user, "sureties.add_suretyengagement");
+  const canManageSuretyEng = hasPerm(user, "sureties.change_suretyengagement");
   const isOwner =
     !!uid && (app.created_by === uid || app.submitted_by === uid);
   // Soumission et suppression : réservées au créateur du dossier (ou super-admin),
@@ -2688,20 +2722,50 @@ export function CreditApplicationDetailPage() {
 
           <SubSection icon={HandCoins} title="Cautions">
             {engagements && engagements.results.length > 0 ? (
-              <ul className="link-list">
+              <ul className="link-list stacked">
                 {engagements.results.map((e) => (
                   <li
                     key={e.id}
-                    className="row-clickable"
-                    onClick={() =>
-                      navigate(`/dossiers/${id}/cautions/${e.surety}`)
-                    }
+                    style={{ flexDirection: "column", alignItems: "stretch" }}
                   >
-                    <span>
-                      <HandCoins size={14} /> {e.surety_display}
-                    </span>
-                    <span className="muted">{formatMoney(e.amount, cur)}</span>
-                    <Badge value={e.status} />
+                    <div
+                      className="row-clickable"
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 12,
+                        cursor: "pointer",
+                      }}
+                      onClick={() =>
+                        navigate(`/dossiers/${id}/cautions/${e.surety}`)
+                      }
+                    >
+                      <span>
+                        <HandCoins size={14} /> {e.surety_display}
+                        {e.engagement_type_display ? (
+                          <em className="muted small">
+                            {" "}
+                            · {e.engagement_type_display}
+                          </em>
+                        ) : null}
+                      </span>
+                      <Badge
+                        value={e.status}
+                        label={e.status_display || e.status}
+                      />
+                    </div>
+                    <SuretyEngagementActions
+                      engagement={e}
+                      canManage={canManageSuretyEng}
+                      canContracts={canAddContract}
+                      currency={cur}
+                      invalidateKeys={[
+                        ["surety-engagements", id],
+                        ["credit-application", id],
+                        ["credit-readiness", id],
+                        ["generated-contracts", id],
+                      ]}
+                    />
                   </li>
                 ))}
               </ul>

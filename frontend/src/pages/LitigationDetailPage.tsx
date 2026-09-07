@@ -19,6 +19,7 @@ import { hasPerm } from "@/auth/permissions";
 import {
   Badge,
   Card,
+  ErrorState,
   PageHeader,
   Spinner,
   formatMoney,
@@ -264,7 +265,15 @@ export function LitigationDetailPage() {
     onError: () => setErr("Dépôt de pièce impossible."),
   });
 
-  if (litQuery.isLoading || !litQuery.data) return <Spinner />;
+  if (litQuery.isLoading) return <Spinner />;
+  if (litQuery.isError || !litQuery.data) {
+    return (
+      <ErrorState
+        message="Impossible de charger le contentieux."
+        onRetry={() => litQuery.refetch()}
+      />
+    );
+  }
   const lit = litQuery.data;
   const firms = (parties.data || []).filter((p) => p.party_type === "LAW_FIRM");
   const lawyers = (parties.data || []).filter(
@@ -587,7 +596,7 @@ export function LitigationDetailPage() {
                 Enregistrer
               </button>
             )}
-            <Link className="btn btn-ghost btn-sm" to="/intervenants-juridiques">
+            <Link className="btn btn-ghost btn-sm" to="/admin/intervenants-juridiques">
               Gérer les cabinets
             </Link>
             {caseId && (

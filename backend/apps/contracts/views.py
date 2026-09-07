@@ -25,13 +25,15 @@ from .tasks import generate_contract_task
 
 
 def _get_application(application_id):
+    from apps.common.scoped import require_tenant_id
     from apps.credits.models import CreditApplication
 
+    tenant_id = require_tenant_id()
     try:
-        return CreditApplication.objects.select_related(
+        return CreditApplication.all_tenants.select_related(
             "client", "product", "agency", "tenant"
-        ).get(id=application_id)
-    except (CreditApplication.DoesNotExist, ValueError, TypeError):
+        ).get(pk=application_id, tenant_id=tenant_id)
+    except (CreditApplication.DoesNotExist, ValueError, TypeError, ValidationError):
         raise Http404("Dossier introuvable.")
 
 
@@ -96,6 +98,23 @@ class GeneratedContractViewSet(TenantScopedViewSet):
             "Utilisez l'action « generate » pour produire un contrat."
         )
 
+    def perform_destroy(self, instance):
+        files = []
+        for field_name in ("file", "signed_file"):
+            f = getattr(instance, field_name, None)
+            if f and getattr(f, "name", None):
+                files.append((f.storage, f.name))
+        super().perform_destroy(instance)
+        for storage, name in files:
+            try:
+                storage.delete(name)
+            except Exception:  # noqa: BLE001
+                import logging
+
+                logging.getLogger("finflow").exception(
+                    "Échec suppression contrat key=%s", name
+                )
+
     @action(detail=False, methods=["post"])
     def generate(self, request):
         """Génère un contrat pour un dossier à partir d'un modèle."""
@@ -104,29 +123,70 @@ class GeneratedContractViewSet(TenantScopedViewSet):
         data = payload.validated_data
 
         application = _get_application(data["application"])
+        from apps.common.scoped import require_tenant_id
+
+        tenant_id = require_tenant_id()
         try:
-            template = ContractTemplate.objects.get(id=data["template"])
+            template = ContractTemplate.all_tenants.get(
+                id=data["template"], tenant_id=tenant_id
+            )
         except ContractTemplate.DoesNotExist:
             raise Http404("Modèle introuvable.")
 
         extra_values = data.get("extra_values") or {}
-        async_mode = str(request.query_params.get("async", "")).lower() in (
-            "1", "true", "yes",
+        primary_engagement = None
+        engagement_id = data.get("surety_engagement")
+        if engagement_id:
+            from apps.sureties.models import SuretyEngagement
+
+            try:
+                primary_engagement = SuretyEngagement.objects.select_related(
+                    "surety"
+                ).get(id=engagement_id, application=application)
+            except SuretyEngagement.DoesNotExist:
+                raise ValidationError(
+                    {"surety_engagement": "Engagement introuvable pour ce dossier."}
+                )
+
+        async_mode = str(request.query_params.get("async", "1")).lower() not in (
+            "0",
+            "false",
+            "no",
+            "sync",
         )
+        # ?sync=1 force le rendu dans la requête HTTP (debug / petits volumes)
+        if str(request.query_params.get("sync", "")).lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            async_mode = False
         if async_mode:
+            from apps.common.scoped import track_async_task
+
             task = generate_contract_task.delay(
                 str(application.id),
                 str(template.id),
                 str(request.user.id),
                 extra_values,
                 str(get_current_tenant_id() or application.tenant_id or ""),
+                str(engagement_id) if engagement_id else None,
             )
+            track_async_task(task.id, request.user.id)
             return Response(
-                {"task_id": task.id, "status": "queued"},
+                {
+                    "task_id": task.id,
+                    "status": "queued",
+                    "detail": "Génération du contrat en file d'attente.",
+                },
                 status=status.HTTP_202_ACCEPTED,
             )
 
-        context = build_context(application, extra_values)
+        context = build_context(
+            application,
+            extra_values,
+            primary_engagement=primary_engagement,
+        )
 
         try:
             rendered = render_template(template, context)
@@ -136,11 +196,15 @@ class GeneratedContractViewSet(TenantScopedViewSet):
         with transaction.atomic():
             # Un seul contrat actif par modèle et par dossier : on annule
             # l'éventuel précédent pour garder une trace tout en régénérant.
-            application.generated_contracts.filter(
+            # Si lié à un engagement, on limite l'annulation à cet engagement.
+            cancel_qs = application.generated_contracts.filter(
                 template=template
-            ).exclude(status=GeneratedContract.Status.CANCELLED).update(
-                status=GeneratedContract.Status.CANCELLED
-            )
+            ).exclude(status=GeneratedContract.Status.CANCELLED)
+            if primary_engagement is not None:
+                cancel_qs = cancel_qs.filter(
+                    surety_engagement=primary_engagement
+                )
+            cancel_qs.update(status=GeneratedContract.Status.CANCELLED)
             # tenant AVANT file.save : upload_to utilise tenant_id pour le chemin S3.
             gc = GeneratedContract(
                 tenant_id=application.tenant_id,
@@ -148,6 +212,7 @@ class GeneratedContractViewSet(TenantScopedViewSet):
                 template=template,
                 template_name=template.name,
                 category=template.category,
+                surety_engagement=primary_engagement,
                 context_snapshot=context,
                 extra_values=extra_values,
                 created_by=request.user,

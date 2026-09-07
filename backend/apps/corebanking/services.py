@@ -526,7 +526,7 @@ class RestAdapter(BaseAdapter):
         return f"{base}/{path}"
 
     def _resolve_bearer_token(self) -> str:
-        auth = self.connector.auth_config or {}
+        auth = self.connector.get_auth_config_decrypted()
         for key in ("access_token", "accessToken", "token", "bearer_token"):
             value = str(auth.get(key) or "").strip()
             if value:
@@ -549,7 +549,7 @@ class RestAdapter(BaseAdapter):
 
     def _auth_url(self) -> str:
         """URL d'authentification Perfect (token_url override ou endpoint défaut)."""
-        auth = self.connector.auth_config or {}
+        auth = self.connector.get_auth_config_decrypted()
         explicit = str(auth.get("token_url") or "").strip()
         if explicit:
             return explicit
@@ -561,7 +561,7 @@ class RestAdapter(BaseAdapter):
         """POST form-urlencoded → accessToken (doc Perfect authentification)."""
         import requests
 
-        auth = self.connector.auth_config or {}
+        auth = self.connector.get_auth_config_decrypted()
         scope = str(auth.get("scope") or DEFAULT_AUTH_SCOPE).strip() or DEFAULT_AUTH_SCOPE
         url = self._auth_url()
         timeout = self.connector.timeout_seconds or 30
@@ -608,7 +608,7 @@ class RestAdapter(BaseAdapter):
         """Compat OAuth2 client_credentials / password (hors flux Perfect)."""
         import requests
 
-        auth = self.connector.auth_config or {}
+        auth = self.connector.get_auth_config_decrypted()
         timeout = self.connector.timeout_seconds or 30
         grant = str(auth.get("grant_type") or "client_credentials").strip()
         data = {"grant_type": grant}
@@ -707,31 +707,47 @@ def send_operation(connector, operation, payload, idempotency_key=""):
 
     Si une opération avec la même clé d'idempotence a déjà réussi, elle est
     renvoyée sans nouvel envoi (évite les doublons, ex. double décaissement).
-    """
-    if idempotency_key:
-        existing = IntegrationLog.objects.filter(
-            connector=connector,
-            idempotency_key=idempotency_key,
-            status=IntegrationLog.Status.SUCCESS,
-        ).first()
-        if existing:
-            return existing
 
-    log = IntegrationLog.objects.create(
-        connector=connector,
-        operation=operation,
-        direction=IntegrationLog.Direction.OUTBOUND,
-        idempotency_key=idempotency_key,
-        request_payload=payload,
-        status=IntegrationLog.Status.PENDING,
-    )
+    Les lignes RETRY / FAILED / PENDING existantes sont **réutilisées** (pas de
+    second INSERT) pour respecter ``unique_idempotency_per_connector``.
+    """
+    log = None
+    if idempotency_key:
+        existing = (
+            IntegrationLog.objects.select_for_update()
+            .filter(connector=connector, idempotency_key=idempotency_key)
+            .first()
+        )
+        if existing is not None:
+            if existing.status == IntegrationLog.Status.SUCCESS:
+                return existing
+            log = existing
+            log.operation = operation
+            log.direction = IntegrationLog.Direction.OUTBOUND
+            log.request_payload = payload
+            log.status = IntegrationLog.Status.PENDING
+            log.error_message = ""
+            log.response_payload = {}
+            log.external_reference = ""
+
+    if log is None:
+        log = IntegrationLog.objects.create(
+            connector=connector,
+            operation=operation,
+            direction=IntegrationLog.Direction.OUTBOUND,
+            idempotency_key=idempotency_key,
+            request_payload=payload,
+            status=IntegrationLog.Status.PENDING,
+        )
 
     adapter = get_adapter(connector)
     try:
         log.attempts += 1
         response = adapter.send(operation, payload)
-        log.response_payload = response
-        log.external_reference = response.get("external_reference", "")
+        log.response_payload = response if isinstance(response, dict) else {}
+        log.external_reference = (log.response_payload or {}).get(
+            "external_reference", ""
+        )
         log.status = IntegrationLog.Status.SUCCESS
     except Exception as exc:  # noqa: BLE001
         log.status = (

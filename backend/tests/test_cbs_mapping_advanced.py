@@ -917,6 +917,13 @@ def test_callback_secret_and_updates(
             secret="wrong",
         )
 
+    with pytest.raises(CoreBankingError, match="Secret"):
+        apply_cbs_callback(
+            app.pk,
+            {"numContrat": "X", "context": "HACK"},
+            secret=None,
+        )
+
     result = apply_cbs_callback(
         app.pk,
         {

@@ -288,6 +288,9 @@ def test_broken_promises_and_next_action(tenant_a, product_a, client_a):
         assert refresh_broken_promises() >= 1
         promise.refresh_from_db()
         assert promise.status == PaymentPromise.Status.BROKEN
+        case.refresh_from_db()
+        assert case.next_action_type == "CALL"
+        assert "Promesse" in case.next_action_note
 
         set_next_action(
             case,
@@ -420,3 +423,66 @@ def test_reminder_sms_stub(tenant_a, product_a, client_a):
         result = send_collection_reminder(case, channel="SMS", force=True)
         assert result["status"] == "SKIPPED"
         assert result["channel"] == "SMS"
+
+
+def test_new_overdue_case_auto_assign_and_first_touch(tenant_a, product_a, client_a):
+    from apps.accounts.models import User
+
+    with tenant_context(tenant_a.id):
+        officer = User.objects.create(username="col_officer", tenant=tenant_a)
+        app = CreditApplication.objects.create(
+            tenant=tenant_a,
+            client=client_a,
+            product=product_a,
+            amount_requested=Decimal("5000"),
+            duration_months=3,
+            risk_level=1,
+            reference="REF-COL-ASSIGN",
+            status=CreditApplication.Status.APPROVED,
+            submitted_by=officer,
+            created_by=officer,
+        )
+        loan = Loan.objects.create(
+            tenant=tenant_a,
+            application=app,
+            principal=Decimal("5000"),
+            interest_rate=Decimal("12"),
+            duration_months=3,
+            disbursed_at=date.today() - timedelta(days=20),
+            first_due_date=date.today() - timedelta(days=10),
+            status=Loan.Status.ACTIVE,
+        )
+        Installment.objects.create(
+            tenant=tenant_a,
+            loan=loan,
+            number=1,
+            due_date=date.today() - timedelta(days=10),
+            principal_due=Decimal("5000"),
+            interest_due=Decimal("0"),
+            total_due=Decimal("5000"),
+            status=Installment.Status.OVERDUE,
+        )
+        case = refresh_loan_overdue(loan)
+        assert case is not None
+        assert case.assigned_to_id == officer.id
+        assert case.next_action_date is not None
+        assert case.next_action_type == "CALL"
+        assert "Premier contact" in case.next_action_note
+
+
+def test_agent_dashboard_team_includes_unassigned(tenant_a, product_a, client_a):
+    from apps.accounts.models import User
+    from apps.collections.services import agent_dashboard
+
+    with tenant_context(tenant_a.id):
+        agent = User.objects.create(username="col_agent", tenant=tenant_a)
+        _, case = _overdue_loan(
+            tenant_a, product_a, client_a, days=12, principal="4000", ref="REF-DASH"
+        )
+        case.assigned_to = None
+        case.save(update_fields=["assigned_to"])
+        mine = agent_dashboard(user=agent, tenant_id=tenant_a.id, scope="mine")
+        team = agent_dashboard(user=agent, tenant_id=tenant_a.id, scope="team")
+        assert mine["assigned_open"] == 0
+        assert team["assigned_open"] >= 1
+        assert team["unassigned_open"] >= 1

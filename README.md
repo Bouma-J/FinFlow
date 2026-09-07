@@ -126,7 +126,15 @@ Installation serveur (Docker, TLS, backups) :
 sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
 ```
 
-Détail : [`documentation/13-guide-deploiement-ubuntu.md`](documentation/13-guide-deploiement-ubuntu.md), scripts `deploy/ubuntu-install.sh` et `deploy/ubuntu-install-ip.sh`.
+Mise à jour d’une instance déjà en production :
+
+```bash
+sudo finflow-update
+# ou :
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-update.sh | bash'
+```
+
+Détail : [`documentation/13-guide-deploiement-ubuntu.md`](documentation/13-guide-deploiement-ubuntu.md), scripts `deploy/ubuntu-install.sh`, `deploy/ubuntu-install-ip.sh` et `deploy/ubuntu-update.sh`.
 
 ## Prérequis
 - Docker Desktop (voie recommandée), **ou**

@@ -87,6 +87,7 @@ _VIEW_GUARANTEES = (
     ("guarantees", "view_guaranteemovement"),
     ("guarantees", "view_guaranteereleaserequest"),
     ("guarantees", "view_dationrequest"),
+    ("guarantees", "view_guaranteeformalizationrequest"),
     ("sureties", "view_surety"),
     ("sureties", "view_suretyengagement"),
 )
@@ -142,6 +143,7 @@ _VIEW_TRANSVERSE = (
     ("audit", "view_auditlog"),
     ("notifications", "view_notificationlog"),
     ("notifications", "view_tenantnotificationsettings"),
+    ("reporting", "view_dashboard"),
 )
 
 _WRITE_INSTRUCTION = (
@@ -360,7 +362,11 @@ _ANALYSTE_PERMS = (
     *_WRITE_ANALYSIS,
 )
 
-_CHEF_AGENCE_PERMS = _CHARGE_AFFAIRE_PERMS
+# Chef d'agence : même instruction que le CA + vision recouvrement agence.
+_CHEF_AGENCE_PERMS = (
+    *_CHARGE_AFFAIRE_PERMS,
+    *_VIEW_COLLECTIONS,
+)
 
 _RESP_CREDIT_PERMS = (
     *_READ_METIER,
@@ -611,6 +617,41 @@ def validate_groups_for_tenant(tenant_id, groups):
             label = tr.name if tr else group.name
             raise ValueError(
                 f"Le rôle « {label} » n'appartient pas à cette filiale."
+            )
+
+
+# SoD dur : paires de rôles métier incompatibles sur le même utilisateur.
+SOD_INCOMPATIBLE_ROLE_PAIRS = (
+    frozenset({CHARGE_AFFAIRE_ROLE_NAME, CREDIT_COMMITTEE_ROLE_NAME}),
+    frozenset({ANALYSTE_CREDIT_RISQUE_ROLE_NAME, CREDIT_COMMITTEE_ROLE_NAME}),
+    frozenset({CHARGE_AFFAIRE_ROLE_NAME, DIRECTEUR_GENERAL_ROLE_NAME}),
+    frozenset({ANALYSTE_CREDIT_RISQUE_ROLE_NAME, DIRECTEUR_GENERAL_ROLE_NAME}),
+    frozenset({RESP_OPERATIONS_ROLE_NAME, RESP_AUDIT_ROLE_NAME}),
+    frozenset({ASSISTANT_OPERATIONS_ROLE_NAME, RESP_CONTROLE_INTERNE_ROLE_NAME}),
+    frozenset({ASSISTANT_RECOUVREMENT_ROLE_NAME, RESP_AUDIT_ROLE_NAME}),
+    frozenset({RESP_RECOUVREMENT_ROLE_NAME, RESP_AUDIT_ROLE_NAME}),
+)
+
+
+def validate_sod_role_assignment(groups):
+    """
+    Refuse les combinaisons de rôles qui violent la séparation des tâches.
+    """
+    from .models import TenantRole
+
+    names = set()
+    for group in groups:
+        tr = getattr(group, "tenant_role", None)
+        if tr is None:
+            tr = TenantRole.objects.filter(group_id=group.id).first()
+        if tr:
+            names.add(tr.name)
+    for pair in SOD_INCOMPATIBLE_ROLE_PAIRS:
+        if pair.issubset(names):
+            a, b = sorted(pair)
+            raise ValueError(
+                f"Séparation des tâches : les rôles « {a} » et « {b} » "
+                f"sont incompatibles sur le même utilisateur."
             )
 
 

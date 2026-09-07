@@ -41,6 +41,8 @@ export interface CurrentUser {
   roles: string[];
   permissions: string[];
   tenant_branding: TenantBranding | null;
+  /** Feature flags serveur (ex. SMS désactivé tant que provider absent). */
+  features?: { sms?: boolean };
 }
 
 export interface Permission {
@@ -105,6 +107,55 @@ export interface AdminUser {
   groups: Role[];
 }
 
+export interface Delegation {
+  id: string;
+  delegator: string;
+  delegator_display: string;
+  delegate: string;
+  delegate_display: string;
+  reason: string;
+  start_date: string;
+  end_date: string;
+  is_active: boolean;
+  is_currently_valid: boolean;
+  created_at: string;
+}
+
+export interface DelegationColleague {
+  id: string;
+  username: string;
+  display_name: string;
+}
+
+export interface AfterSalesHubModuleCounts {
+  open: number;
+  in_approval?: number;
+  total?: number;
+  followups_due?: number;
+  broken_promises_30d?: number;
+  unassigned?: number;
+}
+
+export interface AfterSalesHub {
+  modules: {
+    main_levee?: AfterSalesHubModuleCounts;
+    dation?: AfterSalesHubModuleCounts;
+    formalisation?: AfterSalesHubModuleCounts;
+    collection?: AfterSalesHubModuleCounts;
+  };
+  recent: Array<{
+    kind: "MAIN_LEVEE" | "DATION" | "FORMALISATION" | "COLLECTION" | string;
+    id: string;
+    reference: string;
+    status: string;
+    status_display: string;
+    client_name: string;
+    detail_path: string;
+    updated_at: string | null;
+  }>;
+  as_of: string;
+}
+
 export interface WorkflowStep {
   id: string;
   definition: string;
@@ -120,6 +171,11 @@ export interface WorkflowStep {
   allow_return: boolean;
 }
 
+export interface DecisionGaps {
+  label: string;
+  ranges: { from: string; to: string | null }[];
+}
+
 export interface WorkflowDefinition {
   id: string;
   code: string;
@@ -128,6 +184,8 @@ export interface WorkflowDefinition {
   version: number;
   is_active: boolean;
   is_used: boolean;
+  /** Tranches de montant sans étape décisionnelle, `null` si le circuit est sain. */
+  decision_gaps: DecisionGaps | null;
   steps: WorkflowStep[];
 }
 
@@ -188,6 +246,8 @@ export interface CreditInstructionPolicy {
   show_readiness_checklist: boolean;
   enable_cancel_status: boolean;
   allow_collateral_during_approval: boolean;
+  require_surety_signed_contracts: boolean;
+  require_formalization_before_disbursement: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -234,6 +294,19 @@ export interface CbsConnector {
   timeout_seconds: number;
   max_retries: number;
   mapping_rules?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface IntegrationLog {
+  id: string;
+  connector: string;
+  operation: string;
+  direction: string;
+  idempotency_key: string;
+  status: string;
+  attempts: number;
+  external_reference: string;
+  error_message: string;
   created_at: string;
 }
 
@@ -410,14 +483,35 @@ export interface FormalizationFee {
   created_at: string;
 }
 
+export interface FormalizationComposeCredit {
+  application_id: string;
+  application_reference: string;
+  application_status: string;
+  application_status_display: string;
+  product_label: string;
+  amount: string;
+  currency: string;
+  guarantees_count: number;
+}
+
+export interface FormalizationComposeContext {
+  client_id: string;
+  client_display: string;
+  application_id: string | null;
+  application_reference: string | null;
+  credits: FormalizationComposeCredit[];
+  guarantees: (Guarantee & { formalization_busy?: boolean })[];
+}
+
 export interface GuaranteeFormalizationRequest {
   id: string;
   reference: string;
   guarantee: string;
   guarantee_reference: string;
-  client?: string;
+  client?: string | null;
   client_display: string;
   application: string | null;
+  application_reference?: string | null;
   agency: string | null;
   status: string;
   status_display: string;
@@ -430,6 +524,9 @@ export interface GuaranteeFormalizationRequest {
   registration_number: string;
   registration_date: string | null;
   registration_authority: string;
+  acte_file_url?: string | null;
+  acte_signed_file_url?: string | null;
+  registration_proof_url?: string | null;
   fees?: FormalizationFee[];
   fees_client_total?: string | null;
   fees_institution_total?: string | null;
@@ -443,11 +540,24 @@ export interface GedDocument {
   id: string;
   category: string;
   category_label: string;
+  category_code?: string;
   name: string;
   file: string;
+  file_url?: string | null;
   mime_type: string;
   size_bytes: number;
+  sha256?: string;
+  version?: number;
+  issue_date?: string | null;
+  expiry_date?: string | null;
+  content_type?: number | string | null;
   object_id: string;
+  related_type?: string;
+  related_label?: string;
+  /** Chemin SPA fourni par l'API (préféré aux heuristiques front). */
+  related_path?: string | null;
+  uploaded_by?: string | null;
+  uploaded_by_name?: string;
   created_at: string;
 }
 
@@ -638,6 +748,7 @@ export interface Surety {
   total_committed: string;
   available_ceiling: string;
   is_active: boolean;
+  engagements?: SuretyEngagement[];
   created_at: string;
 }
 
@@ -1154,9 +1265,23 @@ export interface SuretyEngagement {
   surety_id_document_scan: string | null;
   surety_photo: string | null;
   application: string;
+  application_reference?: string | null;
+  client_display?: string;
   amount: string;
+  engagement_type?: "SIMPLE" | "SOLIDAIRE" | string;
+  engagement_type_display?: string;
   signed_date: string | null;
   status: string;
+  status_display?: string;
+  notes?: string;
+  released_at?: string | null;
+  called_at?: string | null;
+  contract_id?: string | null;
+  contract_status?: string | null;
+  contract_status_display?: string | null;
+  contract_file_url?: string | null;
+  contract_signed_file_url?: string | null;
+  contract_template_name?: string | null;
   created_at: string;
 }
 
@@ -1166,6 +1291,49 @@ export interface RejectReason {
   label: string;
   description: string;
   is_active: boolean;
+}
+
+/** Pièce de check-list catalogue (liée à un produit). */
+export interface ProductChecklistItem {
+  id: string;
+  product: string;
+  product_label?: string;
+  label: string;
+  is_mandatory: boolean;
+  order: number;
+}
+
+export interface DocumentCategory {
+  id: string;
+  code: string;
+  label: string;
+  description: string;
+  tracks_expiry: boolean;
+  is_active: boolean;
+}
+
+export interface AnalysisThresholdConfig {
+  id: string;
+  max_debt_ratio: string;
+  min_dscr: string;
+  max_leverage_ratio: string;
+  min_living_wage_per_capita: string;
+  min_interest_coverage: string;
+  max_gearing: string;
+  min_financial_autonomy: string;
+  min_current_ratio: string;
+  min_guarantee_coverage: string;
+  stress_pct: string;
+  transferable_quota_fraction: string;
+  informal_income_weight: string;
+  haircut_mortgage: string;
+  haircut_vehicle: string;
+  haircut_jewelry: string;
+  haircut_financial_deposit: string;
+  haircut_financial_security: string;
+  haircut_other: string;
+  created_at?: string;
+  updated_at?: string;
 }
 
 export interface ApprovalTaskApplication {
@@ -1727,7 +1895,9 @@ export interface CollectionDationLink {
 }
 
 export interface AgentCollectionDashboard {
+  scope?: "mine" | "team";
   assigned_open: number;
+  unassigned_open?: number;
   followups_due: number;
   pending_promises: number;
   broken_promises_30d: number;
@@ -1746,6 +1916,7 @@ export interface AgentCollectionDashboard {
     overdue_amount: string;
     par_class: ParClass;
     stage: CollectionStage;
+    assigned_to_name?: string | null;
   }>;
   as_of: string;
 }

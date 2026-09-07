@@ -662,6 +662,7 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
             application=apps[app_ref],
             defaults={
                 "amount": Decimal(amount),
+                "engagement_type": SuretyEngagement.EngagementType.SOLIDAIRE,
                 "signed_date": date.today() - timedelta(days=15),
                 "status": SuretyEngagement.Status.ACTIVE,
             },
@@ -673,6 +674,7 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
         application=apps["DEMO-CR-CLOSED"],
         defaults={
             "amount": Decimal("500000"),
+            "engagement_type": SuretyEngagement.EngagementType.SIMPLE,
             "signed_date": date.today() - timedelta(days=400),
             "status": SuretyEngagement.Status.RELEASED,
         },

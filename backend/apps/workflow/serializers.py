@@ -25,19 +25,39 @@ class ApprovalStepSerializer(serializers.ModelSerializer):
 class WorkflowDefinitionSerializer(serializers.ModelSerializer):
     steps = ApprovalStepSerializer(many=True, read_only=True)
     is_used = serializers.SerializerMethodField()
+    decision_gaps = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkflowDefinition
         fields = [
             "id", "code", "name", "target_type", "version",
-            "is_active", "is_used", "steps",
+            "is_active", "is_used", "decision_gaps", "steps",
         ]
-        read_only_fields = ["id", "is_used"]
+        read_only_fields = ["id", "is_used", "decision_gaps"]
 
     def get_is_used(self, obj):
         from .services import definition_is_used
 
         return definition_is_used(obj)
+
+    def get_decision_gaps(self, obj):
+        """Tranches de montant sans décideur, ou `null` si le circuit est sain.
+
+        `obj.steps.all()` exploite le prefetch de la vue : pas de requête par
+        circuit dans la liste.
+        """
+        from .services import compute_decision_gaps, format_decision_gaps
+
+        gaps = compute_decision_gaps(obj, steps=obj.steps.all())
+        if not gaps:
+            return None
+        return {
+            "label": format_decision_gaps(gaps),
+            "ranges": [
+                {"from": str(low), "to": None if high is None else str(high)}
+                for low, high in gaps
+            ],
+        }
 
 
 class ApprovalTaskSerializer(serializers.ModelSerializer):

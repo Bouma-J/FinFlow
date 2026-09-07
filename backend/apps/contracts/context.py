@@ -184,6 +184,7 @@ VARIABLE_CATALOG = [
     ]},
     {"group": "Caution — commun (1re caution)", "items": [
         ("caution_type", "Type (personne physique / morale)"),
+        ("caution_type_engagement", "Type d'engagement (simple / solidaire)"),
         ("caution_nom_complet", "Nom complet / raison sociale de la caution"),
         ("caution_adresse", "Adresse de la caution"),
         ("caution_ville", "Ville de la caution"),
@@ -334,7 +335,12 @@ LOOP_HELP = (
 # --------------------------------------------------------------------------- #
 # Construction du contexte
 # --------------------------------------------------------------------------- #
-def build_context(application, extra_values: dict | None = None) -> dict:
+def build_context(
+    application,
+    extra_values: dict | None = None,
+    *,
+    primary_engagement=None,
+) -> dict:
     """Assemble le dictionnaire de variables pour un dossier de crédit."""
     from apps.clients.models import (
         Civility,
@@ -741,6 +747,10 @@ def build_context(application, extra_values: dict | None = None) -> dict:
                 "montant": fmt_money(engagement.amount),
                 "montant_lettres": fmt_amount_words(engagement.amount, currency_label),
                 "date_signature": fmt_date(engagement.signed_date),
+                "type_engagement": getattr(
+                    engagement, "get_engagement_type_display", lambda: ""
+                )(),
+                "type_engagement_code": getattr(engagement, "engagement_type", "") or "",
                 "raison_sociale": "", "forme_juridique": "", "ifu": "", "rccm": "",
                 "gerant_nom": "", "gerant_nom_seul": "", "gerant_prenom": "",
                 "gerant_poste": "", "gerant_telephone": "", "gerant_email": "",
@@ -752,11 +762,17 @@ def build_context(application, extra_values: dict | None = None) -> dict:
         is_moral = s.surety_type == s.SuretyType.MORAL
         gerant_nom = f"{s.manager_first_name} {s.manager_last_name}".strip()
         rccm = s.rccm or s.identifier or ""
+        type_engagement = ""
+        type_engagement_code = getattr(engagement, "engagement_type", "") or ""
+        if hasattr(engagement, "get_engagement_type_display"):
+            type_engagement = engagement.get_engagement_type_display()
         d = {
             "nom": (s.company_name if is_moral else (s.last_name or s.name or "")),
             "prenom": "" if is_moral else (s.first_name or ""),
             "nom_complet": s.display_name,
             "type": s.get_surety_type_display(),
+            "type_engagement": type_engagement,
+            "type_engagement_code": type_engagement_code,
             "cni_type": _display(s.id_document_type, IdDocumentType.choices),
             "cni": s.national_id or "",
             "piece_rccm": rccm,
@@ -799,6 +815,12 @@ def build_context(application, extra_values: dict | None = None) -> dict:
     engagements = list(
         application.surety_engagements.select_related("surety").all()
     )
+    if primary_engagement is not None:
+        primary_id = getattr(primary_engagement, "pk", None)
+        engagements = sorted(
+            engagements,
+            key=lambda e: (0 if e.pk == primary_id else 1, str(e.pk)),
+        )
     cautions = [build_caution(e) for e in engagements]
     ctx["cautions"] = cautions
     ctx["nombre_cautions"] = len(cautions)

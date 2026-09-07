@@ -8,9 +8,8 @@ import { useAuth } from "@/auth/AuthContext";
 import {
   Badge,
   Card,
-  EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   TenantScopeNotice,
   formatMoney,
 } from "@/components/ui";
@@ -277,11 +276,13 @@ export function AdminProductsPage() {
         </Card>
       </div>
 
-      {products.isLoading || !products.data ? (
-        <Spinner />
-      ) : products.data.results.length === 0 ? (
-        <EmptyState message="Aucun produit." />
-      ) : (
+      <QueryStatus
+        isLoading={products.isLoading}
+        isError={products.isError}
+        isEmpty={!products.data?.results.length}
+        emptyMessage="Aucun produit."
+        onRetry={() => products.refetch()}
+      >
         <table className="table card" style={{ marginTop: 20 }}>
           <thead>
             <tr>
@@ -294,7 +295,7 @@ export function AdminProductsPage() {
             </tr>
           </thead>
           <tbody>
-            {products.data.results.map((p) => (
+            {(products.data?.results ?? []).map((p) => (
               <tr key={p.id}>
                 <td>{p.code}</td>
                 <td>{p.label}</td>
@@ -311,7 +312,7 @@ export function AdminProductsPage() {
             ))}
           </tbody>
         </table>
-      )}
+      </QueryStatus>
     </div>
   );
 }

@@ -9,6 +9,7 @@ from rest_framework.response import Response
 
 from apps.audit.models import AuditLog
 from apps.common.permissions import HasModelPermission, MustChangePasswordGate
+from apps.common.scoped import get_for_tenant
 from apps.common.tenancy import get_current_tenant_id
 from apps.common.viewsets import (
     AgencyScopedViewSet,
@@ -87,8 +88,12 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         if self.action == "list":
-            return qs.select_related("client", "product", "agency")
-        return qs.prefetch_related("stock_photos", "documents", "extra_fees")
+            return qs.select_related(
+                "client", "product", "agency", "created_by", "submitted_by"
+            )
+        return qs.select_related(
+            "client", "product", "agency", "created_by", "submitted_by"
+        ).prefetch_related("stock_photos", "documents", "extra_fees")
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -377,12 +382,9 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
         source_id = request.data.get("source_guarantee")
         if not source_id:
             raise ValidationError({"source_guarantee": "Obligatoire."})
-        try:
-            source = Guarantee.objects.get(pk=source_id)
-        except Guarantee.DoesNotExist as exc:
-            raise ValidationError(
-                {"source_guarantee": "Garantie introuvable."}
-            ) from exc
+        source = get_for_tenant(
+            Guarantee, source_id, error_field="source_guarantee"
+        )
 
         revaluate = bool(request.data.get("revaluate"))
         valuation = request.data.get("valuation") or {}
@@ -450,6 +452,47 @@ class CreditDocumentViewSet(TenantScopedViewSet):
         if user and user.is_authenticated:
             qs = apply_related_data_scope(qs, user, "application__agency")
         return qs
+
+    def perform_create(self, serializer):
+        instance = serializer.save()
+        from apps.documents.ged_bridge import mirror_credit_document_to_ged
+
+        try:
+            mirror_credit_document_to_ged(instance, user=self.request.user)
+        except Exception:
+            # Ne bloque pas l'upload dossier si le miroir GED échoue.
+            import logging
+
+            logging.getLogger("finflow").exception(
+                "Miroir GED CreditDocument échoué id=%s", instance.pk
+            )
+
+    def perform_destroy(self, instance):
+        from apps.documents.ged_bridge import unmirror_credit_document_from_ged
+
+        try:
+            unmirror_credit_document_from_ged(instance)
+        except Exception:  # noqa: BLE001
+            import logging
+
+            logging.getLogger("finflow").exception(
+                "Unmirror GED CreditDocument échoué id=%s", instance.pk
+            )
+        file_name = ""
+        storage = None
+        if instance.file and getattr(instance.file, "name", None):
+            file_name = instance.file.name
+            storage = instance.file.storage
+        super().perform_destroy(instance)
+        if file_name and storage is not None:
+            try:
+                storage.delete(file_name)
+            except Exception:  # noqa: BLE001
+                import logging
+
+                logging.getLogger("finflow").exception(
+                    "Échec suppression CreditDocument key=%s", file_name
+                )
 
 
 class FinancialAnalysisViewSet(TenantScopedViewSet):
@@ -532,7 +575,15 @@ class AnalysisThresholdViewSet(TenantScopedViewSet):
     serializer_class = AnalysisThresholdSerializer
     action_perms = {
         "effective": ["credits.view_analysisthreshold"],
+        "current": [],  # droits gérés dans l'action
     }
+
+    def _can_manage(self, user) -> bool:
+        return bool(
+            user.is_superuser
+            or getattr(user, "is_group_level", False)
+            or user.has_perm("credits.change_analysisthreshold")
+        )
 
     @action(detail=False, methods=["get"])
     def effective(self, request):
@@ -540,6 +591,44 @@ class AnalysisThresholdViewSet(TenantScopedViewSet):
         tenant_id = get_current_tenant_id()
         th = AnalysisThreshold.for_tenant(tenant_id)
         return Response(AnalysisThresholdSerializer(th).data)
+
+    @action(detail=False, methods=["get", "patch"])
+    def current(self, request):
+        """GET/PATCH des seuils de la filiale active (crée le record si besoin)."""
+        tenant_id = get_current_tenant_id()
+        if not tenant_id and getattr(request.user, "tenant_id", None):
+            tenant_id = request.user.tenant_id
+        if not tenant_id:
+            return Response(
+                {
+                    "detail": (
+                        "Sélectionnez une filiale pour paramétrer "
+                        "les seuils d'analyse."
+                    )
+                },
+                status=400,
+            )
+        th = AnalysisThreshold.for_tenant(tenant_id)
+        if th.pk is None:
+            th.tenant_id = tenant_id
+            th.save()
+
+        if request.method == "GET":
+            if not (
+                request.user.has_perm("credits.view_analysisthreshold")
+                or self._can_manage(request.user)
+            ):
+                return Response({"detail": "Droit insuffisant."}, status=403)
+            return Response(AnalysisThresholdSerializer(th).data)
+
+        if not self._can_manage(request.user):
+            return Response({"detail": "Droit insuffisant."}, status=403)
+        serializer = AnalysisThresholdSerializer(
+            th, data=request.data, partial=True
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
 
 class CreditInstructionPolicyViewSet(TenantContextMixin, viewsets.ViewSet):
@@ -562,7 +651,6 @@ class CreditInstructionPolicyViewSet(TenantContextMixin, viewsets.ViewSet):
         return bool(
             user.is_superuser
             or getattr(user, "is_group_level", False)
-            or user.is_staff
             or user.has_perm("credits.change_creditinstructionpolicy")
         )
 
@@ -658,8 +746,32 @@ class FieldVisitViewSet(TenantScopedViewSet):
 
 
 class LoanViewSet(TenantScopedReadOnlyViewSet):
-    queryset = Loan.objects.select_related("application").prefetch_related(
-        "installments"
-    ).all()
+    queryset = Loan.objects.select_related(
+        "application", "application__client"
+    ).prefetch_related("installments").all()
     serializer_class = LoanSerializer
     filterset_fields = ["status", "application"]
+    search_fields = [
+        "application__reference",
+        "core_banking_reference",
+        "cbs_contract_number",
+        "application__client__last_name",
+        "application__client__company_name",
+    ]
+    ordering_fields = ["disbursed_at", "principal", "status", "created_at"]
+    ordering = ["-disbursed_at"]
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            from .serializers import LoanListSerializer
+
+            return LoanListSerializer
+        return LoanSerializer
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if self.action == "list":
+            return qs.select_related(
+                "application", "application__client"
+            ).prefetch_related(None)
+        return qs

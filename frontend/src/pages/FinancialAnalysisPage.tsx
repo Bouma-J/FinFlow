@@ -3,11 +3,16 @@ import { ArrowLeft, LineChart } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
-import type { ApprovalTask, CreditApplication, FinancialAnalysis, Paginated } from "@/api/types";
+import type {
+  ApprovalTask,
+  CreditApplication,
+  FinancialAnalysis,
+  Paginated,
+} from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import { FinancialAnalysisForm } from "@/components/FinancialAnalysisForm";
-import { PageHeader, Spinner } from "@/components/ui";
+import { ErrorState, PageHeader, Spinner } from "@/components/ui";
 
 const OPEN_FOR_CONTRIBUTION = ["DRAFT", "SUBMITTED", "IN_APPROVAL", "RETURNED"];
 
@@ -16,14 +21,24 @@ export function FinancialAnalysisPage() {
   const navigate = useNavigate();
   const { user } = useAuth();
 
-  const { data: app, isLoading: loadingApp } = useQuery({
+  const {
+    data: app,
+    isLoading: loadingApp,
+    isError: errorApp,
+    refetch: refetchApp,
+  } = useQuery({
     queryKey: ["credit-application", id],
     queryFn: async () =>
       (await api.get<CreditApplication>(`/credit-applications/${id}/`)).data,
     enabled: !!id,
   });
 
-  const { data: existing, isLoading: loadingAnalysis } = useQuery({
+  const {
+    data: existing,
+    isLoading: loadingAnalysis,
+    isError: errorAnalysis,
+    refetch: refetchAnalysis,
+  } = useQuery({
     queryKey: ["financial-analysis-item", analysisId],
     queryFn: async () =>
       (
@@ -37,11 +52,61 @@ export function FinancialAnalysisPage() {
   const { data: myTasks } = useQuery({
     queryKey: ["my-pending-tasks"],
     queryFn: async () =>
-      (await api.get<Paginated<ApprovalTask>>("/approval-tasks/my_pending/")).data,
+      (await api.get<Paginated<ApprovalTask>>("/approval-tasks/my_pending/"))
+        .data,
     enabled: !!user && !analysisId,
   });
 
-  if (loadingApp || (analysisId && loadingAnalysis) || !app) return <Spinner />;
+  if (loadingApp || (analysisId && loadingAnalysis)) {
+    return <Spinner />;
+  }
+
+  if (errorApp || !app) {
+    return (
+      <div className="page-shell">
+        <PageHeader
+          icon={LineChart}
+          title="Analyse financière"
+          subtitle="Chargement impossible"
+          actions={
+            <Link
+              className="btn btn-ghost"
+              to={id ? `/dossiers/${id}` : "/dossiers"}
+            >
+              <ArrowLeft />
+              Retour
+            </Link>
+          }
+        />
+        <ErrorState
+          message="Impossible de charger le dossier."
+          onRetry={() => refetchApp()}
+        />
+      </div>
+    );
+  }
+
+  if (analysisId && (errorAnalysis || !existing)) {
+    return (
+      <div className="page-shell">
+        <PageHeader
+          icon={LineChart}
+          title="Analyse financière"
+          subtitle="Chargement impossible"
+          actions={
+            <Link className="btn btn-ghost" to={`/dossiers/${id}`}>
+              <ArrowLeft />
+              Retour au dossier
+            </Link>
+          }
+        />
+        <ErrorState
+          message="Impossible de charger l'analyse financière."
+          onRetry={() => refetchAnalysis()}
+        />
+      </div>
+    );
+  }
 
   const backTo = `/dossiers/${id}`;
   const isEdit = !!analysisId;
@@ -61,7 +126,7 @@ export function FinancialAnalysisPage() {
     const isAuthor = isSuper || (!!uid && existing?.created_by === uid);
     if (!canChange || !isAuthor || !(existing?.can_edit || isSuper)) {
       return (
-    <div className="page-shell">
+        <div className="page-shell">
           <PageHeader
             icon={LineChart}
             title="Analyse financière"
@@ -105,7 +170,11 @@ export function FinancialAnalysisPage() {
     <div>
       <PageHeader
         icon={LineChart}
-        title={isEdit ? "Modifier l'analyse financière" : "Nouvelle analyse financière"}
+        title={
+          isEdit
+            ? "Modifier l'analyse financière"
+            : "Nouvelle analyse financière"
+        }
         subtitle={`${app.client_display} · dossier ${app.reference || app.id.slice(0, 8)}`}
         actions={
           <Link className="btn btn-ghost" to={backTo}>

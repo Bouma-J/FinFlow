@@ -47,6 +47,7 @@ def cbs_connector(tenant_a):
                 "force_simulate": True,
                 "disbursement": {
                     "mode": "LOCAL",
+                    "callback_secret": "test-callback-secret",
                     "defaults": {
                         "idPointService": "PS01",
                         "idGestionnaire": "GEST01",
@@ -218,6 +219,7 @@ def test_cbs_callback_updates_loan(approved_app, cbs_connector):
             "context": "DEBLOQUE",
         },
         format="json",
+        HTTP_X_CBS_CALLBACK_SECRET="test-callback-secret",
     )
     response = CreditDisbursementCallbackView.as_view()(
         request, application_id=approved_app.pk
@@ -227,3 +229,40 @@ def test_cbs_callback_updates_loan(approved_app, cbs_connector):
     assert loan.cbs_contract_number == "CONTRAT-FINAL"
     assert loan.cbs_demande_number == "DEM-FINAL"
     assert loan.cbs_disbursement_status == "DEBLOQUE"
+
+
+def test_cbs_callback_rejects_missing_secret(approved_app, cbs_connector):
+    factory = APIRequestFactory()
+    request = factory.post(
+        f"/api/v1/cbs/callbacks/crd/{approved_app.pk}/",
+        {"context": "HACK", "numContrat": "X"},
+        format="json",
+    )
+    response = CreditDisbursementCallbackView.as_view()(
+        request, application_id=approved_app.pk
+    )
+    assert response.status_code == 400
+    assert "secret" in response.data["detail"].lower()
+
+
+def test_cbs_callback_rejects_when_secret_not_configured(approved_app, cbs_connector):
+    cbs_connector.mapping_rules = {
+        **cbs_connector.mapping_rules,
+        "disbursement": {
+            **cbs_connector.mapping_rules.get("disbursement", {}),
+            "callback_secret": "",
+        },
+    }
+    cbs_connector.save(update_fields=["mapping_rules"])
+    factory = APIRequestFactory()
+    request = factory.post(
+        f"/api/v1/cbs/callbacks/crd/{approved_app.pk}/",
+        {"context": "HACK"},
+        format="json",
+        HTTP_X_CBS_CALLBACK_SECRET="anything",
+    )
+    response = CreditDisbursementCallbackView.as_view()(
+        request, application_id=approved_app.pk
+    )
+    assert response.status_code == 400
+    assert "callback_secret" in response.data["detail"].lower()

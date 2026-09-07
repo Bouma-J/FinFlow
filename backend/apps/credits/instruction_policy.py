@@ -258,6 +258,34 @@ def build_readiness(application) -> dict:
         message="" if cbs_ok else cbs_msg,
     )
 
+    # Contrats de cautionnement — informatif avant décaissement
+    active_sureties = SuretyEngagement.objects.filter(
+        application=application,
+        status=SuretyEngagement.Status.ACTIVE,
+    ).count()
+    if active_sureties:
+        from apps.contracts.services import missing_surety_signed_contracts
+
+        surety_missing = missing_surety_signed_contracts(application)
+        surety_ok = not surety_missing
+        add(
+            "surety_contracts",
+            "Contrats de cautionnement signés",
+            surety_ok,
+            blocking=False,
+            message=""
+            if surety_ok
+            else (
+                "Avant décaissement : "
+                + " ; ".join(surety_missing)
+                + (
+                    " — exigé par la politique filiale."
+                    if policy.require_surety_signed_contracts
+                    else ""
+                )
+            ),
+        )
+
     blocking_failed = [c for c in checks if c["blocking"] and not c["ok"]]
     return {
         "ready": len(blocking_failed) == 0,
@@ -279,6 +307,9 @@ def build_readiness(application) -> dict:
             "enable_cancel_status": policy.enable_cancel_status,
             "allow_collateral_during_approval": (
                 policy.allow_collateral_during_approval
+            ),
+            "require_surety_signed_contracts": (
+                policy.require_surety_signed_contracts
             ),
         },
     }

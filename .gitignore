@@ -50,3 +50,7 @@ CONTRATS/~$*
 docker-rebuild.log
 *.log
 
+# Artefacts de campagnes QA/tests manuels (rapports, configs capturées).
+# Ils périment vite et peuvent contenir des identifiants de recette.
+_qa_*
+

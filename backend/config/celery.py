@@ -39,6 +39,10 @@ app.conf.beat_schedule = {
         "task": "apps.documents.tasks.notify_expiring_documents",
         "schedule": crontab(hour=7, minute=0),
     },
+    "purge-soft-deleted-documents": {
+        "task": "apps.documents.tasks.purge_soft_deleted_documents",
+        "schedule": crontab(hour=4, minute=10),
+    },
     "refresh-reporting-snapshots": {
         "task": "apps.reporting.tasks.refresh_reporting_snapshots",
         "schedule": crontab(minute=20),  # toutes les heures à :20

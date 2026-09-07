@@ -1,20 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
 import {
+  Banknote,
   Boxes,
   Building2,
   Cable,
   Calculator,
   ChevronDown,
-  CircleDollarSign,
   ClipboardCheck,
+  ArrowLeftRight,
   Bell,
   BookMarked,
   FileSignature,
   FileText,
+  FolderOpen,
   GitBranch,
   HandCoins,
   KeyRound,
+  Layers,
   LayoutDashboard,
+  Library,
   LogOut,
   Mail,
   MapPin,
@@ -25,9 +29,6 @@ import {
   Scale,
   ScrollText,
   ShieldCheck,
-  ShieldOff,
-  Stamp,
-  Unlock,
   SlidersHorizontal,
   UserRound,
   UsersRound,
@@ -42,15 +43,27 @@ import type { Paginated, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasAnyPerm } from "@/auth/permissions";
 import {
+  PERM_ADMIN_AGENCIES,
+  PERM_ADMIN_ALERTS,
+  PERM_ADMIN_AUDIT,
+  PERM_ADMIN_CBS_REF,
+  PERM_ADMIN_CIRCUITS,
+  PERM_ADMIN_CONNECTORS,
+  PERM_ADMIN_CONTRACTS,
+  PERM_ADMIN_DELEGATIONS,
+  PERM_ADMIN_POLICY,
+  PERM_ADMIN_PRODUCTS,
+  PERM_ADMIN_REFERENTIALS,
+  PERM_ADMIN_ROLES,
+  PERM_ADMIN_USERS,
+  PERM_AFTER_SALES,
   PERM_CLIENTS,
-  PERM_COLLECTIONS,
   PERM_CREDITS,
-  PERM_DATIONS,
-  PERM_FORMALIZATIONS,
+  PERM_DASHBOARD,
+  PERM_DOCUMENTS,
   PERM_GUARANTEES,
   PERM_LEGAL_PARTIES,
   PERM_PRODUCTS,
-  PERM_RELEASES,
   PERM_SIMULATOR,
   PERM_SURETIES,
   PERM_TASKS,
@@ -64,14 +77,27 @@ interface NavItem {
   icon: LucideIcon;
   /** Si défini, le lien n'apparaît que si l'utilisateur a au moins une permission. */
   anyOf?: readonly string[];
+  /** Réservé aux comptes niveau Groupe. */
+  groupOnly?: boolean;
 }
 
 const NAV_ITEMS: NavItem[] = [
-  { to: "/", label: "Tableau de bord", icon: LayoutDashboard },
+  {
+    to: "/",
+    label: "Tableau de bord",
+    icon: LayoutDashboard,
+    anyOf: PERM_DASHBOARD,
+  },
   {
     to: "/dossiers",
     label: "Dossiers de crédit",
     icon: FileText,
+    anyOf: PERM_CREDITS,
+  },
+  {
+    to: "/prets",
+    label: "Prêts",
+    icon: Banknote,
     anyOf: PERM_CREDITS,
   },
   {
@@ -95,34 +121,23 @@ const NAV_ITEMS: NavItem[] = [
     anyOf: PERM_GUARANTEES,
   },
   {
-    to: "/mains-levees",
-    label: "Mains levées",
-    icon: ShieldOff,
-    anyOf: PERM_RELEASES,
+    to: "/apres-vente",
+    label: "Après-vente",
+    icon: Layers,
+    anyOf: PERM_AFTER_SALES,
   },
   {
-    to: "/dations",
-    label: "Dations",
-    icon: Unlock,
-    anyOf: PERM_DATIONS,
+    to: "/documents",
+    label: "GED",
+    icon: FolderOpen,
+    anyOf: PERM_DOCUMENTS,
   },
   {
-    to: "/formalisations",
-    label: "Formalisations",
-    icon: Stamp,
-    anyOf: PERM_FORMALIZATIONS,
-  },
-  {
-    to: "/recouvrement",
-    label: "Recouvrement",
-    icon: CircleDollarSign,
-    anyOf: PERM_COLLECTIONS,
-  },
-  {
-    to: "/intervenants-juridiques",
-    label: "Intervenants juridiques",
-    icon: Scale,
-    anyOf: PERM_LEGAL_PARTIES,
+    to: "/admin/consolidation",
+    label: "Consolidation Groupe",
+    icon: Library,
+    groupOnly: true,
+    anyOf: PERM_DASHBOARD,
   },
   {
     to: "/simulateur",
@@ -134,17 +149,90 @@ const NAV_ITEMS: NavItem[] = [
 
 const ADMIN_ITEMS: NavItem[] = [
   { to: "/admin/filiales", label: "Filiales", icon: Building2 },
-  { to: "/admin/agences", label: "Agences", icon: MapPin },
-  { to: "/admin/utilisateurs", label: "Utilisateurs", icon: UsersRound },
-  { to: "/admin/roles", label: "Rôles & droits", icon: KeyRound },
-  { to: "/admin/produits", label: "Produits", icon: Package },
-  { to: "/admin/referentiels-cbs", label: "Référentiels CBS", icon: BookMarked },
-  { to: "/admin/circuits", label: "Circuits d'approbation", icon: GitBranch },
-  { to: "/admin/contrats", label: "Modèles de contrats", icon: FileSignature },
-  { to: "/admin/connecteurs", label: "Connecteurs CBS", icon: Cable },
-  { to: "/admin/alertes", label: "Alertes e-mail", icon: Bell },
-  { to: "/admin/politique-credit", label: "Politique crédit", icon: SlidersHorizontal },
-  { to: "/admin/audit", label: "Audit", icon: ScrollText },
+  {
+    to: "/admin/agences",
+    label: "Agences",
+    icon: MapPin,
+    anyOf: PERM_ADMIN_AGENCIES,
+  },
+  {
+    to: "/admin/utilisateurs",
+    label: "Utilisateurs",
+    icon: UsersRound,
+    anyOf: PERM_ADMIN_USERS,
+  },
+  {
+    to: "/admin/roles",
+    label: "Rôles & droits",
+    icon: KeyRound,
+    anyOf: PERM_ADMIN_ROLES,
+  },
+  {
+    to: "/admin/produits",
+    label: "Produits",
+    icon: Package,
+    anyOf: PERM_ADMIN_PRODUCTS,
+  },
+  {
+    to: "/admin/referentiels-cbs",
+    label: "Référentiels CBS",
+    icon: BookMarked,
+    anyOf: PERM_ADMIN_CBS_REF,
+  },
+  {
+    to: "/admin/referentiels-metier",
+    label: "Référentiels métier",
+    icon: Library,
+    anyOf: PERM_ADMIN_REFERENTIALS,
+  },
+  {
+    to: "/admin/intervenants-juridiques",
+    label: "Intervenants juridiques",
+    icon: Scale,
+    anyOf: PERM_LEGAL_PARTIES,
+  },
+  {
+    to: "/admin/circuits",
+    label: "Circuits d'approbation",
+    icon: GitBranch,
+    anyOf: PERM_ADMIN_CIRCUITS,
+  },
+  {
+    to: "/admin/delegations",
+    label: "Délégations",
+    icon: ArrowLeftRight,
+    anyOf: PERM_ADMIN_DELEGATIONS,
+  },
+  {
+    to: "/admin/contrats",
+    label: "Modèles de contrats",
+    icon: FileSignature,
+    anyOf: PERM_ADMIN_CONTRACTS,
+  },
+  {
+    to: "/admin/connecteurs",
+    label: "Connecteurs CBS",
+    icon: Cable,
+    anyOf: PERM_ADMIN_CONNECTORS,
+  },
+  {
+    to: "/admin/alertes",
+    label: "Alertes e-mail",
+    icon: Bell,
+    anyOf: PERM_ADMIN_ALERTS,
+  },
+  {
+    to: "/admin/politique-credit",
+    label: "Politique crédit",
+    icon: SlidersHorizontal,
+    anyOf: PERM_ADMIN_POLICY,
+  },
+  {
+    to: "/admin/audit",
+    label: "Audit",
+    icon: ScrollText,
+    anyOf: PERM_ADMIN_AUDIT,
+  },
 ];
 
 function NavItems({
@@ -360,10 +448,15 @@ export function Layout() {
   }, [mobileNavOpen]);
 
   const adminItems = ADMIN_ITEMS.filter(
-    (item) => item.to !== "/admin/filiales" || user?.is_group_level,
+    (item) =>
+      (item.to !== "/admin/filiales" || user?.is_group_level) &&
+      (!item.groupOnly || user?.is_group_level) &&
+      (!item.anyOf || hasAnyPerm(user, item.anyOf)),
   );
   const navItems = NAV_ITEMS.filter(
-    (item) => !item.anyOf || hasAnyPerm(user, item.anyOf),
+    (item) =>
+      (!item.groupOnly || user?.is_group_level) &&
+      (!item.anyOf || hasAnyPerm(user, item.anyOf)),
   );
 
   const closeMobileNav = () => setMobileNavOpen(false);

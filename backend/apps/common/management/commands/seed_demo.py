@@ -173,11 +173,14 @@ class Command(BaseCommand):
                     required_group=analyst_role, sla_hours=48,
                     step_kind=ApprovalStep.StepKind.CONSULTATIVE,
                 )
+                # Décisionnelle : c'est l'agence qui décide sous 10 M, le comité
+                # ne s'appliquant qu'au-delà. La laisser consultative priverait
+                # la tranche ]0 ; 10 M[ de tout décideur.
                 ApprovalStep.objects.create(
                     tenant=tenant, definition=definition, name="Validation agence",
                     order=2, required_group=manager_role, sla_hours=24,
                     max_amount=Decimal("10000000"),
-                    step_kind=ApprovalStep.StepKind.CONSULTATIVE,
+                    step_kind=ApprovalStep.StepKind.DECISIONAL,
                 )
                 ApprovalStep.objects.create(
                     tenant=tenant, definition=definition, name="Comité de crédit",
@@ -185,6 +188,14 @@ class Command(BaseCommand):
                     min_amount=Decimal("10000000"),
                     step_kind=ApprovalStep.StepKind.DECISIONAL,
                 )
+            else:
+                # Reprise des bases de démonstration créées avant la correction
+                # du type de l'étape agence.
+                ApprovalStep.objects.filter(
+                    definition=definition,
+                    name="Validation agence",
+                    step_kind=ApprovalStep.StepKind.CONSULTATIVE,
+                ).update(step_kind=ApprovalStep.StepKind.DECISIONAL)
 
             dation_def, created_dation = WorkflowDefinition.objects.get_or_create(
                 tenant=tenant,

@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ClipboardCheck, Save, SlidersHorizontal } from "lucide-react";
+import { ClipboardCheck, Save, ShieldCheck, SlidersHorizontal } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
 import type { CreditInstructionPolicy, Paginated, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { PageHeader, Spinner } from "@/components/ui";
+import { ErrorState, PageHeader, Spinner } from "@/components/ui";
 
 const EMPTY: CreditInstructionPolicy = {
   id: "",
@@ -20,6 +20,28 @@ const EMPTY: CreditInstructionPolicy = {
   show_readiness_checklist: true,
   enable_cancel_status: false,
   allow_collateral_during_approval: false,
+  require_surety_signed_contracts: true,
+  require_formalization_before_disbursement: false,
+};
+
+/** Preset banque stricte — B2 maturité. */
+const STRICT_BANK: Omit<
+  CreditInstructionPolicy,
+  "id" | "created_at" | "updated_at"
+> = {
+  collateral_coverage_mode: "BLOCK_SUBMIT",
+  require_field_visit: true,
+  allow_unfavorable_analysis_submit: false,
+  require_product_checklist: true,
+  match_product_client_type: true,
+  kyc_gate: "ON_CREATE",
+  product_bounds_gate: "ON_SAVE",
+  amount_approved_mode: "FORBID",
+  show_readiness_checklist: true,
+  enable_cancel_status: false,
+  allow_collateral_during_approval: false,
+  require_surety_signed_contracts: true,
+  require_formalization_before_disbursement: true,
 };
 
 export function AdminCreditPolicyPage() {
@@ -71,6 +93,10 @@ export function AdminCreditPolicyPage() {
             enable_cancel_status: form.enable_cancel_status,
             allow_collateral_during_approval:
               form.allow_collateral_during_approval,
+            require_surety_signed_contracts:
+              form.require_surety_signed_contracts,
+            require_formalization_before_disbursement:
+              form.require_formalization_before_disbursement,
           },
         )
       ).data,
@@ -114,7 +140,14 @@ export function AdminCreditPolicyPage() {
         subtitle={`Règles de soumission et de validation — ${scopeLabel}`}
       />
 
-      {policy.isLoading || !policy.data ? (
+      {policy.isLoading ? (
+        <Spinner />
+      ) : policy.isError ? (
+        <ErrorState
+          message="Impossible de charger la politique crédit."
+          onRetry={() => policy.refetch()}
+        />
+      ) : !policy.data ? (
         <Spinner />
       ) : (
         <form
@@ -134,6 +167,21 @@ export function AdminCreditPolicyPage() {
               valeurs par défaut conservent le comportement historique
               (souple).
             </p>
+            <div style={{ marginTop: 10 }}>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() =>
+                  setForm((f) => ({
+                    ...f,
+                    ...STRICT_BANK,
+                  }))
+                }
+              >
+                <ShieldCheck size={14} />
+                Appliquer le preset banque stricte
+              </button>
+            </div>
           </div>
 
           <section className="tenant-form-block">
@@ -320,6 +368,38 @@ export function AdminCreditPolicyPage() {
                   }
                 />
                 <span>Autoriser l&apos;annulation formelle (CANCELLED)</span>
+              </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.require_surety_signed_contracts}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      require_surety_signed_contracts: e.target.checked,
+                    })
+                  }
+                />
+                <span>
+                  Exiger un contrat de cautionnement signé avant décaissement
+                </span>
+              </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={form.require_formalization_before_disbursement}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      require_formalization_before_disbursement:
+                        e.target.checked,
+                    })
+                  }
+                />
+                <span>
+                  Exiger la formalisation des garanties (hypothèque / gage /
+                  nantissement) avant décaissement
+                </span>
               </label>
             </div>
           </section>

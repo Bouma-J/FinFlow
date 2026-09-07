@@ -14,7 +14,9 @@ Deux scripts interactifs au choix :
 | Script | Cas d’usage | Accès |
 |--------|-------------|--------|
 | [`deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh) | Domaines DNS + Let’s Encrypt | `https://finflow.…` |
-| [`deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh) | Lab / IP seule, sans DNS | `http://<IP>/` |
+| [`deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh) | Lab / IP seule, sans DNS | `http://<IP>/` ou `https://<IP>/` |
+| [`deploy/tls-ip/enable-ip-tls.sh`](../deploy/tls-ip/enable-ip-tls.sh) | HTTPS sur une install IP déjà en place | `https://<IP>/` |
+| [`deploy/ubuntu-update.sh`](../deploy/ubuntu-update.sh) | **Mise à jour** d’une instance déjà en prod | — |
 
 **Avec domaines + TLS :**
 
@@ -24,7 +26,7 @@ sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/
 sudo bash deploy/ubuntu-install.sh
 ```
 
-**Par adresse IP (HTTP, sans domaine) :**
+**Par adresse IP (sans domaine — HTTP, ou HTTPS Let’s Encrypt / auto-signé) :**
 
 ```bash
 sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install-ip.sh | bash'
@@ -32,7 +34,17 @@ sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/
 sudo bash deploy/ubuntu-install-ip.sh
 ```
 
-Les scripts demandent IP ou domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, etc., puis déploient sous `/opt/finflow` (personnalisable). Le mode IP utilise aussi [`docker-compose.ip.yml`](../docker-compose.ip.yml) (MinIO exposé sur `:9000`). Les sections ci-dessous restent la référence manuelle pas à pas.
+**Mise à jour (instance déjà déployée) :**
+
+```bash
+sudo finflow-update
+# ou :
+sudo bash /opt/finflow/deploy/ubuntu-update.sh
+# depuis le dépôt :
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-update.sh | bash'
+```
+
+Le script d’update : backup DB → `git pull` → `docker compose up -d --build` → `migrate` → `sync_role_packs` → `bootstrap_all_tenants` (circuits ML / Dation / Formalisation). Les scripts d’install demandent IP ou domaines, mots de passe PostgreSQL/MinIO, `DJANGO_SECRET_KEY`, etc., puis déploient sous `/opt/finflow` (personnalisable). Le mode IP utilise [`docker-compose.ip.yml`](../docker-compose.ip.yml) (MinIO sur `:9000` en HTTP) et, une fois HTTPS activé, [`docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml) (MinIO en `127.0.0.1:19000`, Nginx termine le TLS sur `:443` et `:9000`). Les sections ci-dessous restent la référence manuelle pas à pas.
 
 ---
 
@@ -276,6 +288,11 @@ FRONTEND_BASE_URL=https://finflow.votredomaine.tld
 
 # En production Ubuntu : vérifier les certificats SMTP
 SMTP_SSL_VERIFY=1
+
+# Chiffrement au repos (mots de passe SMTP filiale) — généré par ubuntu-install.sh
+# Ne pas régénérer après avoir enregistré des SMTP en UI.
+# FIELD_ENCRYPTION_KEY=$(openssl rand -base64 32 | tr '+/' '-_')
+FIELD_ENCRYPTION_KEY=
 ```
 
 Générer une clé secrète :
@@ -284,13 +301,19 @@ Générer une clé secrète :
 openssl rand -base64 48
 ```
 
+Clé Fernet (chiffrement SMTP) :
+
+```bash
+openssl rand -base64 32 | tr '+/' '-_'
+```
+
 > **Important :** le `docker-compose.yml` de démo fixe encore certaines variables (Postgres `finflow`/`finflow`, MinIO `localhost:9000`, etc.). Pour une prod réelle, adaptez `docker-compose.yml` (ou un `docker-compose.prod.yml`) afin de lire `DJANGO_ALLOWED_HOSTS`, `AWS_S3_CUSTOM_DOMAIN`, `FRONTEND_BASE_URL`, mots de passe DB/MinIO depuis `.env`. Voir section 10.
 
 ---
 
 ## 6. Compose production
 
-Le dépôt fournit déjà [`docker-compose.prod.yml`](../docker-compose.prod.yml) : il surcharge les secrets, force `SEED_DEMO=0`, `SMTP_SSL_VERIFY=1`, et expose frontend/MinIO uniquement sur `127.0.0.1` (Nginx hôte fait le TLS public).
+Le dépôt fournit déjà [`docker-compose.prod.yml`](../docker-compose.prod.yml) : il surcharge les secrets, force `SEED_DEMO=0`, `SMTP_SSL_VERIFY=1`, injecte `EMAIL_*` / `FIELD_ENCRYPTION_KEY` dans **backend + worker + beat**, et expose frontend/MinIO uniquement sur `127.0.0.1` (Nginx hôte fait le TLS public).
 
 Ajouter dans `.env` :
 
@@ -474,6 +497,40 @@ Renouvellement automatique (timer systemd fourni par Certbot) :
 sudo certbot renew --dry-run
 ```
 
+### 8.1 TLS et HSTS sans nom de domaine
+
+Le déploiement type FinFlow est un **réseau interne (IP privée)**. Let’s Encrypt ne peut pas émettre de certificat pour une IP RFC1918 (`10/8`, `192.168/16`, `172.16–31`) : le challenge HTTP-01 doit être joignable depuis Internet.
+
+| Situation | Certificat | HSTS | Navigateur |
+|-----------|------------|------|------------|
+| **IP privée / LAN (cas prévu)** | Auto-signé (`openssl`, SAN `IP:…`) ou PKI interne / mkcert. | **Désactivé.** Auto-signé + HSTS = verrouillage au prochain renouvellement. | Avertissement « certificat non fiable » à accepter une fois (ou déployer la CA interne sur les postes). |
+| **IP publique** (80/443 ouverts depuis Internet) | Let’s Encrypt **certificat IP** (profil `shortlived`, ~6 jours). Certbot ≥ 5.4. | `max-age=604800` (7 jours), sans `includeSubDomains` ni preload. | Cadenas normal. |
+
+Sur une instance interne déjà en HTTP :
+
+```bash
+sudo bash /opt/finflow/deploy/tls-ip/enable-ip-tls.sh /opt/finflow --self-signed
+```
+
+Sans `--self-signed`, le script détecte une IP privée et choisit tout seul l’auto-signé (il refuse `--lets-encrypt` sur du RFC1918).
+
+Le script :
+
+1. émet le certificat auto-signé sous `/etc/finflow/tls/current` ;
+2. redirige HTTP:80 → HTTPS ;
+3. termine le TLS aussi sur `:9000` (GED / URLs présignées) pour éviter le contenu mixte ;
+4. pose `.finflow-tls-mode=selfsigned` et bascule Compose vers `docker-compose.ip-tls.yml` ;
+5. aligne `.env` : `FRONTEND_BASE_URL=https://<IP>`, `DJANGO_SECURE_SSL_REDIRECT=True`, **HSTS à 0**.
+
+Ne **pas** activer les valeurs Django du mode domaine (`SECURE_HSTS_SECONDS=31536000`, `INCLUDE_SUBDOMAINS`, `PRELOAD`) sur une IP interne.
+
+Contrôle :
+
+```bash
+curl -k -fsSI https://<IP>/api/v1/health/
+# Aucun en-tête Strict-Transport-Security (HSTS off)
+```
+
 ---
 
 ## 9. Checklist post-installation
@@ -485,28 +542,57 @@ sudo certbot renew --dry-run
 5. [ ] **Administration → Alertes e-mail** : SMTP filiale + test d’envoi  
 6. [ ] Génération d’un contrat / upload document → téléchargement OK (MinIO présigné)  
 7. [ ] `SMTP_SSL_VERIFY=1`  
-8. [ ] `SEED_DEMO=0`  
-9. [ ] Mots de passe DB / MinIO / Django distincts et forts  
-10. [ ] Console MinIO `:9001` non exposée  
-11. [ ] Sauvegardes planifiées (section 11)  
+8. [ ] `FIELD_ENCRYPTION_KEY` présent dans `.env` (installateur ou ajout manuel)  
+9. [ ] `SEED_DEMO=0`  
+10. [ ] Mots de passe DB / MinIO / Django distincts et forts  
+11. [ ] Console MinIO `:9001` non exposée  
+12. [ ] Worker Celery up (`finflow ps`)  
+13. [ ] Sauvegardes planifiées (section 11)  
 
 ---
 
 ## 10. Commandes d’exploitation courantes
 
+### 10.1 Mise à jour assistée (recommandée)
+
+```bash
+sudo finflow-update
+# équivalent :
+sudo bash /opt/finflow/deploy/ubuntu-update.sh
+
+# Contrôle sans toucher à la stack (Compose IP / TLS)
+sudo bash /opt/finflow/deploy/ubuntu-update.sh --check /opt/finflow
+```
+
+Options utiles :
+
+```bash
+# Sans dump DB préalable
+SKIP_BACKUP=1 sudo finflow-update
+
+# Branche / répertoire personnalisés
+GIT_BRANCH=main INSTALL_DIR=/opt/finflow sudo -E bash /opt/finflow/deploy/ubuntu-update.sh
+```
+
+Le script détecte automatiquement le mode **domaine** ou **IP** (`.finflow-deploy-mode`, `.finflow-tls-mode`, ou heuristique `.env`) via [`deploy/compose-files.sh`](../deploy/compose-files.sh).
+
+### 10.2 Commandes manuelles
+
 ```bash
 cd /opt/finflow
 COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+# Mode IP : ajouter  -f docker-compose.ip.yml
 
 # État
 $COMPOSE ps
 $COMPOSE logs -f --tail=200 backend worker beat
 
-# Mise à jour release
+# Mise à jour release (manuel)
 git pull
 $COMPOSE up -d --build
 $COMPOSE exec backend python manage.py migrate
 $COMPOSE exec backend python manage.py sync_role_packs
+$COMPOSE exec backend python manage.py bootstrap_all_tenants
 
 # Shell Django
 $COMPOSE exec backend python manage.py shell
@@ -521,50 +607,43 @@ Images **bakées** (pas de volume code) : tout changement Python/React exige `--
 
 ## 11. Sauvegardes
 
-### 11.1 PostgreSQL (quotidien)
+L’install pose un cron 02:30 (`/etc/cron.d/finflow-backup`) et une phrase de
+chiffrement dans `/root/.finflow-backup-pass` (mode 600). Chaque snapshot
+contient Postgres (format custom), le miroir MinIO et les clés
+`FIELD_ENCRYPTION_KEY` / `DJANGO_SECRET_KEY` chiffrées.
 
 ```bash
-#!/usr/bin/env bash
-# /opt/finflow/scripts/backup-db.sh
-set -euo pipefail
-STAMP=$(date +%Y%m%d_%H%M%S)
-OUT=/var/backups/finflow
-mkdir -p "$OUT"
-cd /opt/finflow
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
-  pg_dump -U finflow finflow | gzip > "$OUT/finflow_${STAMP}.sql.gz"
-find "$OUT" -name 'finflow_*.sql.gz' -mtime +14 -delete
+# Snapshot manuel
+sudo FINFLOW_DIR=/opt/finflow /opt/finflow/scripts/backup.sh
+
+# Contrôle d'intégrité
+sudo /opt/finflow/scripts/verify.sh /var/backups/finflow/snapshots/<stamp>
+
+# Épreuve (stack jetable — ne touche pas la prod)
+sudo /opt/finflow/scripts/restore.sh --target drill \
+  --snapshot /var/backups/finflow/snapshots/<stamp>
+
+# Sinistre (recrée la base, réécrit le bucket)
+sudo /opt/finflow/scripts/restore.sh --target live \
+  --snapshot /var/backups/finflow/snapshots/<stamp> \
+  --confirm=RESTORE
+# Ajouter --restore-secrets si le .env actuel n'a plus les clés du dump.
 ```
 
-```bash
-sudo mkdir -p /var/backups/finflow
-sudo chmod +x /opt/finflow/scripts/backup-db.sh
-# Cron (tous les jours à 02:30)
-sudo crontab -e
-# 30 2 * * * /opt/finflow/scripts/backup-db.sh >> /var/log/finflow-backup.log 2>&1
-```
+Rétention : 14 jours (quotidien), 8 semaines (copie du dimanche), 12 mois
+(copie du 1er). Copie hors site : `BACKUP_OFFSITE_DIR=/mnt/backup-nas`.
 
-### 11.2 MinIO / GED
+Ne jamais réinjecter un dump avec `psql` dans la base en service : le script
+`restore.sh --target live` arrête l’application, recrée une base vide, puis
+`pg_restore`.
 
-- Activer le **versioning** du bucket `finflow-documents`  
-- Copie périodique avec `mc mirror` (client MinIO) vers un second stockage  
-- Lifecycle : voir `deploy/s3/lifecycle.json`
+Redis n’est pas dans le snapshot (files Celery / cache). Le versioning du
+bucket MinIO reste recommandé en complément (`deploy/s3/lifecycle.json`).
 
-Installation client MinIO (optionnel) :
+Épreuve isolée (sans instance FinFlow) :
 
 ```bash
-curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /tmp/mc
-sudo install -m 0755 /tmp/mc /usr/local/bin/mc
-mc alias set local http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
-mc mirror --overwrite local/finflow-documents /var/backups/finflow/minio/
-```
-
-### 11.3 Restauration DB (exemple)
-
-```bash
-gunzip -c /var/backups/finflow/finflow_YYYYMMDD_HHMMSS.sql.gz \
-  | docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T db \
-    psql -U finflow finflow
+sudo bash /opt/finflow/deploy/backup/selftest.sh
 ```
 
 ---
@@ -622,8 +701,10 @@ journalctl -u nginx -u docker -n 100 --no-pager
 
 - **Dépôt GitHub :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)  
 - **Script d’install Ubuntu (domaines + TLS) :** [`../deploy/ubuntu-install.sh`](../deploy/ubuntu-install.sh)  
-- **Script d’install Ubuntu (IP / HTTP) :** [`../deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh)  
-- **Compose surcharge IP :** [`../docker-compose.ip.yml`](../docker-compose.ip.yml)  
+- **Script d’install Ubuntu (IP, HTTP ou HTTPS) :** [`../deploy/ubuntu-install-ip.sh`](../deploy/ubuntu-install-ip.sh)  
+- **HTTPS sans domaine :** [`../deploy/tls-ip/enable-ip-tls.sh`](../deploy/tls-ip/enable-ip-tls.sh)  
+- **Script de mise à jour production :** [`../deploy/ubuntu-update.sh`](../deploy/ubuntu-update.sh)  
+- **Compose surcharge IP :** [`../docker-compose.ip.yml`](../docker-compose.ip.yml), [`../docker-compose.ip-tls.yml`](../docker-compose.ip-tls.yml)  
 - Configuration détaillée : [05 — Configuration](05-configuration.md)  
 - Architecture : [02 — Architecture technique](02-architecture-technique.md)  
 - Exploitation : [10 — Exploitation](10-exploitation-supervision.md)  

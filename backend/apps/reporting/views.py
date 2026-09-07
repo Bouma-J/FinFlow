@@ -6,9 +6,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from apps.common.cache_utils import cache_key, cached_get
-from apps.common.permissions import IsGroupLevel, MustChangePasswordGate
+from apps.common.permissions import (
+    HasDashboardPermission,
+    IsGroupLevel,
+    MustChangePasswordGate,
+)
 
-from .services import build_dashboard, build_group_breakdown
+from .services import build_after_sales_hub, build_dashboard, build_group_breakdown
 from .snapshots import get_fresh_snapshot
 
 
@@ -31,7 +35,11 @@ def _has_material_filters(params) -> bool:
 class OperationalDashboardView(APIView):
     """Tableau de bord opérationnel d'une filiale."""
 
-    permission_classes = [IsAuthenticated, MustChangePasswordGate]
+    permission_classes = [
+        IsAuthenticated,
+        MustChangePasswordGate,
+        HasDashboardPermission,
+    ]
 
     def get(self, request):
         user = request.user
@@ -153,3 +161,32 @@ class GroupBreakdownView(APIView):
             }
 
         return Response(cached_get(key, _produce, timeout=ttl))
+
+@extend_schema(responses=OpenApiTypes.OBJECT)
+class AfterSalesHubView(APIView):
+    """Hub après-vente : volumes ouverts + files récentes (ML / dation / form. / recouvrement)."""
+
+    permission_classes = [IsAuthenticated, MustChangePasswordGate]
+
+    def get(self, request):
+        from apps.common.tenancy import get_current_tenant_id
+        from .services import _after_sales_module_access
+
+        user = request.user
+        access = _after_sales_module_access(user=user)
+        if not any(access.values()):
+            return Response({"detail": "Droit insuffisant."}, status=403)
+
+        tenant_id = get_current_tenant_id()
+        if not tenant_id and getattr(user, "is_group_level", False):
+            tenant_id = request.query_params.get("tenant")
+        if not tenant_id:
+            tenant_id = getattr(user, "tenant_id", None)
+        if not tenant_id:
+            return Response(
+                {"detail": "Sélectionnez une filiale pour le hub après-vente."},
+                status=400,
+            )
+        return Response(
+            build_after_sales_hub(tenant_id=tenant_id, user=user)
+        )

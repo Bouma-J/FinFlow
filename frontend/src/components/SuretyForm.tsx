@@ -4,6 +4,7 @@ import {
   Contact,
   ExternalLink,
   FileText,
+  HandCoins,
   Phone,
   Plus,
   Trash2,
@@ -19,7 +20,7 @@ import {
   appendFreeDocuments,
   type FreeDocumentDraft,
 } from "@/components/FreeDocumentsEditor";
-import { Card } from "@/components/ui";
+import { Card, formatMoney } from "@/components/ui";
 
 type SuretyKind = "PHYSICAL" | "MORAL";
 
@@ -114,6 +115,11 @@ export function SuretyForm({
   );
   const [docDrafts, setDocDrafts] = useState<FreeDocumentDraft[]>([]);
   const [deletedDocIds, setDeletedDocIds] = useState<string[]>([]);
+  const [ceiling, setCeiling] = useState(
+    initial?.commitment_ceiling != null
+      ? String(initial.commitment_ceiling)
+      : "0",
+  );
   const [error, setError] = useState<string | null>(null);
   const fileUrls = initial as unknown as Record<string, string | null>;
   const isMoral = suretyType === "MORAL";
@@ -140,6 +146,7 @@ export function SuretyForm({
       }
       const phones = extraPhones.map((p) => p.trim()).filter(Boolean);
       fd.append("additional_phones", JSON.stringify(phones));
+      fd.append("commitment_ceiling", ceiling.trim() || "0");
       appendFreeDocuments(fd, docDrafts, deletedDocIds);
 
       if (isEdit && initial) {
@@ -313,6 +320,43 @@ export function SuretyForm({
           extra={extraPhones}
           onExtra={setExtraPhones}
         />
+      </Card>
+
+      <Card
+        title={
+          <>
+            <HandCoins size={17} /> Plafond d&apos;engagement
+          </>
+        }
+      >
+        <p className="muted small" style={{ marginBottom: 12 }}>
+          Montant maximum que cette caution peut couvrir au total. Laissez 0
+          pour ne pas limiter.
+        </p>
+        <div className="form-grid two-col">
+          <label className="field">
+            <span>Plafond (XOF)</span>
+            <input
+              type="number"
+              min={0}
+              step="0.01"
+              value={ceiling}
+              onChange={(e) => setCeiling(e.target.value)}
+            />
+          </label>
+          {isEdit && initial && (
+            <>
+              <div className="field">
+                <span>Déjà engagé</span>
+                <strong>{formatMoney(initial.total_committed)}</strong>
+              </div>
+              <div className="field">
+                <span>Disponible</span>
+                <strong>{formatMoney(initial.available_ceiling)}</strong>
+              </div>
+            </>
+          )}
+        </div>
       </Card>
 
       <Card

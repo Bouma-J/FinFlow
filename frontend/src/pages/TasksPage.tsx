@@ -22,7 +22,7 @@ import {
   Badge,
   EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   formatDate,
   formatMoney,
 } from "@/components/ui";
@@ -40,7 +40,7 @@ function clientKind(t: MyDossierRow["client_type"]): "particulier" | "entreprise
 }
 
 export function TasksPage() {
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ["my-dossiers"],
     queryFn: async () =>
       (await api.get<{ results: MyDossierRow[] }>("/approval-tasks/my_dossiers/"))
@@ -142,11 +142,13 @@ export function TasksPage() {
         title="Mes validations"
         subtitle="Tous les dossiers de vos niveaux de validation"
       />
-      {isLoading || !data ? (
-        <Spinner />
-      ) : rows.length === 0 ? (
-        <EmptyState message="Aucun dossier ne concerne vos niveaux de validation." />
-      ) : (
+      <QueryStatus
+        isLoading={isLoading}
+        isError={isError}
+        isEmpty={rows.length === 0}
+        emptyMessage="Aucun dossier ne concerne vos niveaux de validation."
+        onRetry={() => refetch()}
+      >
         <>
           <div className="valid-filters">
             <div className="list-toolbar">
@@ -336,7 +338,7 @@ export function TasksPage() {
             </div>
           )}
         </>
-      )}
+      </QueryStatus>
     </div>
   );
 }

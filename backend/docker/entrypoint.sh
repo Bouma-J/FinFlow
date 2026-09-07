@@ -53,13 +53,35 @@ for attempt in range(30):
                 client.create_bucket(Bucket=bucket)
                 print(f"Bucket « {bucket} » créé.")
                 try:
+                    # Origines CORS : liste séparée par des virgules
+                    # (DJANGO_CORS_ALLOWED_ORIGINS), sinon localhost démo.
+                    raw_origins = os.environ.get(
+                        "DJANGO_CORS_ALLOWED_ORIGINS", ""
+                    ).strip()
+                    if raw_origins:
+                        origins = [
+                            o.strip()
+                            for o in raw_origins.split(",")
+                            if o.strip()
+                        ]
+                    else:
+                        origins = [
+                            "http://localhost",
+                            "http://localhost:8080",
+                            "http://localhost:5173",
+                        ]
                     client.put_bucket_cors(
                         Bucket=bucket,
                         CORSConfiguration={
                             "CORSRules": [
                                 {
-                                    "AllowedOrigins": ["*"],
-                                    "AllowedMethods": ["GET", "HEAD", "PUT", "POST"],
+                                    "AllowedOrigins": origins,
+                                    "AllowedMethods": [
+                                        "GET",
+                                        "HEAD",
+                                        "PUT",
+                                        "POST",
+                                    ],
                                     "AllowedHeaders": ["*"],
                                     "ExposeHeaders": ["ETag", "Location"],
                                     "MaxAgeSeconds": 3600,

@@ -1,4 +1,4 @@
-import { Inbox, type LucideIcon } from "lucide-react";
+import { CircleAlert, Inbox, type LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 export function PageHeader({
@@ -73,9 +73,24 @@ const STATUS_TONES: Record<string, string> = {
   ACTIVE: "success",
 };
 
-export function Badge({ value, label }: { value: string; label?: string }) {
-  const tone = STATUS_TONES[value] ?? "muted";
-  return <span className={`badge badge-${tone}`}>{label ?? value}</span>;
+export function Badge({
+  value,
+  label,
+  tone: toneOverride,
+  title,
+}: {
+  value: string;
+  label?: string;
+  /** Force la tonalité quand `value` n'est pas un statut métier connu. */
+  tone?: "success" | "warning" | "danger" | "info" | "muted";
+  title?: string;
+}) {
+  const tone = toneOverride ?? STATUS_TONES[value] ?? "muted";
+  return (
+    <span className={`badge badge-${tone}`} title={title}>
+      {label ?? value}
+    </span>
+  );
 }
 
 export function Spinner() {
@@ -89,6 +104,52 @@ export function EmptyState({ message }: { message: string }) {
       <span>{message}</span>
     </div>
   );
+}
+
+export function ErrorState({
+  message = "Impossible de charger les données.",
+  onRetry,
+}: {
+  message?: string;
+  onRetry?: () => void;
+}) {
+  return (
+    <div className="empty-state" role="alert">
+      <CircleAlert />
+      <span>{message}</span>
+      {onRetry && (
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>
+          Réessayer
+        </button>
+      )}
+    </div>
+  );
+}
+
+/** Triade chargement / erreur / vide pour les listes React Query. */
+export function QueryStatus({
+  isLoading,
+  isError,
+  isEmpty,
+  emptyMessage = "Aucun élément.",
+  errorMessage,
+  onRetry,
+  children,
+}: {
+  isLoading: boolean;
+  isError: boolean;
+  isEmpty?: boolean;
+  emptyMessage?: string;
+  errorMessage?: string;
+  onRetry?: () => void;
+  children: ReactNode;
+}) {
+  if (isLoading) return <Spinner />;
+  if (isError) {
+    return <ErrorState message={errorMessage} onRetry={onRetry} />;
+  }
+  if (isEmpty) return <EmptyState message={emptyMessage} />;
+  return <>{children}</>;
 }
 
 export function TenantScopeNotice() {

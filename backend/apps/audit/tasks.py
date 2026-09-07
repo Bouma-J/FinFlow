@@ -9,7 +9,7 @@ from django.utils import timezone
 logger = logging.getLogger("finflow")
 
 
-@shared_task(ignore_result=True)
+@shared_task(ignore_result=True, soft_time_limit=600, time_limit=660)
 def purge_old_audit_logs():
     """
     Supprime les entrées d'audit plus anciennes que AUDIT_RETENTION_DAYS.

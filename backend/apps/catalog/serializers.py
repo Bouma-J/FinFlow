@@ -81,7 +81,13 @@ class CurrencySerializer(serializers.ModelSerializer):
 
 
 class ChecklistItemSerializer(serializers.ModelSerializer):
+    product_label = serializers.CharField(
+        source="product.label", read_only=True, default=""
+    )
+
     class Meta:
         model = ChecklistItem
-        fields = ["id", "product", "label", "is_mandatory", "order"]
-        read_only_fields = ["id"]
+        fields = [
+            "id", "product", "product_label", "label", "is_mandatory", "order",
+        ]
+        read_only_fields = ["id", "product_label"]

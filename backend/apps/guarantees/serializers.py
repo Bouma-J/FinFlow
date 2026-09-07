@@ -267,6 +267,9 @@ class GuaranteeSerializer(serializers.ModelSerializer):
         return str(req.id) if req else None
 
     def validate(self, attrs):
+        from apps.common.upload_validation import validate_attrs_uploads
+
+        attrs = validate_attrs_uploads(attrs, self.context, check_quota=True)
         belongs = attrs.get(
             "belongs_to_applicant",
             getattr(self.instance, "belongs_to_applicant", True),
@@ -409,6 +412,18 @@ class ReleaseDocumentUploadSerializer(serializers.Serializer):
         max_length=50,
         help_text="Code GED (ex. ML_DEMANDE). Défaut : ML_OTHER.",
     )
+
+    def validate_file(self, value):
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
+
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=True,
+        )
 
 
 class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
@@ -611,6 +626,18 @@ class DationDocumentUploadSerializer(serializers.Serializer):
         help_text="Optionnel : rattacher la pièce à un bien du dossier.",
     )
 
+    def validate_file(self, value):
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
+
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=True,
+        )
+
 
 class DationRequestSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(
@@ -743,6 +770,18 @@ class FormalizationDocumentUploadSerializer(serializers.Serializer):
         help_text="Code GED (ex. FORM_ACTE_SIGNE). Défaut : FORM_OTHER.",
     )
 
+    def validate_file(self, value):
+        from apps.common.upload_validation import (
+            resolve_tenant_from_context,
+            validate_uploaded_file,
+        )
+
+        return validate_uploaded_file(
+            value,
+            tenant=resolve_tenant_from_context(self.context),
+            check_quota=True,
+        )
+
 
 class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(
@@ -751,7 +790,9 @@ class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
     legal_stage_display = serializers.CharField(
         source="get_legal_stage_display", read_only=True
     )
+    client = serializers.SerializerMethodField()
     client_display = serializers.SerializerMethodField()
+    application_reference = serializers.SerializerMethodField()
     guarantee_reference = serializers.CharField(
         source="guarantee.reference", read_only=True, default=None
     )
@@ -767,7 +808,10 @@ class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
             "reference",
             "guarantee",
             "guarantee_reference",
+            "client",
+            "client_display",
             "application",
+            "application_reference",
             "agency",
             "status",
             "status_display",
@@ -790,7 +834,6 @@ class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
             "fees_client_total",
             "fees_institution_total",
             "comment",
-            "client_display",
             "completed_at",
             "created_at",
             "updated_at",
@@ -807,16 +850,26 @@ class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
             "acte_file_url",
             "acte_signed_file_url",
             "registration_proof_url",
+            "client",
             "client_display",
+            "application_reference",
             "guarantee_reference",
             "completed_at",
             "created_at",
             "updated_at",
         ]
 
+    def get_client(self, obj):
+        client = obj.guarantee.client if obj.guarantee_id else None
+        return str(client.pk) if client else None
+
     def get_client_display(self, obj):
         client = obj.guarantee.client if obj.guarantee_id else None
         return getattr(client, "display_name", str(client)) if client else ""
+
+    def get_application_reference(self, obj):
+        app = obj.application
+        return getattr(app, "reference", None) if app else None
 
     def get_acte_file_url(self, obj):
         if not obj.acte_file:

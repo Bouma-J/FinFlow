@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, Pencil, Trash2, X } from "lucide-react";
+import { Copy, GitBranch, Pencil, Power, Trash2, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
@@ -14,9 +14,8 @@ import { useAuth } from "@/auth/AuthContext";
 import {
   Badge,
   Card,
-  EmptyState,
   PageHeader,
-  Spinner,
+  QueryStatus,
   TenantScopeNotice,
 } from "@/components/ui";
 
@@ -28,6 +27,7 @@ type StepForm = {
   sla_hours: number;
   min_amount: string;
   max_amount: string;
+  allow_return: boolean;
 };
 
 const EMPTY_STEP: StepForm = {
@@ -38,6 +38,7 @@ const EMPTY_STEP: StepForm = {
   sla_hours: 48,
   min_amount: "",
   max_amount: "",
+  allow_return: true,
 };
 
 function parseApiError(err: unknown, fallback: string): string {
@@ -64,6 +65,7 @@ function stepToForm(s: WorkflowStep): StepForm {
     sla_hours: s.sla_hours ?? 48,
     min_amount: s.min_amount ?? "",
     max_amount: s.max_amount ?? "",
+    allow_return: s.allow_return !== false,
   };
 }
 
@@ -76,6 +78,7 @@ function formToPayload(form: StepForm) {
     sla_hours: form.sla_hours,
     min_amount: form.min_amount || null,
     max_amount: form.max_amount || null,
+    allow_return: form.allow_return,
   };
 }
 
@@ -190,6 +193,49 @@ export function AdminWorkflowPage() {
           "Suppression impossible. Ce circuit est peut-être déjà utilisé.",
         ),
       ),
+  });
+
+  const cloneDef = useMutation({
+    mutationFn: async (id: string) =>
+      (
+        await api.post<WorkflowDefinition>(
+          `/workflow-definitions/${id}/clone/`,
+          { deactivate_source: true },
+        )
+      ).data,
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      setSelectedId(data.id);
+      setEditingStepId(null);
+      setStepError(null);
+      setStep({
+        ...EMPTY_STEP,
+        order: Math.max(1, data.steps.length + 1),
+      });
+    },
+    onError: (err) =>
+      setStepError(parseApiError(err, "Duplication impossible.")),
+  });
+
+  const toggleActive = useMutation({
+    mutationFn: async ({
+      id,
+      is_active,
+    }: {
+      id: string;
+      is_active: boolean;
+    }) =>
+      (
+        await api.patch<WorkflowDefinition>(`/workflow-definitions/${id}/`, {
+          is_active,
+        })
+      ).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      setStepError(null);
+    },
+    onError: (err) =>
+      setStepError(parseApiError(err, "Changement d'état impossible.")),
   });
 
   function removeStep(stepId: string, stepName: string) {
@@ -330,11 +376,13 @@ export function AdminWorkflowPage() {
 
       <div className="detail-grid stacked">
         <Card title="Circuits">
-          {defs.isLoading || !defs.data ? (
-            <Spinner />
-          ) : defs.data.results.length === 0 ? (
-            <EmptyState message="Aucun circuit." />
-          ) : (
+          <QueryStatus
+            isLoading={defs.isLoading}
+            isError={defs.isError}
+            isEmpty={!defs.data?.results.length}
+            emptyMessage="Aucun circuit."
+            onRetry={() => defs.refetch()}
+          >
             <table className="table">
               <thead>
                 <tr>
@@ -347,7 +395,7 @@ export function AdminWorkflowPage() {
                 </tr>
               </thead>
               <tbody>
-                {defs.data.results.map((d) => (
+                {(defs.data?.results ?? []).map((d) => (
                   <tr key={d.id}>
                     <td>
                       {d.code} v{d.version}
@@ -359,32 +407,92 @@ export function AdminWorkflowPage() {
                     </td>
                     <td className="num">{d.steps.length}</td>
                     <td>
-                      <Badge
-                        value={circuitEditable(d) ? "success" : "warning"}
-                        label={circuitEditable(d) ? "Modifiable" : "Utilisé"}
-                      />
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                        <Badge
+                          value={d.is_active ? "success" : "info"}
+                          label={d.is_active ? "Actif" : "Inactif"}
+                        />
+                        <Badge
+                          value={circuitEditable(d) ? "success" : "warning"}
+                          label={circuitEditable(d) ? "Modifiable" : "Utilisé"}
+                        />
+                        {d.decision_gaps && (
+                          <Badge
+                            value="DECISION_GAP"
+                            tone="danger"
+                            label="Sans décideur"
+                            title={
+                              `Montants sans étape décisionnelle : ` +
+                              `${d.decision_gaps.label}. Les dossiers concernés ` +
+                              `seraient approuvés sur de simples avis consultatifs.`
+                            }
+                          />
+                        )}
+                      </div>
                     </td>
                     <td>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => {
-                          setSelectedId(d.id);
-                          setEditingStepId(null);
-                          setStepError(null);
-                          setStep({
-                            ...EMPTY_STEP,
-                            order: Math.max(1, d.steps.length + 1),
-                          });
-                        }}
-                      >
-                        Étapes
-                      </button>
+                      <div className="row-actions" style={{ gap: 4 }}>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => {
+                            setSelectedId(d.id);
+                            setEditingStepId(null);
+                            setStepError(null);
+                            setStep({
+                              ...EMPTY_STEP,
+                              order: Math.max(1, d.steps.length + 1),
+                            });
+                          }}
+                        >
+                          Étapes
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          title={
+                            d.is_active
+                              ? "Désactiver ce circuit"
+                              : "Activer ce circuit"
+                          }
+                          disabled={toggleActive.isPending}
+                          onClick={() =>
+                            toggleActive.mutate({
+                              id: d.id,
+                              is_active: !d.is_active,
+                            })
+                          }
+                        >
+                          <Power size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          title="Dupliquer en nouvelle version"
+                          disabled={cloneDef.isPending}
+                          onClick={() => {
+                            if (
+                              !window.confirm(
+                                `Dupliquer « ${d.code} » en v${d.version + 1} ?` +
+                                  (d.is_active
+                                    ? " La version actuelle sera désactivée."
+                                    : ""),
+                              )
+                            ) {
+                              return;
+                            }
+                            cloneDef.mutate(d.id);
+                          }}
+                        >
+                          <Copy size={14} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          )}
+          </QueryStatus>
         </Card>
 
         <Card title={selected ? `Étapes — ${selected.code}` : "Étapes"}>
@@ -404,11 +512,16 @@ export function AdminWorkflowPage() {
                   </span>
                 ) : (
                   <span className="muted small">
-                    Ce circuit a servi pour des dossiers. Créez une nouvelle version
-                    pour modifier les étapes.
+                    Ce circuit a servi pour des dossiers. Dupliquez-le en nouvelle
+                    version pour modifier les étapes.
                   </span>
                 )}
               </div>
+              <p className="muted small" style={{ marginBottom: 12 }}>
+                Plusieurs étapes avec le <strong>même numéro d&apos;ordre</strong>{" "}
+                s&apos;ouvrent en parallèle ; le circuit avance quand toutes sont
+                traitées.
+              </p>
 
               <ol className="workflow-steps">
                 {selected.steps
@@ -428,6 +541,9 @@ export function AdminWorkflowPage() {
                           }
                         />
                         <span className="muted small">SLA {s.sla_hours}h</span>
+                        {!s.allow_return && (
+                          <Badge value="warning" label="Sans retour" />
+                        )}
                         {circuitEditable(selected) && (
                           <span style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
                             <button
@@ -602,6 +718,16 @@ function StepFields({
           value={form.max_amount}
           onChange={(e) => setForm({ ...form, max_amount: e.target.value })}
         />
+      </label>
+      <label className="checkbox" style={{ alignSelf: "end" }}>
+        <input
+          type="checkbox"
+          checked={form.allow_return}
+          onChange={(e) =>
+            setForm({ ...form, allow_return: e.target.checked })
+          }
+        />
+        <span>Autoriser le renvoi à cette étape</span>
       </label>
     </div>
   );

@@ -309,6 +309,9 @@ def get_connection_for_tenant(tenant=None, prefs=None):
             host=host,
         )
         password = (prefs.smtp_password or "").replace(" ", "")
+        from apps.common.secret_crypto import decrypt_str
+
+        password = decrypt_str(password).replace(" ", "")
         return get_connection(
             backend="apps.notifications.mail.TenantSMTPEmailBackend",
             host=host,

@@ -45,6 +45,9 @@ class ReportingSnapshot(models.Model):
     class Meta:
         verbose_name = "snapshot reporting"
         verbose_name_plural = "snapshots reporting"
+        permissions = [
+            ("view_dashboard", "Consulter le tableau de bord / reporting"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["scope", "tenant", "kind", "params_hash"],

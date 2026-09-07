@@ -118,12 +118,14 @@ class TenantNotificationSettingsSerializer(serializers.ModelSerializer):
         return resolve_from_email(obj, tenant=getattr(obj, "tenant", None))
 
     def update(self, instance, validated_data):
+        from apps.common.secret_crypto import encrypt_str
+
         password = validated_data.pop("smtp_password", None)
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         if password is not None and str(password).strip():
-            # App Passwords Gmail : espaces ignorés
-            instance.smtp_password = str(password).replace(" ", "")
+            # App Passwords Gmail : espaces ignorés, puis chiffrement au repos
+            instance.smtp_password = encrypt_str(str(password).replace(" ", ""))
         instance.save()
         return instance
 

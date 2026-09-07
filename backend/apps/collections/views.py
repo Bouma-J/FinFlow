@@ -135,6 +135,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         "set_stage": ["collections.change_collectioncase"],
         "set_next_action_view": ["collections.change_collectioncase"],
         "send_reminder": ["collections.change_collectioncase"],
+        "refresh_overdue": ["collections.change_collectioncase"],
         "restructure": ["collections.add_loanrestructure"],
         "write_off": ["collections.add_writeoff"],
         # create/update contrôlés finement dans la méthode.
@@ -177,6 +178,9 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         mine = self.request.query_params.get("mine")
         if mine in {"1", "true", "True"}:
             qs = qs.filter(assigned_to=user)
+        unassigned = self.request.query_params.get("unassigned")
+        if unassigned in {"1", "true", "True"}:
+            qs = qs.filter(assigned_to__isnull=True)
         open_only = self.request.query_params.get("open")
         if open_only in {"1", "true", "True"}:
             qs = qs.exclude(stage=CollectionCase.Stage.CLOSED)
@@ -204,12 +208,53 @@ class CollectionCaseViewSet(TenantScopedViewSet):
 
     @action(detail=False, methods=["get"], url_path="agent-dashboard")
     def agent_dashboard_view(self, request):
-        """Indicateurs portefeuille de l'agent connecté."""
+        """Indicateurs portefeuille (mine) ou équipe / filiale (team)."""
         tenant_id = getattr(request, "tenant_id", None) or getattr(
             request.user, "tenant_id", None
         )
-        data = agent_dashboard(user=request.user, tenant_id=tenant_id)
+        scope = request.query_params.get("scope", "mine")
+        data = agent_dashboard(
+            user=request.user, tenant_id=tenant_id, scope=scope
+        )
         return Response(data)
+
+    @action(detail=False, methods=["post"], url_path="refresh-overdue")
+    def refresh_overdue(self, request):
+        """Enqueue le recalcul des retards (Celery) — ne bloque pas le worker HTTP."""
+        from apps.common.tenancy import get_current_tenant_id
+
+        from .tasks import refresh_tenant_overdue_loans
+
+        tenant_id = get_current_tenant_id() or getattr(
+            request.user, "tenant_id", None
+        )
+        if not tenant_id:
+            return Response(
+                {"detail": "Sélectionnez une filiale."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        # sync=1 réservé debug / petits volumes
+        sync = str(request.query_params.get("sync", "")).lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if sync:
+            result = refresh_tenant_overdue_loans(str(tenant_id))
+            return Response(result)
+
+        task = refresh_tenant_overdue_loans.delay(str(tenant_id))
+        from apps.common.scoped import track_async_task
+
+        track_async_task(task.id, request.user.id)
+        return Response(
+            {
+                "detail": "Recalcul des retards lancé en arrière-plan.",
+                "task_id": task.id,
+                "status": "queued",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
 
     @action(detail=False, methods=["get"], url_path="hearings-agenda")
     def hearings_agenda(self, request):
