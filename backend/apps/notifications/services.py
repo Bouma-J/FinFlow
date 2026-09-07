@@ -43,6 +43,58 @@ def _format_money(amount, currency: str = "XOF") -> str:
     return f"{value} {currency}".strip()
 
 
+def _client_nom_prenom(client) -> str:
+    """Nom puis prénom (personne physique) ou raison sociale."""
+    if client is None:
+        return ""
+    last = (getattr(client, "last_name", "") or "").strip()
+    first = (getattr(client, "first_name", "") or "").strip()
+    if last or first:
+        return f"{last} {first}".strip()
+    return (getattr(client, "display_name", None) or str(client) or "").strip()
+
+
+_PROCESS_SUBJECT_LABEL = {
+    "MAIN_LEVEE": "Dossier de main levée",
+    "DATION": "Dossier de dation",
+}
+
+
+def _client_name_from_meta(meta: dict) -> str:
+    return (
+        meta.get("client_nom_prenom") or meta.get("client_display") or ""
+    ).strip()
+
+
+def _subject_tail(meta: dict, fallback: str = "") -> str:
+    """Crédit : « Nom Prénom - montant ». Main levée / dation : libellé + client."""
+    fallback = fallback or meta.get("reference") or meta.get("process_label") or "dossier"
+    kind = meta.get("kind") or ""
+    name = _client_name_from_meta(meta)
+    if kind == "CREDIT":
+        amount = (meta.get("amount_label") or "").strip()
+        if amount in {"", "—"}:
+            amount = ""
+        if name and amount:
+            return f"{name} - {amount}"
+        if name:
+            return name
+        if amount:
+            return amount
+        return fallback
+    label = _PROCESS_SUBJECT_LABEL.get(kind)
+    if label:
+        return f"{label} - {name}" if name else label
+    return fallback
+
+
+def _alert_subject(prefix: str, meta: dict, fallback: str = "") -> str:
+    kind = meta.get("kind") or ""
+    if kind in _PROCESS_SUBJECT_LABEL:
+        return f"[FIN_FLOW] {_subject_tail(meta, fallback)}"[:255]
+    return f"{prefix} — {_subject_tail(meta, fallback)}"[:255]
+
+
 def _describe_target(instance) -> dict:
     """Résumé métier de la cible du circuit (détails crédit inclus)."""
     target = instance.target
@@ -55,6 +107,8 @@ def _describe_target(instance) -> dict:
     reference = getattr(target, "reference", None) or str(getattr(target, "pk", ""))
     detail_path = None
     client_display = ""
+    client_nom_prenom = ""
+    amount_label = ""
     details: list[tuple[str, str]] = []
     kind = definition.target_type if definition else ""
 
@@ -65,6 +119,8 @@ def _describe_target(instance) -> dict:
             "reference": reference,
             "detail_path": None,
             "client_display": "",
+            "client_nom_prenom": "",
+            "amount_label": "",
             "details": details,
             "detail_url": _frontend_base(),
         }
@@ -76,6 +132,7 @@ def _describe_target(instance) -> dict:
         detail_path = f"/dossiers/{target.id}"
         client = target.client
         client_display = getattr(client, "display_name", str(client))
+        client_nom_prenom = _client_nom_prenom(client)
         currency = getattr(target, "currency", None) or "XOF"
         product = getattr(target, "product", None)
         agency = getattr(target, "agency", None)
@@ -84,6 +141,7 @@ def _describe_target(instance) -> dict:
             or target.amount_proposed
             or target.amount_requested
         )
+        amount_label = _format_money(amount, currency)
         details = [
             ("Produit", product.label if product else "—"),
             ("Montant", _format_money(amount, currency)),
@@ -111,12 +169,14 @@ def _describe_target(instance) -> dict:
         detail_path = f"/mains-levees/{target.id}"
         client = target.guarantee.client if target.guarantee_id else None
         client_display = getattr(client, "display_name", str(client)) if client else ""
+        client_nom_prenom = _client_nom_prenom(client)
         if target.guarantee_id:
             details.append(("Garantie", target.guarantee.reference or str(target.guarantee_id)))
     elif isinstance(target, DationRequest):
         detail_path = f"/dations/{target.id}"
         client = target.client
         client_display = getattr(client, "display_name", str(client))
+        client_nom_prenom = _client_nom_prenom(client)
 
     return {
         "kind": kind,
@@ -124,6 +184,8 @@ def _describe_target(instance) -> dict:
         "reference": reference,
         "detail_path": detail_path,
         "client_display": client_display or "",
+        "client_nom_prenom": client_nom_prenom or "",
+        "amount_label": amount_label,
         "details": details,
         "detail_url": (
             f"{_frontend_base()}{detail_path}" if detail_path else _frontend_base()
@@ -370,8 +432,10 @@ def notify_step_opened(instance, step, task=None):
     users = _users_for_group(step.required_group, tenant.id)
     recipients = _emails(users)
     meta = _describe_target(instance)
-    subject = (
-        f"[FIN_FLOW] Dossier en attente — {meta['reference'] or meta['process_label']}"
+    subject = _alert_subject(
+        "[FIN_FLOW] Dossier en attente",
+        meta,
+        fallback=meta["reference"] or meta["process_label"],
     )
     client_bit = (
         f" concernant {meta['client_display']}"
@@ -453,7 +517,11 @@ def notify_workflow_outcome(instance, outcome: str):
             "générez les documents puis déposez l'exemplaire signé."
         )
         cta_label = "Générer les contrats"
-        subject = f"[FIN_FLOW] Dossier validé — générez les contrats — {ref}"
+        subject = _alert_subject(
+            "[FIN_FLOW] Dossier validé — générez les contrats",
+            meta,
+            fallback=ref,
+        )
     elif outcome == "REJECTED" and is_credit:
         title = "Dossier rejeté"
         intro = (
@@ -465,7 +533,7 @@ def notify_workflow_outcome(instance, outcome: str):
             "demande n'est pas créée, sauf consignes contraires de votre hiérarchie."
         )
         cta_label = "Voir le dossier rejeté"
-        subject = f"[FIN_FLOW] Dossier rejeté — {ref}"
+        subject = _alert_subject("[FIN_FLOW] Dossier rejeté", meta, fallback=ref)
     elif outcome == "RETURNED" and is_credit:
         title = "Dossier renvoyé pour correction"
         intro = (
@@ -477,7 +545,11 @@ def notify_workflow_outcome(instance, outcome: str):
             "apportez les corrections puis resoumettez le circuit."
         )
         cta_label = "Corriger et resoumettre"
-        subject = f"[FIN_FLOW] Dossier renvoyé pour correction — {ref}"
+        subject = _alert_subject(
+            "[FIN_FLOW] Dossier renvoyé pour correction",
+            meta,
+            fallback=ref,
+        )
     else:
         labels = {
             "APPROVED": ("Circuit approuvé", "Le circuit a été approuvé."),
@@ -490,7 +562,11 @@ def notify_workflow_outcome(instance, outcome: str):
         title, intro = labels.get(
             outcome, ("Mise à jour du circuit", "Le circuit a été mis à jour.")
         )
-        subject = f"[FIN_FLOW] {title} — {meta['process_label']} {meta['reference']}"
+        subject = _alert_subject(
+            f"[FIN_FLOW] {title}",
+            meta,
+            fallback=f"{meta['process_label']} {meta['reference']}".strip(),
+        )
 
     kind = {
         "APPROVED": NotificationLog.Kind.COMPLETION,
@@ -563,9 +639,10 @@ def notify_sla_breach(task):
     recipients = _emails(users)
     meta = _describe_target(instance)
     due = task.due_at.isoformat() if task.due_at else "—"
-    subject = (
-        f"[FIN_FLOW][SLA] Échéance dépassée — {meta['process_label']} "
-        f"{meta['reference']}"
+    subject = _alert_subject(
+        "[FIN_FLOW][SLA] Échéance dépassée",
+        meta,
+        fallback=f"{meta['process_label']} {meta['reference']}".strip(),
     )
     intro = (
         f"L'étape « {step.name} » a dépassé son délai (SLA). "

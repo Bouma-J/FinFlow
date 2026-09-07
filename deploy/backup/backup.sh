@@ -23,6 +23,12 @@ DIR="$(finflow_dir)"
 COMPOSE_FILES="$(detect_compose_files "$DIR")"
 export COMPOSE_FILES
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/finflow}"
+# Jamais écrire les dumps dans le dépôt applicatif.
+case "${BACKUP_ROOT}" in
+  "${DIR}"|"${DIR}"/*)
+    die "BACKUP_ROOT=${BACKUP_ROOT} est dans l'instance ${DIR}. Utilisez /var/backups/finflow."
+    ;;
+esac
 STAMP="$(utc_stamp)"
 SNAP="${BACKUP_ROOT}/snapshots/${STAMP}"
 ENV_FILE="${DIR}/.env"

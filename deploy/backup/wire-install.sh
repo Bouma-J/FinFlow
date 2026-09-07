@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Branche les scripts de sauvegarde sur une instance installée.
-# Appelé par ubuntu-install.sh / ubuntu-install-ip.sh :
+# Appelé par ubuntu-install.sh / ubuntu-install-ip.sh / ubuntu-update.sh :
 #   bash deploy/backup/wire-install.sh /opt/finflow
+#
+# Les dumps vont dans /var/backups/finflow (hors du dépôt /opt/finflow).
 set -euo pipefail
 
 DIR="${1:-}"
@@ -11,8 +13,9 @@ DIR="${1:-}"
 }
 
 SCRIPT_SRC="${DIR}/deploy/backup"
-mkdir -p "${DIR}/scripts" /var/backups/finflow /var/log
-chmod 700 /var/backups/finflow 2>/dev/null || true
+BACKUP_ROOT="/var/backups/finflow"
+mkdir -p "${DIR}/scripts" "${BACKUP_ROOT}/snapshots" /var/log
+chmod 700 "${BACKUP_ROOT}" 2>/dev/null || true
 
 chmod +x "${SCRIPT_SRC}/backup.sh" "${SCRIPT_SRC}/restore.sh" \
   "${SCRIPT_SRC}/verify.sh" "${SCRIPT_SRC}/selftest.sh" 2>/dev/null || true
@@ -44,12 +47,15 @@ fi
 if [[ -d /etc/cron.d ]]; then
   cat > /etc/cron.d/finflow-backup <<EOF
 # FinFlow — snapshot quotidien 02:30 (Postgres + MinIO + secrets)
+# Destination : ${BACKUP_ROOT}/snapshots (hors du projet ${DIR})
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-30 2 * * * root FINFLOW_DIR=${DIR} BACKUP_PASSPHRASE_FILE=${PASS_FILE} ${SCRIPT_SRC}/backup.sh >> /var/log/finflow-backup.log 2>&1
+30 2 * * * root FINFLOW_DIR=${DIR} BACKUP_ROOT=${BACKUP_ROOT} BACKUP_PASSPHRASE_FILE=${PASS_FILE} ${SCRIPT_SRC}/backup.sh >> /var/log/finflow-backup.log 2>&1
 EOF
   chmod 644 /etc/cron.d/finflow-backup
-  echo "[OK] Cron installé : /etc/cron.d/finflow-backup (02:30)"
+  echo "[OK] Cron installé : /etc/cron.d/finflow-backup (02:30) → ${BACKUP_ROOT}/snapshots"
+else
+  echo "[WARN] /etc/cron.d absent — cron de sauvegarde non posé." >&2
 fi
 
 echo "[OK] Wrappers : ${DIR}/scripts/backup.sh restore.sh verify.sh backup-db.sh"

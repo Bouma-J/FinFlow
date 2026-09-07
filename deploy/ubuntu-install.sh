@@ -386,9 +386,10 @@ EOF
   chmod +x "$dir/scripts/finflow"
 
   if [[ -f "$dir/deploy/backup/wire-install.sh" ]]; then
-    bash "$dir/deploy/backup/wire-install.sh" "$dir"
+    bash "$dir/deploy/backup/wire-install.sh" "$dir" \
+      || die "Cron de sauvegarde non posé (/var/backups/finflow)."
   else
-    warn "deploy/backup/wire-install.sh absent — cron de snapshot non installé."
+    die "deploy/backup/wire-install.sh manquant — sauvegarde automatique obligatoire."
   fi
 
   echo "$DEPLOY_MODE" > "$dir/.finflow-deploy-mode"
@@ -480,7 +481,7 @@ ${C_OK}════════════════════════�
          finflow exec backend python manage.py bootstrap_all_tenants
     3. E-mail : Administration → Alertes e-mail (SMTP filiale) + bouton Test
        (repli global déjà dans .env si configuré à l'install)
-    4. Sauvegardes : cron 02:30 déjà posé (/etc/cron.d/finflow-backup).
+    4. Sauvegardes auto : cron 02:30 → /var/backups/finflow/snapshots (hors projet).
        Épreuve : ${INSTALL_DIR}/scripts/restore.sh --target drill --snapshot <dir>
        Sinistre : … --target live --confirm=RESTORE
     5. Mises à jour ultérieures :

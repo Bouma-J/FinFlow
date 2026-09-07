@@ -257,11 +257,16 @@ EOF
     ln -sfn "$dir/deploy/ubuntu-update.sh" /usr/local/bin/finflow-update
   fi
 
-  if [[ -f "$dir/deploy/backup/wire-install.sh" ]]; then
-    bash "$dir/deploy/backup/wire-install.sh" "$dir" || warn "wire-install.sh : cron backup non rafraîchi."
-  fi
-
+  ensure_backup_cron "$dir"
   ok "Helpers rafraîchis : finflow, finflow-update"
+}
+
+ensure_backup_cron() {
+  local dir="$1"
+  [[ -f "$dir/deploy/backup/wire-install.sh" ]] \
+    || die "deploy/backup/wire-install.sh manquant — sauvegarde automatique obligatoire."
+  bash "$dir/deploy/backup/wire-install.sh" "$dir" \
+    || die "Cron de sauvegarde non posé (/var/backups/finflow)."
 }
 
 print_summary() {
@@ -280,6 +285,9 @@ ${C_OK}════════════════════════�
   Compose    : docker compose ${COMPOSE_FILES}
   Commandes  : finflow ps | finflow logs -f backend
   Prochaine  : sudo finflow-update   (ou sudo bash ${dir}/deploy/ubuntu-update.sh)
+
+  Sauvegardes : cron 02:30 → /var/backups/finflow/snapshots (hors projet)
+    sudo FINFLOW_DIR=${dir} ${dir}/deploy/backup/backup.sh
 
   HTTPS IP interne (auto-signé, sans HSTS) :
     sudo bash ${dir}/deploy/tls-ip/enable-ip-tls.sh ${dir} --self-signed
@@ -329,6 +337,16 @@ run_check() {
       warn "compose-files.sh et fallback divergent (OK si heuristique plus riche)."
     fi
   fi
+
+  echo "  backups : /var/backups/finflow/snapshots (hors projet)"
+  if [[ -f /etc/cron.d/finflow-backup ]]; then
+    echo "  cron    : /etc/cron.d/finflow-backup"
+    grep -v '^#' /etc/cron.d/finflow-backup | grep -v '^$' || true
+  else
+    warn "Cron /etc/cron.d/finflow-backup absent — l'update le posera via wire-install.sh"
+  fi
+  [[ -f "$dir/deploy/backup/backup.sh" ]] || warn "deploy/backup/backup.sh manquant"
+  [[ -f "$dir/deploy/backup/wire-install.sh" ]] || warn "deploy/backup/wire-install.sh manquant"
 
   ok "Contrôle de résolution Compose : OK"
 }
@@ -403,6 +421,7 @@ main() {
   chmod_deploy_scripts "$dir"
   COMPOSE_FILES="$(detect_compose_files "$dir")"
   log "Compose (après pull) : docker compose $COMPOSE_FILES"
+  ensure_backup_cron "$dir"
 
   ensure_mail_env "$dir"
   rebuild_stack "$dir" "$with_build"
