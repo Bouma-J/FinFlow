@@ -2,6 +2,8 @@ import json
 
 from rest_framework import serializers
 
+from apps.common.storage_urls import file_download_url, presign_file_fields
+
 from .models import (
     Guarantee,
     GuaranteeDocument,
@@ -38,11 +40,9 @@ class GuaranteePhotoSerializer(serializers.ModelSerializer):
         fields = ["id", "image", "caption"]
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        from apps.common.storage_urls import file_download_url
-
-        data["image"] = file_download_url(instance.image)
-        return data
+        return presign_file_fields(
+            super().to_representation(instance), instance, "image"
+        )
 
 
 class GuaranteeDocumentSerializer(serializers.ModelSerializer):
@@ -52,11 +52,9 @@ class GuaranteeDocumentSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        from apps.common.storage_urls import file_download_url
-
-        data["file"] = file_download_url(instance.file)
-        return data
+        return presign_file_fields(
+            super().to_representation(instance), instance, "file"
+        )
 
 
 class GuaranteeJewelryItemSerializer(serializers.ModelSerializer):
@@ -265,6 +263,24 @@ class GuaranteeSerializer(serializers.ModelSerializer):
             .first()
         )
         return str(req.id) if req else None
+
+    def to_representation(self, instance):
+        return presign_file_fields(
+            super().to_representation(instance),
+            instance,
+            "document_scan",
+            "expertise_report_scan",
+            "lease_contract_scan",
+            "legal_situation_certificate_scan",
+            "registration_card_scan",
+            "mechanical_expertise_scan",
+            "technical_inspection_scan",
+            "insurance_scan",
+            "purchase_invoice_scan",
+            "expertise_certificate_scan",
+            "origin_certificate_scan",
+            "pledge_deed_scan",
+        )
 
     def validate(self, attrs):
         from apps.common.upload_validation import validate_attrs_uploads
@@ -535,18 +551,10 @@ class GuaranteeReleaseRequestSerializer(serializers.ModelSerializer):
         return user_can_deposit_release_acte(user, obj)
 
     def get_acte_generated_url(self, obj):
-        if not obj.acte_generated:
-            return None
-        from apps.common.storage_urls import file_download_url
-
-        return file_download_url(obj.acte_generated)
+        return file_download_url(obj.acte_generated) if obj.acte_generated else None
 
     def get_acte_signed_url(self, obj):
-        if not obj.acte_signed:
-            return None
-        from apps.common.storage_urls import file_download_url
-
-        return file_download_url(obj.acte_signed)
+        return file_download_url(obj.acte_signed) if obj.acte_signed else None
 
 
 class DationAssetSerializer(serializers.ModelSerializer):
@@ -872,22 +880,27 @@ class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
         return getattr(app, "reference", None) if app else None
 
     def get_acte_file_url(self, obj):
-        if not obj.acte_file:
-            return None
-        from apps.common.storage_urls import file_download_url
-
-        return file_download_url(obj.acte_file)
+        return file_download_url(obj.acte_file) if obj.acte_file else None
 
     def get_acte_signed_file_url(self, obj):
-        if not obj.acte_signed_file:
-            return None
-        from apps.common.storage_urls import file_download_url
-
-        return file_download_url(obj.acte_signed_file)
+        return (
+            file_download_url(obj.acte_signed_file)
+            if obj.acte_signed_file
+            else None
+        )
 
     def get_registration_proof_url(self, obj):
-        if not obj.registration_proof:
-            return None
-        from apps.common.storage_urls import file_download_url
+        return (
+            file_download_url(obj.registration_proof)
+            if obj.registration_proof
+            else None
+        )
 
-        return file_download_url(obj.registration_proof)
+    def to_representation(self, instance):
+        return presign_file_fields(
+            super().to_representation(instance),
+            instance,
+            "acte_file",
+            "acte_signed_file",
+            "registration_proof",
+        )

@@ -2,6 +2,8 @@ import json
 
 from rest_framework import serializers
 
+from apps.common.storage_urls import presign_file_fields
+
 from .models import ContractTemplate, GeneratedContract
 
 
@@ -43,11 +45,9 @@ class ContractTemplateSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        from apps.common.storage_urls import file_download_url
-
-        data["file"] = file_download_url(instance.file)
-        return data
+        return presign_file_fields(
+            super().to_representation(instance), instance, "file"
+        )
 
     def validate_file(self, value):
         from apps.common.upload_validation import (
@@ -96,17 +96,12 @@ class GeneratedContractSerializer(serializers.ModelSerializer):
         ]
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        from apps.common.storage_urls import file_download_url
-
-        # Évite les URLs MinIO non signées / sans bucket (AccessDenied).
-        data["file"] = file_download_url(instance.file)
-        data["signed_file"] = (
-            file_download_url(instance.signed_file)
-            if instance.signed_file
-            else None
+        return presign_file_fields(
+            super().to_representation(instance),
+            instance,
+            "file",
+            "signed_file",
         )
-        return data
 
 
 class GenerateContractSerializer(serializers.Serializer):

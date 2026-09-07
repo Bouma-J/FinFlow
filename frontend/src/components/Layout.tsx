@@ -133,13 +133,6 @@ const NAV_ITEMS: NavItem[] = [
     anyOf: PERM_DOCUMENTS,
   },
   {
-    to: "/admin/consolidation",
-    label: "Consolidation Groupe",
-    icon: Library,
-    groupOnly: true,
-    anyOf: PERM_DASHBOARD,
-  },
-  {
     to: "/simulateur",
     label: "Simulateur",
     icon: Calculator,
@@ -149,6 +142,13 @@ const NAV_ITEMS: NavItem[] = [
 
 const ADMIN_ITEMS: NavItem[] = [
   { to: "/admin/filiales", label: "Filiales", icon: Building2 },
+  {
+    to: "/admin/consolidation",
+    label: "Consolidation Groupe",
+    icon: Layers,
+    groupOnly: true,
+    anyOf: PERM_DASHBOARD,
+  },
   {
     to: "/admin/agences",
     label: "Agences",

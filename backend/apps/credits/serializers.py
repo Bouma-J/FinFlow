@@ -2,6 +2,8 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from apps.common.storage_urls import presign_file_fields
+
 from .fees import build_fees_breakdown, sync_extra_fees
 from .models import (
     AnalysisThreshold,
@@ -64,6 +66,9 @@ class FinancialDocumentSerializer(serializers.ModelSerializer):
     class Meta:
         model = FinancialDocument
         fields = ["id", "file", "label"]
+
+    def to_representation(self, instance):
+        return presign_file_fields(super().to_representation(instance), instance, "file")
 
 
 class FinancialAnalysisSerializer(serializers.ModelSerializer):
@@ -335,6 +340,9 @@ class StockPhotoSerializer(serializers.ModelSerializer):
         model = StockPhoto
         fields = ["id", "image", "caption"]
 
+    def to_representation(self, instance):
+        return presign_file_fields(super().to_representation(instance), instance, "image")
+
 
 class CreditDocumentSerializer(serializers.ModelSerializer):
     class Meta:
@@ -353,6 +361,9 @@ class CreditDocumentSerializer(serializers.ModelSerializer):
             tenant=resolve_tenant_from_context(self.context),
             check_quota=True,
         )
+
+    def to_representation(self, instance):
+        return presign_file_fields(super().to_representation(instance), instance, "file")
 
 
 class CreditApplicationFeeSerializer(serializers.ModelSerializer):
@@ -432,6 +443,11 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
     def get_currency_label(self, obj):
         refs = self.get_cbs_refs(obj)
         return (refs.get("currency") or {}).get("label") or obj.currency
+
+    def to_representation(self, instance):
+        return presign_file_fields(
+            super().to_representation(instance), instance, "request_letter_scan"
+        )
 
     class Meta:
         model = CreditApplication

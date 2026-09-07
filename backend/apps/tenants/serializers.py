@@ -87,6 +87,12 @@ class TenantSerializer(serializers.ModelSerializer):
 
         return tenant_logo_url(obj, self.context.get("request"))
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        # Évite l'URL MinIO brute (AccessDenied) : même proxy que logo_url.
+        data["logo"] = self.get_logo_url(instance)
+        return data
+
     def _save_officers(self, tenant, officers):
         if officers is None:
             return

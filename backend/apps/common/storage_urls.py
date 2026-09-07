@@ -145,6 +145,17 @@ def file_download_url(file_field, *, expires: int = 3600) -> str | None:
         return storage.url(name)
 
 
+def presign_file_fields(data, instance, *fields, expires: int = 3600):
+    """Remplace les URL django-storages (sans bucket) par des GET présignés."""
+    for name in fields:
+        field = getattr(instance, name, None)
+        if field and getattr(field, "name", None):
+            url = file_download_url(field, expires=expires)
+            if url:
+                data[name] = url
+    return data
+
+
 def tenant_logo_url(tenant, request=None) -> str | None:
     """
     URL publique du logo filiale, servie via l'API Django.

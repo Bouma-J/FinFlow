@@ -168,14 +168,6 @@ export default function App() {
           }
         />
         <Route
-          path="/admin/consolidation"
-          element={
-            <PermissionRoute anyOf={PERM_DASHBOARD}>
-              <GroupConsolidationPage />
-            </PermissionRoute>
-          }
-        />
-        <Route
           path="/dossiers/nouveau"
           element={
             <PermissionRoute anyOf={PERM_CREDIT_CREATE}>
@@ -445,6 +437,16 @@ export default function App() {
           element={
             <AdminRoute>
               <AdminTenantsPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/consolidation"
+          element={
+            <AdminRoute>
+              <PermissionRoute anyOf={PERM_DASHBOARD}>
+                <GroupConsolidationPage />
+              </PermissionRoute>
             </AdminRoute>
           }
         />

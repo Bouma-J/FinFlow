@@ -1,6 +1,6 @@
 from rest_framework import serializers
 
-from apps.common.storage_urls import file_download_url
+from apps.common.storage_urls import file_download_url, presign_file_fields
 
 from .models import Document, DocumentCategory
 
@@ -121,9 +121,9 @@ class DocumentSerializer(serializers.ModelSerializer):
         return file_download_url(obj.file) if obj.file else None
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        data["file"] = file_download_url(instance.file) if instance.file else None
-        return data
+        return presign_file_fields(
+            super().to_representation(instance), instance, "file"
+        )
 
     def validate_file(self, value):
         from apps.common.upload_validation import (

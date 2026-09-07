@@ -3,7 +3,7 @@ import json
 from rest_framework import serializers
 
 from apps.clients.serializers import PhonesInputField
-from apps.common.storage_urls import file_download_url
+from apps.common.storage_urls import file_download_url, presign_file_fields
 
 from .models import Surety, SuretyDocument, SuretyEngagement, SuretyPhone
 
@@ -145,9 +145,9 @@ class SuretyDocumentSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at"]
 
     def to_representation(self, instance):
-        data = super().to_representation(instance)
-        data["file"] = file_download_url(instance.file)
-        return data
+        return presign_file_fields(
+            super().to_representation(instance), instance, "file"
+        )
 
 
 class SuretyListSerializer(serializers.ModelSerializer):
@@ -242,6 +242,17 @@ class SuretySerializer(serializers.ModelSerializer):
                     {"last_name": "Le nom de la caution est obligatoire."}
                 )
         return attrs
+
+    def to_representation(self, instance):
+        return presign_file_fields(
+            super().to_representation(instance),
+            instance,
+            "id_document_scan",
+            "photo",
+            "ifu_scan",
+            "rccm_scan",
+            "manager_id_document_scan",
+        )
 
     def _sync_phones(self, surety, phones):
         for entry in phones:
