@@ -1,11 +1,19 @@
-"""Services de recouvrement : PAR, encaissements, escalade, tableau de bord agent."""
+"""Services de recouvrement : PAR, synchro impayés CBS, escalade, tableau de bord."""
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 
+logger = logging.getLogger("finflow")
+
+CBS_REPAYMENT_DENIED = (
+    "Les encaissements sont enregistrés dans le CBS. "
+    "Actualisez le dossier : le retard diminue ou le crédit passe soldé."
+)
+
 from django.db import transaction
-from django.db.models import Count, Sum
+from django.db.models import Count
 from django.utils import timezone
 
 from apps.credits.models import Installment, Loan
@@ -16,6 +24,7 @@ from .models import (
     CollectionCase,
     CollectionEscalationRule,
     CollectionStageHistory,
+    CollectionTranche,
     LitigationFile,
     LoanRestructure,
     PaymentPromise,
@@ -34,6 +43,18 @@ DEFAULT_ESCALATION_RULES = (
     (31, CollectionCase.Stage.PRECONTENTIOUS, "Précontentieux dès 31 j"),
     (91, CollectionCase.Stage.LITIGATION, "Contentieux dès 91 j"),
 )
+
+DEFAULT_TRANCHES = (
+    (1, "Gestionnaire", 1, 30, CollectionTranche.OwnerKind.GESTIONNAIRE),
+    (2, "Service recouvrement", 31, 90, CollectionTranche.OwnerKind.COLLECTION),
+    (3, "Juridique", 91, None, CollectionTranche.OwnerKind.LEGAL),
+)
+
+OWNER_KIND_STAGE = {
+    CollectionTranche.OwnerKind.GESTIONNAIRE: CollectionCase.Stage.AMICABLE,
+    CollectionTranche.OwnerKind.COLLECTION: CollectionCase.Stage.PRECONTENTIOUS,
+    CollectionTranche.OwnerKind.LEGAL: CollectionCase.Stage.LITIGATION,
+}
 
 
 def classify_par(days_overdue):
@@ -144,72 +165,352 @@ def ensure_default_escalation_rules_by_id(tenant_id) -> None:
 
 
 def apply_escalation_rules(case: CollectionCase) -> CollectionCase:
-    """Escalade uniquement vers le haut (jamais de baisse automatique)."""
+    """Tranche (affectation) puis stade selon les règles d'escalade."""
+    case = apply_tranche_transfer(case)
     if case.stage == CollectionCase.Stage.CLOSED:
         return case
-    target = suggested_stage_for_days(case.tenant_id, case.days_overdue)
-    if not target:
+    suggested = suggested_stage_for_days(case.tenant_id, case.days_overdue)
+    if not suggested:
         return case
-    current_rank = STAGE_RANK.get(case.stage, -1)
-    target_rank = STAGE_RANK.get(target, -1)
-    if target_rank > current_rank:
-        return change_case_stage(
-            case,
-            target,
-            automatic=True,
-            reason=f"Seuil DPD {case.days_overdue} j",
+    if STAGE_RANK.get(suggested, -1) <= STAGE_RANK.get(case.stage, -1):
+        return case
+    return change_case_stage(
+        case,
+        suggested,
+        automatic=True,
+        reason=f"Escalade automatique — {case.days_overdue} j de retard",
+    )
+
+
+def ensure_default_tranches(tenant) -> int:
+    """Crée les 3 tranches par défaut si la filiale n'en a aucune."""
+    existing = CollectionTranche.all_tenants.filter(tenant=tenant).exists()
+    if existing:
+        return 0
+    created = 0
+    for position, name, min_days, max_days, owner in DEFAULT_TRANCHES:
+        CollectionTranche.all_tenants.create(
+            tenant=tenant,
+            position=position,
+            name=name,
+            min_days_overdue=min_days,
+            max_days_overdue=max_days,
+            owner_kind=owner,
+            is_active=True,
         )
+        created += 1
+    return created
+
+
+def ensure_default_tranches_by_id(tenant_id) -> None:
+    from apps.tenants.models import Tenant
+
+    tenant = Tenant.objects.filter(pk=tenant_id).first()
+    if tenant:
+        ensure_default_tranches(tenant)
+
+
+def resolve_tranche(tenant_id, days_overdue: int):
+    """Tranche active correspondant au nombre de jours de retard."""
+    if days_overdue <= 0:
+        return None
+    ensure_default_tranches_by_id(tenant_id)
+    candidates = CollectionTranche.objects.filter(
+        tenant_id=tenant_id,
+        is_active=True,
+        min_days_overdue__lte=days_overdue,
+    ).order_by("-min_days_overdue")
+    for tranche in candidates:
+        if (
+            tranche.max_days_overdue is not None
+            and days_overdue > tranche.max_days_overdue
+        ):
+            continue
+        return tranche
+    return None
+
+
+def _credit_officer(case: CollectionCase):
+    app = getattr(case.loan, "application", None)
+    if app is None:
+        return None
+    return getattr(app, "submitted_by", None) or getattr(app, "created_by", None)
+
+
+def _assign_for_tranche(case: CollectionCase, tranche: CollectionTranche) -> list[str]:
+    """Met à jour l'affectation selon le responsable de la tranche."""
+    if tranche.owner_kind == CollectionTranche.OwnerKind.GESTIONNAIRE:
+        officer = _credit_officer(case)
+        if officer is not None and case.assigned_to_id != officer.pk:
+            case.assigned_to = officer
+            return ["assigned_to"]
+        return []
+    if case.assigned_to_id is not None:
+        case.assigned_to = None
+        return ["assigned_to"]
+    return []
+
+
+def apply_tranche_transfer(case: CollectionCase) -> CollectionCase:
+    """
+    Passe le dossier à la tranche correspondant au retard.
+
+    Transfert uniquement vers le haut. À l'arrivée dans le service
+    recouvrement ou le juridique, le dossier rejoint la file (non affecté).
+    """
+    if case.stage == CollectionCase.Stage.CLOSED:
+        return case
+    target = resolve_tranche(case.tenant_id, case.days_overdue)
+    if target is None:
+        return case
+    current = case.tranche
+    if current is not None and current.position >= target.position:
+        return case
+    target_stage = OWNER_KIND_STAGE.get(target.owner_kind)
+    current_rank = STAGE_RANK.get(case.stage, -1)
+    target_rank = STAGE_RANK.get(target_stage, -1)
+    if current is None and current_rank > target_rank:
+        return case
+
+    update_fields = ["tranche"]
+    case.tranche = target
+    update_fields.extend(_assign_for_tranche(case, target))
+    case.save(update_fields=update_fields)
+
+    reason = (
+        f"Transfert automatique — {target.name} "
+        f"({case.days_overdue} j de retard)"
+    )
+    if target_stage and case.stage != target_stage:
+        case = change_case_stage(
+            case,
+            target_stage,
+            automatic=True,
+            reason=reason,
+        )
+    else:
+        CollectionStageHistory.objects.create(
+            tenant_id=case.tenant_id,
+            case=case,
+            from_stage=case.stage or "",
+            to_stage=case.stage or CollectionCase.Stage.AMICABLE,
+            reason=reason,
+            automatic=True,
+        )
+    try:
+        from apps.notifications.services import notify_collection_tranche_transfer
+
+        notify_collection_tranche_transfer(
+            case, from_tranche=current, to_tranche=target
+        )
+    except Exception:  # noqa: BLE001 — l'alerte ne doit pas bloquer le transfert
+        logger.exception("Alerte transfert de tranche en échec")
     return case
 
 
+def validate_tranche_specs(items: list[dict]) -> list[dict]:
+    """Valide et normalise une liste de tranches (nombre et jours libres)."""
+    from rest_framework.exceptions import ValidationError
+
+    if not items:
+        raise ValidationError(
+            {"detail": "Définissez au moins une tranche de recouvrement."}
+        )
+    cleaned = []
+    for raw in items:
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            raise ValidationError({"detail": "Chaque tranche doit avoir un libellé."})
+        try:
+            min_days = int(raw.get("min_days_overdue"))
+        except (TypeError, ValueError):
+            raise ValidationError(
+                {"detail": "Le retard minimum doit être un nombre entier."}
+            )
+        if min_days < 1:
+            raise ValidationError(
+                {"detail": "Le retard minimum d'une tranche est d'au moins 1 jour."}
+            )
+        max_raw = raw.get("max_days_overdue")
+        max_days = None if max_raw in (None, "", 0, "0") else int(max_raw)
+        if max_days is not None and max_days < min_days:
+            raise ValidationError(
+                {
+                    "detail": (
+                        f"« {name} » : le plafond ({max_days} j) est inférieur "
+                        f"au minimum ({min_days} j)."
+                    )
+                }
+            )
+        owner = str(raw.get("owner_kind") or CollectionTranche.OwnerKind.GESTIONNAIRE)
+        if owner not in CollectionTranche.OwnerKind.values:
+            raise ValidationError(
+                {"detail": f"Responsable inconnu pour « {name} »."}
+            )
+        cleaned.append(
+            {
+                "name": name,
+                "min_days_overdue": min_days,
+                "max_days_overdue": max_days,
+                "owner_kind": owner,
+                "is_active": bool(raw.get("is_active", True)),
+            }
+        )
+    cleaned.sort(key=lambda row: row["min_days_overdue"])
+    for index, row in enumerate(cleaned):
+        row["position"] = index + 1
+        if index < len(cleaned) - 1:
+            if row["max_days_overdue"] is None:
+                raise ValidationError(
+                    {
+                        "detail": (
+                            "Seule la dernière tranche peut être sans plafond "
+                            "de jours."
+                        )
+                    }
+                )
+            nxt = cleaned[index + 1]["min_days_overdue"]
+            if row["max_days_overdue"] + 1 != nxt:
+                raise ValidationError(
+                    {
+                        "detail": (
+                            "Les tranches doivent se succéder sans trou ni "
+                            f"chevauchement ({row['max_days_overdue']} j puis "
+                            f"{nxt} j)."
+                        )
+                    }
+                )
+    return cleaned
+
+
+def replace_collection_tranches(*, tenant, items: list[dict]) -> list:
+    """Remplace le paramétrage des tranches de la filiale."""
+    specs = validate_tranche_specs(items)
+    CollectionTranche.objects.filter(tenant=tenant).delete()
+    created = [
+        CollectionTranche.objects.create(tenant=tenant, **spec) for spec in specs
+    ]
+    open_cases = CollectionCase.objects.filter(tenant=tenant).exclude(
+        stage=CollectionCase.Stage.CLOSED
+    )
+    for case in open_cases:
+        target = resolve_tranche(case.tenant_id, case.days_overdue)
+        if target is not None and case.tranche_id != target.id:
+            case.tranche = target
+            case.save(update_fields=["tranche"])
+    return created
+
+
+def loan_cbs_reference(loan: Loan) -> str:
+    return (
+        (getattr(loan, "core_banking_reference", None) or "").strip()
+        or (getattr(loan, "cbs_demande_ref", None) or "").strip()
+        or (getattr(loan, "cbs_contract_number", None) or "").strip()
+        or (getattr(loan, "cbs_external_id", None) or "").strip()
+    )
+
+
+def fetch_cbs_overdue_for_loan(loan: Loan, as_of=None) -> dict:
+    """Interroge le CBS (crd/situation) et calcule jours / montant de retard."""
+    from apps.corebanking.services import CoreBankingError, get_loan_status
+
+    ref = loan_cbs_reference(loan)
+    if not ref:
+        raise CoreBankingError(
+            "Référence prêt CBS manquante : le retard ne peut pas être "
+            "calculé depuis FinFlow."
+        )
+    app = getattr(loan, "application", None)
+    client = getattr(app, "client", None) if app is not None else None
+    status = get_loan_status(
+        loan.tenant_id,
+        ref,
+        code_adherent=getattr(client, "cbs_client_id", None) or None,
+        num_manuel=getattr(client, "cbs_account_number", None) or None,
+        num_piece_identite=getattr(client, "national_id", None) or None,
+    )
+    days = int(status.get("days_overdue") or 0)
+    amount = Decimal(str(status.get("overdue_amount") or 0))
+    return {
+        "settled": bool(status.get("settled")) and days <= 0 and amount <= 0,
+        "days_overdue": days,
+        "overdue_amount": amount,
+        "outstanding": status.get("outstanding"),
+        "oldest_due": status.get("oldest_due"),
+    }
+
+
+def _normalize_cbs_overdue_payload(cbs_status: dict) -> tuple[bool, int, Decimal]:
+    days = int(cbs_status.get("days_overdue") or 0)
+    amount = Decimal(str(cbs_status.get("overdue_amount") or 0))
+    settled = bool(cbs_status.get("settled")) or (days <= 0 and amount <= 0)
+    return settled, max(days, 0), max(amount, Decimal("0"))
+
+
 @transaction.atomic
-def refresh_loan_overdue(loan: Loan, as_of=None):
+def refresh_loan_overdue(loan: Loan, as_of=None, *, cbs_status=None):
     """
-    Recalcule le retard d'un prêt, met à jour le statut des échéances et
-    crée/actualise le dossier de recouvrement associé.
+    Recalcule le retard d'un prêt **depuis le CBS** puis actualise le
+    dossier de recouvrement (tranches, PAR). L'échéancier FinFlow n'est
+    pas utilisé pour les jours / le montant d'impayé.
     """
     as_of = as_of or date.today()
+    error = ""
+    if cbs_status is None:
+        try:
+            cbs_status = fetch_cbs_overdue_for_loan(loan, as_of=as_of)
+        except Exception as exc:  # noqa: BLE001 — CoreBankingError ou connecteur
+            from apps.corebanking.services import CoreBankingError
 
-    overdue_qs = loan.installments.filter(
-        due_date__lt=as_of,
-    ).exclude(status=Installment.Status.PAID)
+            if not isinstance(exc, CoreBankingError):
+                raise
+            error = str(exc)
+            case = CollectionCase.objects.filter(loan=loan).first()
+            if case:
+                case.cbs_sync_error = error[:255]
+                case.cbs_synced_at = timezone.now()
+                case.save(update_fields=["cbs_sync_error", "cbs_synced_at"])
+            return case
 
-    for inst in overdue_qs:
-        remaining = inst.total_due - inst.amount_paid
-        if remaining <= 0:
-            inst.status = Installment.Status.PAID
-            inst.amount_paid = inst.total_due
-        elif inst.amount_paid > 0:
-            inst.status = Installment.Status.PARTIAL
-        else:
-            inst.status = Installment.Status.OVERDUE
-        inst.save(update_fields=["status", "amount_paid"])
+    settled, days_overdue, overdue_amount = _normalize_cbs_overdue_payload(
+        cbs_status
+    )
+    existing = CollectionCase.objects.filter(loan=loan).first()
+    previous_amount = (
+        Decimal(existing.overdue_amount) if existing is not None else None
+    )
 
-    overdue_qs = loan.installments.filter(
-        due_date__lt=as_of,
-    ).exclude(status=Installment.Status.PAID)
-
-    agg = overdue_qs.aggregate(total=Sum("total_due"), paid=Sum("amount_paid"))
-    overdue_amount = (agg["total"] or Decimal("0")) - (agg["paid"] or Decimal("0"))
-
-    oldest = overdue_qs.order_by("due_date").first()
-    days_overdue = (as_of - oldest.due_date).days if oldest else 0
-
-    if days_overdue <= 0 and overdue_amount <= 0:
-        case = CollectionCase.objects.filter(loan=loan).first()
+    if settled or (days_overdue <= 0 and overdue_amount <= 0):
+        case = existing
         if case:
             case.days_overdue = 0
             case.overdue_amount = 0
             case.par_class = CollectionCase.ParClass.HEALTHY
-            case.save(update_fields=["days_overdue", "overdue_amount", "par_class"])
+            case.cbs_synced_at = timezone.now()
+            case.cbs_sync_error = ""
+            case.save(
+                update_fields=[
+                    "days_overdue",
+                    "overdue_amount",
+                    "par_class",
+                    "cbs_synced_at",
+                    "cbs_sync_error",
+                ]
+            )
+            _mark_promises_kept_from_cbs(
+                case,
+                previous_amount=previous_amount,
+                new_amount=Decimal("0"),
+                settled=True,
+            )
             if case.stage != CollectionCase.Stage.CLOSED:
                 change_case_stage(
                     case,
                     CollectionCase.Stage.CLOSED,
                     automatic=True,
-                    reason="Plus d'impayé",
+                    reason="Soldé au CBS",
                 )
-        if _loan_fully_settled(loan) and loan.status == Loan.Status.ACTIVE:
+        if settled and loan.status == Loan.Status.ACTIVE:
             loan.status = Loan.Status.CLOSED
             loan.save(update_fields=["status"])
         return CollectionCase.objects.filter(loan=loan).first()
@@ -220,7 +521,24 @@ def refresh_loan_overdue(loan: Loan, as_of=None):
     case.days_overdue = max(days_overdue, 0)
     case.overdue_amount = max(overdue_amount, 0)
     case.par_class = classify_par(case.days_overdue)
-    case.save(update_fields=["days_overdue", "overdue_amount", "par_class"])
+    case.cbs_synced_at = timezone.now()
+    case.cbs_sync_error = ""
+    case.save(
+        update_fields=[
+            "days_overdue",
+            "overdue_amount",
+            "par_class",
+            "cbs_synced_at",
+            "cbs_sync_error",
+        ]
+    )
+    if previous_amount is not None:
+        _mark_promises_kept_from_cbs(
+            case,
+            previous_amount=previous_amount,
+            new_amount=case.overdue_amount,
+            settled=False,
+        )
 
     if created:
         case.stage_changed_at = timezone.now()
@@ -235,6 +553,9 @@ def refresh_loan_overdue(loan: Loan, as_of=None):
             case.assigned_to = agent
             update_fields.append("assigned_to")
         case.save(update_fields=update_fields)
+        LoanRestructure.objects.filter(loan=loan, case__isnull=True).update(
+            case=case
+        )
         CollectionStageHistory.objects.create(
             tenant_id=case.tenant_id,
             case=case,
@@ -270,12 +591,14 @@ def refresh_loan_overdue(loan: Loan, as_of=None):
 
 
 @transaction.atomic
-def apply_repayment_to_schedule(repayment: Repayment, *, as_of=None):
-    """Alloue un encaissement sur les échéances (FIFO) puis recalcule le retard."""
+def apply_repayment_to_schedule(repayment: Repayment, *, as_of=None, cbs_status=None):
+    """Alloue un encaissement sur les échéances (FIFO) puis relit le retard CBS."""
     as_of = as_of or repayment.payment_date or date.today()
     remaining = Decimal(repayment.amount)
     if remaining <= 0:
-        return refresh_loan_overdue(repayment.loan, as_of=as_of)
+        return refresh_loan_overdue(
+            repayment.loan, as_of=as_of, cbs_status=cbs_status
+        )
 
     installments = (
         repayment.loan.installments.exclude(status=Installment.Status.PAID)
@@ -303,17 +626,44 @@ def apply_repayment_to_schedule(repayment: Repayment, *, as_of=None):
         inst.save(update_fields=["status", "amount_paid"])
 
     _mark_kept_promises(repayment)
-    return refresh_loan_overdue(repayment.loan, as_of=as_of)
+    return refresh_loan_overdue(
+        repayment.loan, as_of=as_of, cbs_status=cbs_status
+    )
 
 
 def _mark_kept_promises(repayment: Repayment):
     case = getattr(repayment.loan, "collection_case", None)
     if case is None:
         return
-    pending = case.promises.filter(status=PaymentPromise.Status.PENDING).order_by(
-        "promised_date"
+    _mark_promises_kept_from_cbs(
+        case,
+        previous_amount=Decimal(repayment.amount),
+        new_amount=Decimal("0"),
+        settled=False,
     )
-    leftover = Decimal(repayment.amount)
+
+
+def _mark_promises_kept_from_cbs(
+    case: CollectionCase,
+    *,
+    previous_amount,
+    new_amount,
+    settled: bool,
+):
+    """Une baisse d'impayé CBS (ou un solde) honore les promesses en attente."""
+    pending = case.promises.filter(
+        status=PaymentPromise.Status.PENDING
+    ).order_by("promised_date")
+    if settled:
+        for promise in pending:
+            promise.status = PaymentPromise.Status.KEPT
+            promise.save(update_fields=["status"])
+        return
+    if previous_amount is None:
+        return
+    leftover = Decimal(previous_amount) - Decimal(new_amount)
+    if leftover <= 0:
+        return
     for promise in pending:
         if leftover <= 0:
             break
@@ -365,20 +715,29 @@ def record_repayment(
     payment_date=None,
     reference="",
     tenant_id=None,
+    cbs_status=None,
+    user=None,
 ) -> tuple[Repayment, CollectionCase | None]:
-    """Crée un encaissement et l'applique immédiatement à l'échéancier."""
+    """Legacy tests only — les encaissements opérationnels passent par le CBS."""
     amount = Decimal(str(amount))
     if amount <= 0:
         raise ValueError("Le montant de l'encaissement doit être positif.")
     payment_date = payment_date or date.today()
+    extra = {}
+    if user is not None:
+        extra["created_by"] = user
+        extra["updated_by"] = user
     repayment = Repayment.objects.create(
         tenant_id=tenant_id or loan.tenant_id,
         loan=loan,
         amount=amount,
         payment_date=payment_date,
         reference=reference or "",
+        **extra,
     )
-    case = apply_repayment_to_schedule(repayment, as_of=payment_date)
+    case = apply_repayment_to_schedule(
+        repayment, as_of=payment_date, cbs_status=cbs_status
+    )
     return repayment, case
 
 
@@ -400,21 +759,24 @@ def set_next_action(
 
 def agent_dashboard(*, user, tenant_id=None, scope: str = "mine") -> dict:
     """Indicateurs portefeuille agent (`mine`) ou filiale / équipe (`team`)."""
+    from .access import mine_collection_cases, scoped_collection_cases
+
     today = timezone.localdate()
     month_start = today.replace(day=1)
     qs = CollectionCase.objects.exclude(stage=CollectionCase.Stage.CLOSED)
     if tenant_id:
         qs = qs.filter(tenant_id=tenant_id)
+    if user:
+        qs = scoped_collection_cases(qs, user)
 
     scope = (scope or "mine").lower()
     if scope not in {"mine", "team"}:
         scope = "mine"
 
     if scope == "team":
-        # Superviseur / vue filiale : tous les dossiers ouverts du périmètre.
         portfolio_qs = qs
     elif user:
-        portfolio_qs = qs.filter(assigned_to=user)
+        portfolio_qs = mine_collection_cases(qs, user)
     else:
         portfolio_qs = qs.none()
 
@@ -432,16 +794,18 @@ def agent_dashboard(*, user, tenant_id=None, scope: str = "mine") -> dict:
         promised_date__gte=today - timedelta(days=30),
     ).count()
 
-    if scope == "team":
-        repay_agg = Repayment.objects.filter(
-            loan__collection_case__in=portfolio_qs,
-            payment_date__gte=month_start,
-        ).aggregate(count=Count("id"), total=Sum("amount"))
-    else:
-        repay_agg = Repayment.objects.filter(
-            loan__collection_case__assigned_to=user,
-            payment_date__gte=month_start,
-        ).aggregate(count=Count("id"), total=Sum("amount"))
+    closed_qs = CollectionCase.objects.filter(stage=CollectionCase.Stage.CLOSED)
+    if tenant_id:
+        closed_qs = closed_qs.filter(tenant_id=tenant_id)
+    if user:
+        closed_qs = scoped_collection_cases(closed_qs, user)
+    if scope == "mine" and user:
+        closed_qs = mine_collection_cases(closed_qs, user)
+    elif scope != "team":
+        closed_qs = closed_qs.none()
+    settled_this_month = closed_qs.filter(
+        stage_changed_at__date__gte=month_start
+    ).count()
 
     by_par = {
         row["par_class"]: row["n"]
@@ -463,11 +827,11 @@ def agent_dashboard(*, user, tenant_id=None, scope: str = "mine") -> dict:
     )
     due_followups = []
     for c in due_cases:
-        app = c.loan.application
-        client = getattr(app, "client", None)
+        app = _loan_application(c)
+        client = getattr(app, "client", None) if app else None
         due_followups.append({
             "id": str(c.id),
-            "application_reference": app.reference or "",
+            "application_reference": (app.reference or "") if app else "",
             "client_name": client.display_name if client else "—",
             "next_action_date": c.next_action_date.isoformat() if c.next_action_date else None,
             "next_action_type": c.next_action_type,
@@ -483,7 +847,11 @@ def agent_dashboard(*, user, tenant_id=None, scope: str = "mine") -> dict:
             ),
         })
 
-    unassigned_open = qs.filter(assigned_to__isnull=True).count() if scope == "team" else 0
+    unassigned_open = (
+        portfolio_qs.filter(assigned_to__isnull=True).count()
+        if scope == "team"
+        else 0
+    )
 
     return {
         "scope": scope,
@@ -492,8 +860,9 @@ def agent_dashboard(*, user, tenant_id=None, scope: str = "mine") -> dict:
         "followups_due": followups,
         "pending_promises": pending_promises,
         "broken_promises_30d": broken_promises,
-        "repayments_this_month_count": repay_agg["count"] or 0,
-        "repayments_this_month_amount": str(repay_agg["total"] or Decimal("0")),
+        "repayments_this_month_count": 0,
+        "repayments_this_month_amount": "0",
+        "settled_this_month": settled_this_month,
         "by_par_class": by_par,
         "by_stage": by_stage,
         "due_followups": due_followups,
@@ -516,29 +885,54 @@ def outstanding_principal(loan: Loan) -> Decimal:
     return total
 
 
-@transaction.atomic
-def apply_restructure(
-    case: CollectionCase,
+CBS_RESTRUCTURE_NOTE = (
+    "Perfect ne dispose pas d'API de restructuration. La décision est "
+    "interne à FinFlow : l'échéancier CBS reste inchangé tant qu'il n'est "
+    "pas saisi manuellement dans le core banking."
+)
+
+
+def _json_schedule_preview(schedule, outstanding, new_rate, new_duration):
+    rows = []
+    for row in schedule:
+        due = row["due_date"]
+        rows.append({
+            "number": row["number"],
+            "due_date": due.isoformat() if hasattr(due, "isoformat") else str(due),
+            "principal": str(row["principal"]),
+            "interest": str(row["interest"]),
+            "savings": str(row.get("savings") or 0),
+            "total": str(row["total"]),
+            "balance": str(row.get("balance") or 0),
+        })
+    total = sum((Decimal(r["total"]) for r in rows), Decimal("0"))
+    return {
+        "outstanding_principal": str(outstanding),
+        "new_duration_months": int(new_duration),
+        "new_rate": str(new_rate),
+        "rows": rows,
+        "count": len(rows),
+        "first_due_date": rows[0]["due_date"] if rows else None,
+        "last_due_date": rows[-1]["due_date"] if rows else None,
+        "total_repayment": str(total),
+        "cbs_note": CBS_RESTRUCTURE_NOTE,
+    }
+
+
+def build_restructure_preview(
+    loan: Loan,
     *,
     new_duration_months: int,
     new_rate=None,
     first_due_date=None,
     effective_date=None,
-    reason: str = "",
-    user=None,
-) -> LoanRestructure:
-    """
-    Remplace les échéances non soldées par un nouvel échéancier
-    calculé sur le capital restant dû.
-    """
+) -> dict:
+    """Calcule l'échéancier proposé sans enregistrer ni muter le prêt."""
     from apps.credits.models import RepaymentMechanism
     from apps.credits.services import compute_amortization_schedule
 
-    loan = case.loan
     if loan.status != Loan.Status.ACTIVE:
         raise ValueError("Seuls les prêts actifs peuvent être restructurés.")
-    if case.stage == CollectionCase.Stage.CLOSED:
-        raise ValueError("Le dossier de recouvrement est clôturé.")
     new_duration_months = int(new_duration_months)
     if new_duration_months < 1:
         raise ValueError("La durée doit être d'au moins 1 mois.")
@@ -551,7 +945,6 @@ def apply_restructure(
     first_due_date = first_due_date or (effective_date + timedelta(days=30))
     previous_rate = Decimal(loan.interest_rate)
     new_rate = Decimal(str(new_rate if new_rate is not None else previous_rate))
-    previous_duration = loan.duration_months
 
     app = loan.application
     mechanism = getattr(app, "repayment_mechanism", None) or RepaymentMechanism.DEGRESSIVE
@@ -570,74 +963,241 @@ def apply_restructure(
     if not schedule:
         raise ValueError("Impossible de générer le nouvel échéancier.")
 
-    unpaid = loan.installments.exclude(status=Installment.Status.PAID)
-    unpaid.delete()
+    preview = _json_schedule_preview(
+        schedule, outstanding, new_rate, new_duration_months
+    )
+    preview["previous_duration_months"] = loan.duration_months
+    preview["previous_rate"] = str(previous_rate)
+    preview["effective_date"] = effective_date.isoformat()
+    preview["first_due_date"] = first_due_date.isoformat()
+    return preview
 
-    start_number = (
-        loan.installments.order_by("-number").values_list("number", flat=True).first()
-        or 0
-    ) + 1
-    for row in schedule:
-        Installment.objects.create(
-            tenant_id=loan.tenant_id,
-            loan=loan,
-            number=start_number + row["number"] - 1,
-            due_date=row["due_date"],
-            principal_due=row["principal"],
-            interest_due=row["interest"],
-            savings_due=row.get("savings") or 0,
-            total_due=row["total"],
-            amount_paid=0,
-            status=Installment.Status.PENDING,
+
+def _assert_no_pending_financial(loan: Loan) -> None:
+    if LoanRestructure.objects.filter(
+        loan=loan, status=LoanRestructure.Status.PENDING
+    ).exists():
+        raise ValueError("Une demande de restructuration est déjà en attente.")
+    if WriteOff.objects.filter(loan=loan, status=WriteOff.Status.PENDING).exists():
+        raise ValueError("Une demande de passage en perte est déjà en attente.")
+
+
+def _require_other_decider(record, user) -> None:
+    from rest_framework.exceptions import PermissionDenied
+
+    initiator_id = getattr(record, "requested_by_id", None)
+    if initiator_id and user and getattr(user, "pk", None) == initiator_id:
+        raise PermissionDenied(
+            "Vous ne pouvez pas statuer sur votre propre demande."
         )
 
-    loan.duration_months = new_duration_months
-    loan.interest_rate = new_rate
-    loan.first_due_date = first_due_date
-    loan.save(update_fields=["duration_months", "interest_rate", "first_due_date"])
 
-    record = LoanRestructure.objects.create(
-        tenant_id=case.tenant_id,
-        case=case,
-        loan=loan,
-        effective_date=effective_date,
-        previous_duration_months=previous_duration,
-        new_duration_months=new_duration_months,
-        previous_rate=previous_rate,
-        new_rate=new_rate,
-        outstanding_principal=outstanding,
-        reason=reason or "",
-        status=LoanRestructure.Status.APPLIED,
-        applied_by=user if user and getattr(user, "is_authenticated", False) else None,
-    )
-
+def _log_restructure_action(case, *, result: str, comment: str, action_date) -> None:
+    if case is None:
+        return
     CollectionAction.objects.create(
         tenant_id=case.tenant_id,
         case=case,
         action_type=CollectionActionType.LETTER,
-        action_date=effective_date,
-        result="Restructuration appliquée",
-        comment=(
-            f"Capital {outstanding} — durée {new_duration_months} mois — "
-            f"taux {new_rate}% — {reason}"
-        ).strip(" —"),
+        action_date=action_date,
+        result=result,
+        comment=comment,
     )
 
-    if case.stage != CollectionCase.Stage.AMICABLE:
-        change_case_stage(
-            case,
-            CollectionCase.Stage.AMICABLE,
-            user=user,
-            reason="Restructuration",
-            automatic=False,
-        )
 
-    refresh_loan_overdue(loan, as_of=effective_date)
+@transaction.atomic
+def propose_restructure(
+    loan: Loan,
+    *,
+    new_duration_months: int,
+    new_rate=None,
+    first_due_date=None,
+    effective_date=None,
+    reason: str = "",
+    origin: str = LoanRestructure.Origin.COLLECTION,
+    request_kind: str = LoanRestructure.RequestKind.INTERNAL,
+    case=None,
+    user=None,
+) -> LoanRestructure:
+    """Enregistre une demande d'analyse. N'altère pas l'échéancier FinFlow."""
+    loan = (
+        Loan.objects.select_for_update()
+        .select_related("application", "collection_case")
+        .get(pk=loan.pk)
+    )
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValueError("Le motif de la demande est obligatoire.")
+
+    if case is None:
+        live = getattr(loan, "collection_case", None)
+        if live is not None and live.stage != CollectionCase.Stage.CLOSED:
+            case = live
+    elif case.stage == CollectionCase.Stage.CLOSED:
+        raise ValueError("Le dossier de recouvrement est clôturé.")
+
+    _assert_no_pending_financial(loan)
+    preview = build_restructure_preview(
+        loan,
+        new_duration_months=new_duration_months,
+        new_rate=new_rate,
+        first_due_date=first_due_date,
+        effective_date=effective_date,
+    )
+    effective = date.fromisoformat(preview["effective_date"])
+    first_due = date.fromisoformat(preview["first_due_date"])
+
+    record = LoanRestructure.objects.create(
+        tenant_id=loan.tenant_id,
+        case=case,
+        loan=loan,
+        origin=origin or LoanRestructure.Origin.COLLECTION,
+        request_kind=request_kind or LoanRestructure.RequestKind.INTERNAL,
+        effective_date=effective,
+        first_due_date=first_due,
+        previous_duration_months=loan.duration_months,
+        new_duration_months=int(new_duration_months),
+        previous_rate=Decimal(loan.interest_rate),
+        new_rate=Decimal(preview["new_rate"]),
+        outstanding_principal=Decimal(preview["outstanding_principal"]),
+        proposed_schedule=preview,
+        reason=reason,
+        status=LoanRestructure.Status.PENDING,
+        requested_by=user if user and getattr(user, "is_authenticated", False) else None,
+    )
+    kind_label = (
+        "demande client"
+        if record.request_kind == LoanRestructure.RequestKind.CLIENT
+        else "initiative interne"
+    )
+    _log_restructure_action(
+        case,
+        result="Demande de restructuration",
+        comment=(
+            f"{kind_label} — capital {record.outstanding_principal} — "
+            f"durée {record.new_duration_months} mois — taux {record.new_rate}% "
+            f"— {reason}. {CBS_RESTRUCTURE_NOTE}"
+        ),
+        action_date=effective,
+    )
     return record
 
 
 @transaction.atomic
-def write_off_case(
+def approve_restructure(record: LoanRestructure, *, user=None, comment: str = "") -> LoanRestructure:
+    """Valide l'analyse. N'injecte rien au CBS et ne rebuild pas l'échéancier."""
+    record = (
+        LoanRestructure.objects.select_for_update()
+        .select_related("loan", "case")
+        .get(pk=record.pk)
+    )
+    if record.status != LoanRestructure.Status.PENDING:
+        raise ValueError("Cette demande n'est plus en attente.")
+    _require_other_decider(record, user)
+    record.status = LoanRestructure.Status.APPROVED
+    record.applied_by = user if user and getattr(user, "is_authenticated", False) else None
+    record.decided_at = timezone.now()
+    record.decision_comment = (comment or "").strip()
+    record.save(
+        update_fields=["status", "applied_by", "decided_at", "decision_comment"]
+    )
+    _log_restructure_action(
+        record.case,
+        result="Restructuration approuvée",
+        comment=(
+            f"Décision interne — à saisir dans Perfect. {CBS_RESTRUCTURE_NOTE}"
+            + (f" — {record.decision_comment}" if record.decision_comment else "")
+        ),
+        action_date=timezone.localdate(),
+    )
+    return record
+
+
+@transaction.atomic
+def reject_restructure(record: LoanRestructure, *, user=None, comment: str = "") -> LoanRestructure:
+    record = LoanRestructure.objects.select_for_update().select_related("case").get(
+        pk=record.pk
+    )
+    if record.status != LoanRestructure.Status.PENDING:
+        raise ValueError("Cette demande n'est plus en attente.")
+    _require_other_decider(record, user)
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValueError("Le motif du rejet est obligatoire.")
+    record.status = LoanRestructure.Status.REJECTED
+    record.applied_by = user if user and getattr(user, "is_authenticated", False) else None
+    record.decided_at = timezone.now()
+    record.decision_comment = comment
+    record.save(
+        update_fields=["status", "applied_by", "decided_at", "decision_comment"]
+    )
+    _log_restructure_action(
+        record.case,
+        result="Restructuration rejetée",
+        comment=comment,
+        action_date=timezone.localdate(),
+    )
+    return record
+
+
+@transaction.atomic
+def cancel_restructure(record: LoanRestructure, *, user=None) -> LoanRestructure:
+    record = LoanRestructure.objects.select_for_update().select_related("case").get(
+        pk=record.pk
+    )
+    if record.status != LoanRestructure.Status.PENDING:
+        raise ValueError("Cette demande n'est plus en attente.")
+    initiator_id = record.requested_by_id
+    if (
+        user
+        and not getattr(user, "is_superuser", False)
+        and initiator_id
+        and user.pk != initiator_id
+        and not user.has_perm("collections.change_loanrestructure")
+    ):
+        from rest_framework.exceptions import PermissionDenied
+
+        raise PermissionDenied("Seul l'initiateur peut annuler cette demande.")
+    record.status = LoanRestructure.Status.CANCELLED
+    record.applied_by = user if user and getattr(user, "is_authenticated", False) else None
+    record.decided_at = timezone.now()
+    record.save(update_fields=["status", "applied_by", "decided_at"])
+    _log_restructure_action(
+        record.case,
+        result="Restructuration annulée",
+        comment="Demande retirée",
+        action_date=timezone.localdate(),
+    )
+    return record
+
+
+def apply_restructure(
+    case: CollectionCase,
+    *,
+    new_duration_months: int,
+    new_rate=None,
+    first_due_date=None,
+    effective_date=None,
+    reason: str = "",
+    user=None,
+) -> LoanRestructure:
+    """Compat : enregistre une demande depuis un dossier de recouvrement."""
+    return propose_restructure(
+        case.loan,
+        new_duration_months=new_duration_months,
+        new_rate=new_rate,
+        first_due_date=first_due_date,
+        effective_date=effective_date,
+        reason=reason or "Restructuration",
+        origin=LoanRestructure.Origin.COLLECTION,
+        request_kind=LoanRestructure.RequestKind.INTERNAL,
+        case=case,
+        user=user,
+    )
+
+
+@transaction.atomic
+def propose_write_off(
     case: CollectionCase,
     *,
     amount=None,
@@ -645,12 +1205,19 @@ def write_off_case(
     reason: str = "",
     user=None,
 ) -> WriteOff:
-    """Passe le prêt en perte (DEFAULTED) et clôture le dossier de recouvrement."""
-    loan = case.loan
+    loan = (
+        Loan.objects.select_for_update()
+        .select_related("collection_case")
+        .get(pk=case.loan_id)
+    )
     if loan.status == Loan.Status.CLOSED:
         raise ValueError("Le prêt est déjà soldé.")
     if loan.status == Loan.Status.DEFAULTED:
         raise ValueError("Le prêt est déjà passé en perte.")
+    reason = (reason or "").strip()
+    if not reason:
+        raise ValueError("Le motif du passage en perte est obligatoire.")
+    _assert_no_pending_financial(loan)
 
     write_off_date = write_off_date or timezone.localdate()
     if amount is None:
@@ -665,9 +1232,97 @@ def write_off_case(
         loan=loan,
         amount=amount,
         write_off_date=write_off_date,
-        reason=reason or "",
-        approved_by=user if user and getattr(user, "is_authenticated", False) else None,
+        reason=reason,
+        status=WriteOff.Status.PENDING,
+        requested_by=user if user and getattr(user, "is_authenticated", False) else None,
     )
+    CollectionAction.objects.create(
+        tenant_id=case.tenant_id,
+        case=case,
+        action_type=CollectionActionType.LEGAL,
+        action_date=write_off_date,
+        result="Demande de passage en perte",
+        comment=f"Montant {amount} — {reason}",
+    )
+    return record
+
+
+@transaction.atomic
+def approve_write_off(record: WriteOff, *, user=None, comment: str = "") -> WriteOff:
+    record = (
+        WriteOff.objects.select_for_update()
+        .select_related("loan", "case")
+        .get(pk=record.pk)
+    )
+    if record.status != WriteOff.Status.PENDING:
+        raise ValueError("Cette demande n'est plus en attente.")
+    _require_other_decider(record, user)
+    record.status = WriteOff.Status.APPLIED
+    record.approved_by = user if user and getattr(user, "is_authenticated", False) else None
+    record.decided_at = timezone.now()
+    record.decision_comment = (comment or "").strip()
+    record.save(
+        update_fields=["status", "approved_by", "decided_at", "decision_comment"]
+    )
+    _execute_write_off(record.case, record.loan, record, user=user)
+    return record
+
+
+@transaction.atomic
+def reject_write_off(record: WriteOff, *, user=None, comment: str = "") -> WriteOff:
+    record = WriteOff.objects.select_for_update().select_related("case").get(pk=record.pk)
+    if record.status != WriteOff.Status.PENDING:
+        raise ValueError("Cette demande n'est plus en attente.")
+    _require_other_decider(record, user)
+    comment = (comment or "").strip()
+    if not comment:
+        raise ValueError("Le motif du rejet est obligatoire.")
+    record.status = WriteOff.Status.REJECTED
+    record.approved_by = user if user and getattr(user, "is_authenticated", False) else None
+    record.decided_at = timezone.now()
+    record.decision_comment = comment
+    record.save(
+        update_fields=["status", "approved_by", "decided_at", "decision_comment"]
+    )
+    CollectionAction.objects.create(
+        tenant_id=record.case.tenant_id,
+        case=record.case,
+        action_type=CollectionActionType.LEGAL,
+        action_date=timezone.localdate(),
+        result="Passage en perte rejeté",
+        comment=comment,
+    )
+    return record
+
+
+@transaction.atomic
+def cancel_write_off(record: WriteOff, *, user=None) -> WriteOff:
+    record = WriteOff.objects.select_for_update().select_related("case").get(pk=record.pk)
+    if record.status != WriteOff.Status.PENDING:
+        raise ValueError("Cette demande n'est plus en attente.")
+    initiator_id = record.requested_by_id
+    if (
+        user
+        and not getattr(user, "is_superuser", False)
+        and initiator_id
+        and user.pk != initiator_id
+        and not user.has_perm("collections.change_writeoff")
+    ):
+        from rest_framework.exceptions import PermissionDenied
+
+        raise PermissionDenied("Seul l'initiateur peut annuler cette demande.")
+    record.status = WriteOff.Status.CANCELLED
+    record.approved_by = user if user and getattr(user, "is_authenticated", False) else None
+    record.decided_at = timezone.now()
+    record.save(update_fields=["status", "approved_by", "decided_at"])
+    return record
+
+
+def _execute_write_off(case: CollectionCase, loan: Loan, record: WriteOff, *, user=None) -> None:
+    if loan.status == Loan.Status.CLOSED:
+        raise ValueError("Le prêt est déjà soldé.")
+    if loan.status == Loan.Status.DEFAULTED:
+        raise ValueError("Le prêt est déjà passé en perte.")
 
     loan.status = Loan.Status.DEFAULTED
     loan.save(update_fields=["status"])
@@ -676,12 +1331,16 @@ def write_off_case(
     case.next_action_type = ""
     case.next_action_note = ""
     case.days_overdue = 0
+    case.overdue_amount = 0
+    case.par_class = CollectionCase.ParClass.HEALTHY
     case.save(
         update_fields=[
             "next_action_date",
             "next_action_type",
             "next_action_note",
             "days_overdue",
+            "overdue_amount",
+            "par_class",
         ]
     )
     if case.stage != CollectionCase.Stage.CLOSED:
@@ -689,7 +1348,7 @@ def write_off_case(
             case,
             CollectionCase.Stage.CLOSED,
             user=user,
-            reason=reason or "Passage en perte",
+            reason=record.reason or "Passage en perte",
             automatic=False,
         )
 
@@ -697,10 +1356,35 @@ def write_off_case(
         tenant_id=case.tenant_id,
         case=case,
         action_type=CollectionActionType.LEGAL,
-        action_date=write_off_date,
+        action_date=record.write_off_date,
         result="Passage en perte",
-        comment=f"Montant {amount} — {reason}".strip(" —"),
+        comment=f"Montant {record.amount} — {record.reason}".strip(" —"),
     )
+
+
+@transaction.atomic
+def write_off_case(
+    case: CollectionCase,
+    *,
+    amount=None,
+    write_off_date=None,
+    reason: str = "",
+    user=None,
+) -> WriteOff:
+    """Compat tests : propose puis applique (sans second regard)."""
+    record = propose_write_off(
+        case,
+        amount=amount,
+        write_off_date=write_off_date,
+        reason=reason or "Passage en perte",
+        user=user,
+    )
+    # Les appels service historiques n'ont pas de second acteur : on exécute.
+    record.status = WriteOff.Status.APPLIED
+    record.approved_by = user if user and getattr(user, "is_authenticated", False) else None
+    record.decided_at = timezone.now()
+    record.save(update_fields=["status", "approved_by", "decided_at"])
+    _execute_write_off(record.case, record.loan, record, user=user)
     return record
 
 
@@ -784,8 +1468,28 @@ def _apply_litigation_data(lit: LitigationFile, data: dict) -> LitigationFile:
         lit.save(update_fields=list(dict.fromkeys(updated + ["updated_at"])))
     guarantee_ids = data.get("related_guarantee_ids")
     if guarantee_ids is not None:
+        _assert_related_guarantees(lit.case, guarantee_ids)
         lit.related_guarantees.set(guarantee_ids)
     return lit
+
+
+def _assert_related_guarantees(case, guarantee_ids):
+    from apps.guarantees.models import Guarantee
+
+    ids = list(guarantee_ids or [])
+    if not ids:
+        return
+    app = getattr(getattr(case, "loan", None), "application", None)
+    client_id = getattr(app, "client_id", None)
+    qs = Guarantee.objects.filter(pk__in=ids)
+    if client_id:
+        qs = qs.filter(client_id=client_id)
+    found = {str(pk) for pk in qs.values_list("id", flat=True)}
+    wanted = {str(pk) for pk in ids}
+    if wanted - found:
+        raise ValueError(
+            "Une garantie liée n'appartient pas au client du dossier."
+        )
 
 
 @transaction.atomic
@@ -865,8 +1569,10 @@ def litigation_documents(litigation: LitigationFile):
     return Document.objects.filter(content_type=ct, object_id=litigation.id)
 
 
-def upcoming_hearings(*, tenant_id=None, within_days: int = 30, limit: int = 50):
-    """Agenda des prochaines audiences (toutes procédures ouvertes)."""
+def upcoming_hearings(
+    *, tenant_id=None, within_days: int = 30, limit: int = 50, user=None
+):
+    """Agenda des prochaines audiences (périmètre visible de l'utilisateur)."""
     today = timezone.localdate()
     until = today + timedelta(days=within_days)
     qs = (
@@ -886,16 +1592,21 @@ def upcoming_hearings(*, tenant_id=None, within_days: int = 30, limit: int = 50)
     )
     if tenant_id:
         qs = qs.filter(tenant_id=tenant_id)
+    if user is not None:
+        from .access import scoped_collection_cases
+
+        visible = scoped_collection_cases(CollectionCase.objects.all(), user)
+        qs = qs.filter(case__in=visible)
     rows = []
     for lit in qs[:limit]:
-        app = lit.case.loan.application
-        client = getattr(app, "client", None)
+        app = _loan_application(lit.case)
+        client = getattr(app, "client", None) if app else None
         rows.append({
             "id": str(lit.id),
             "case_id": str(lit.case_id),
             "title": lit.title or lit.case_reference or "",
             "case_reference": lit.case_reference,
-            "application_reference": app.reference or "",
+            "application_reference": (app.reference or "") if app else "",
             "client_name": client.display_name if client else "—",
             "hearing_date": lit.hearing_date.isoformat() if lit.hearing_date else None,
             "hearing_time": lit.hearing_time.isoformat() if lit.hearing_time else None,
@@ -999,11 +1710,16 @@ def send_sms_stub(*, tenant, phone: str, message: str) -> tuple[str, str]:
     )
 
 
+def _loan_application(case):
+    loan = getattr(case, "loan", None)
+    return getattr(loan, "application", None) if loan else None
+
+
 def _collection_reminder_body(case: CollectionCase) -> tuple[str, str, str]:
-    app = case.loan.application
-    client = getattr(app, "client", None)
+    app = _loan_application(case)
+    client = getattr(app, "client", None) if app else None
     name = client.display_name if client else "Client"
-    ref = app.reference or str(app.id)
+    ref = (app.reference or str(app.id)) if app else str(case.id)
     amount = case.overdue_amount
     days = case.days_overdue
     subject = f"Relance de paiement — dossier {ref}"

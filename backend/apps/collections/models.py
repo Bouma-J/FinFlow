@@ -2,7 +2,12 @@
 from django.db import models
 from django.utils import timezone
 
-from apps.common.models import TenantScopedModel
+from apps.common.models import AuthoredModel, TenantScopedModel
+
+
+def _collection_action_upload(instance, filename):
+    tenant_id = instance.tenant_id or "unknown"
+    return f"collections/actions/{tenant_id}/{filename}"
 
 
 class CollectionActionType(models.TextChoices):
@@ -12,9 +17,10 @@ class CollectionActionType(models.TextChoices):
     LETTER = "LETTER", "Courrier"
     VISIT = "VISIT", "Visite terrain"
     LEGAL = "LEGAL", "Acte judiciaire"
+    DATION = "DATION", "Dation en paiement"
 
 
-class Repayment(TenantScopedModel):
+class Repayment(TenantScopedModel, AuthoredModel):
     """Encaissement affecté à une ou plusieurs échéances d'un prêt."""
 
     loan = models.ForeignKey(
@@ -76,6 +82,14 @@ class CollectionCase(TenantScopedModel):
         related_name="collection_cases",
         verbose_name="agent de recouvrement",
     )
+    tranche = models.ForeignKey(
+        "collections.CollectionTranche",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cases",
+        verbose_name="tranche de recouvrement",
+    )
     next_action_date = models.DateField(
         "prochaine action", null=True, blank=True, db_index=True
     )
@@ -90,6 +104,12 @@ class CollectionCase(TenantScopedModel):
     )
     stage_changed_at = models.DateTimeField(
         "dernier changement de stade", null=True, blank=True
+    )
+    cbs_synced_at = models.DateTimeField(
+        "dernière synchro CBS", null=True, blank=True
+    )
+    cbs_sync_error = models.CharField(
+        "erreur synchro CBS", max_length=255, blank=True
     )
 
     class Meta:
@@ -108,7 +128,7 @@ class CollectionCase(TenantScopedModel):
         return f"Recouvrement {self.loan}"
 
 
-class CollectionAction(TenantScopedModel):
+class CollectionAction(TenantScopedModel, AuthoredModel):
     """Action de relance ou de suivi sur un dossier de recouvrement."""
 
     ActionType = CollectionActionType
@@ -129,6 +149,12 @@ class CollectionAction(TenantScopedModel):
         blank=True,
         help_text="Si renseigné, met à jour la prochaine action du dossier.",
     )
+    attachment = models.FileField(
+        "pièce jointe",
+        upload_to=_collection_action_upload,
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         verbose_name = "action de recouvrement"
@@ -139,7 +165,47 @@ class CollectionAction(TenantScopedModel):
         return f"{self.get_action_type_display()} — {self.action_date}"
 
 
-class PaymentPromise(TenantScopedModel):
+class CollectionDialogueMessage(TenantScopedModel, AuthoredModel):
+    """Échange consultatif sur le dossier ou sur une action enregistrée."""
+
+    class Kind(models.TextChoices):
+        QUESTION = "QUESTION", "Question"
+        REQUEST = "REQUEST", "Demande d'action"
+        RECOMMENDATION = "RECOMMENDATION", "Recommandation"
+        REPLY = "REPLY", "Réponse"
+
+    case = models.ForeignKey(
+        CollectionCase,
+        on_delete=models.CASCADE,
+        related_name="dialogue_messages",
+        verbose_name="dossier",
+    )
+    action = models.ForeignKey(
+        CollectionAction,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="dialogue_messages",
+        verbose_name="action",
+    )
+    kind = models.CharField(
+        "type",
+        max_length=20,
+        choices=Kind.choices,
+        default=Kind.QUESTION,
+    )
+    body = models.TextField("message")
+
+    class Meta:
+        verbose_name = "message de dialogue"
+        verbose_name_plural = "messages de dialogue"
+        ordering = ["created_at"]
+
+    def __str__(self):
+        return f"{self.get_kind_display()} — {self.created_at}"
+
+
+class PaymentPromise(TenantScopedModel, AuthoredModel):
     """Promesse de paiement prise dans le cadre du recouvrement."""
 
     class Status(models.TextChoices):
@@ -232,6 +298,60 @@ class CollectionEscalationRule(TenantScopedModel):
 
     def __str__(self):
         return f"≥ {self.min_days_overdue}j → {self.target_stage}"
+
+
+class CollectionTranche(TenantScopedModel):
+    """
+    Tranche de responsabilité paramétrable (nombre et jours de retard).
+
+    Le transfert vers la tranche suivante est automatique dès que le retard
+    atteint ``min_days_overdue`` (jamais de descente automatique).
+    """
+
+    class OwnerKind(models.TextChoices):
+        GESTIONNAIRE = "GESTIONNAIRE", "Gestionnaire"
+        COLLECTION = "COLLECTION", "Service recouvrement"
+        LEGAL = "LEGAL", "Juridique"
+
+    position = models.PositiveSmallIntegerField("n° de tranche")
+    name = models.CharField("libellé", max_length=100)
+    min_days_overdue = models.PositiveIntegerField("retard minimum (jours)")
+    max_days_overdue = models.PositiveIntegerField(
+        "retard maximum (jours)",
+        null=True,
+        blank=True,
+        help_text="Laisser vide pour la dernière tranche (sans plafond).",
+    )
+    owner_kind = models.CharField(
+        "responsable",
+        max_length=20,
+        choices=OwnerKind.choices,
+        default=OwnerKind.GESTIONNAIRE,
+    )
+    is_active = models.BooleanField("active", default=True)
+
+    class Meta:
+        verbose_name = "tranche de recouvrement"
+        verbose_name_plural = "tranches de recouvrement"
+        ordering = ["position", "min_days_overdue"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "position"],
+                name="unique_collection_tranche_position",
+            ),
+            models.UniqueConstraint(
+                fields=["tenant", "min_days_overdue"],
+                name="unique_collection_tranche_min_days",
+            ),
+        ]
+
+    def __str__(self):
+        ceiling = (
+            f"{self.max_days_overdue} j"
+            if self.max_days_overdue is not None
+            else "+"
+        )
+        return f"{self.name} ({self.min_days_overdue}–{ceiling})"
 
 
 class LegalParty(TenantScopedModel):
@@ -602,17 +722,30 @@ class LitigationCost(TenantScopedModel):
 
 
 class LoanRestructure(TenantScopedModel):
-    """Restructuration d'un prêt (nouvel échéancier sur le capital restant dû)."""
+    """Demande d'analyse de restructuration (décision FinFlow, hors CBS)."""
 
     class Status(models.TextChoices):
-        APPLIED = "APPLIED", "Appliquée"
+        PENDING = "PENDING", "En attente"
+        APPROVED = "APPROVED", "Approuvée"
+        REJECTED = "REJECTED", "Rejetée"
         CANCELLED = "CANCELLED", "Annulée"
+        APPLIED = "APPLIED", "Appliquée (historique)"
+
+    class Origin(models.TextChoices):
+        LOAN = "LOAN", "Fiche prêt"
+        COLLECTION = "COLLECTION", "Recouvrement"
+
+    class RequestKind(models.TextChoices):
+        CLIENT = "CLIENT", "Demande client"
+        INTERNAL = "INTERNAL", "Initiative interne"
 
     case = models.ForeignKey(
         CollectionCase,
         on_delete=models.CASCADE,
         related_name="restructures",
-        verbose_name="dossier",
+        verbose_name="dossier de recouvrement",
+        null=True,
+        blank=True,
     )
     loan = models.ForeignKey(
         "credits.Loan",
@@ -620,7 +753,20 @@ class LoanRestructure(TenantScopedModel):
         related_name="restructures",
         verbose_name="prêt",
     )
+    origin = models.CharField(
+        "origine",
+        max_length=20,
+        choices=Origin.choices,
+        default=Origin.COLLECTION,
+    )
+    request_kind = models.CharField(
+        "nature",
+        max_length=20,
+        choices=RequestKind.choices,
+        default=RequestKind.INTERNAL,
+    )
     effective_date = models.DateField("date d'effet")
+    first_due_date = models.DateField("première échéance proposée", null=True, blank=True)
     previous_duration_months = models.PositiveIntegerField()
     new_duration_months = models.PositiveIntegerField("nouvelle durée (mois)")
     previous_rate = models.DecimalField(max_digits=6, decimal_places=3)
@@ -628,9 +774,20 @@ class LoanRestructure(TenantScopedModel):
     outstanding_principal = models.DecimalField(
         "capital restant dû", max_digits=18, decimal_places=2
     )
-    reason = models.CharField("motif", max_length=255, blank=True)
+    proposed_schedule = models.JSONField(
+        "échéancier proposé", default=dict, blank=True
+    )
+    reason = models.CharField("motif", max_length=255)
     status = models.CharField(
-        max_length=20, choices=Status.choices, default=Status.APPLIED
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+    requested_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requested_loan_restructures",
+        verbose_name="demandé par",
     )
     applied_by = models.ForeignKey(
         "accounts.User",
@@ -638,6 +795,11 @@ class LoanRestructure(TenantScopedModel):
         null=True,
         blank=True,
         related_name="loan_restructures",
+        verbose_name="décidé par",
+    )
+    decided_at = models.DateTimeField("décidé le", null=True, blank=True)
+    decision_comment = models.CharField(
+        "commentaire de décision", max_length=255, blank=True
     )
 
     class Meta:
@@ -650,7 +812,13 @@ class LoanRestructure(TenantScopedModel):
 
 
 class WriteOff(TenantScopedModel):
-    """Passage en perte / défaut d'un prêt."""
+    """Demande de passage en perte / défaut d'un prêt."""
+
+    class Status(models.TextChoices):
+        PENDING = "PENDING", "En attente"
+        APPLIED = "APPLIED", "Appliquée"
+        REJECTED = "REJECTED", "Rejetée"
+        CANCELLED = "CANCELLED", "Annulée"
 
     case = models.ForeignKey(
         CollectionCase,
@@ -666,13 +834,29 @@ class WriteOff(TenantScopedModel):
     )
     amount = models.DecimalField("montant passé en perte", max_digits=18, decimal_places=2)
     write_off_date = models.DateField("date")
-    reason = models.CharField("motif", max_length=255, blank=True)
+    reason = models.CharField("motif", max_length=255)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+    requested_by = models.ForeignKey(
+        "accounts.User",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="requested_write_offs",
+        verbose_name="demandé par",
+    )
     approved_by = models.ForeignKey(
         "accounts.User",
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name="loan_write_offs",
+        verbose_name="décidé par",
+    )
+    decided_at = models.DateTimeField("décidé le", null=True, blank=True)
+    decision_comment = models.CharField(
+        "commentaire de décision", max_length=255, blank=True
     )
 
     class Meta:

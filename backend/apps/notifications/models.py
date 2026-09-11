@@ -68,6 +68,23 @@ class TenantNotificationSettings(BaseModel):
             "Journalise une tentative SMS (provider non branché : statut SKIPPED)."
         ),
     )
+    notify_collection_transfer = models.BooleanField(
+        "alerte transfert de tranche",
+        default=True,
+        help_text=(
+            "E-mail aux responsables de la nouvelle tranche lorsqu'un "
+            "dossier de recouvrement y est transmis."
+        ),
+    )
+    notify_collection_dialogue = models.BooleanField(
+        "alerte commentaire / recommandation",
+        default=True,
+        help_text=(
+            "E-mail à l'agent affecté et aux responsables de la tranche "
+            "quand un commentaire, une demande ou une recommandation "
+            "est déposé sur le dossier."
+        ),
+    )
     from_email = models.CharField(
         "expéditeur (From)",
         max_length=255,
@@ -133,6 +150,8 @@ class NotificationLog(TenantScopedModel):
         REJECTION = "REJECTION", "Rejet"
         RETURN = "RETURN", "Renvoi"
         COLLECTION_REMINDER = "COLLECTION_REMINDER", "Relance recouvrement"
+        COLLECTION_TRANSFER = "COLLECTION_TRANSFER", "Transfert de tranche"
+        COLLECTION_DIALOGUE = "COLLECTION_DIALOGUE", "Dialogue recouvrement"
 
     class Status(models.TextChoices):
         PENDING = "PENDING", "En attente"

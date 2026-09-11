@@ -39,7 +39,10 @@ import type {
   CreditProduct,
   Paginated,
 } from "@/api/types";
-import { ClientAutocomplete } from "@/components/ClientAutocomplete";
+import {
+  ClientAutocomplete,
+  clientOptionLabel,
+} from "@/components/ClientAutocomplete";
 import { useAuth } from "@/auth/AuthContext";
 
 const PERIODICITY_FALLBACK = [
@@ -268,17 +271,19 @@ function textFromApp(app: CreditApplication): TextState {
 
 export function CreditApplicationForm({
   initial,
+  defaultClientId,
   onCreated,
   onCancel,
 }: {
   initial?: CreditApplication;
+  defaultClientId?: string;
   onCreated: (app: CreditApplication) => void;
   onCancel: () => void;
 }) {
   const qc = useQueryClient();
   const { user, activeTenant } = useAuth();
   const isEdit = !!initial;
-  const [client, setClient] = useState(initial?.client ?? "");
+  const [client, setClient] = useState(initial?.client ?? defaultClientId ?? "");
   const [text, setText] = useState<TextState>(
     initial ? textFromApp(initial) : emptyText(),
   );
@@ -402,11 +407,13 @@ export function CreditApplicationForm({
     queryFn: async () => (await api.get<Client>(`/clients/${client}/`)).data,
   });
 
-  const clientType = initial?.client_type ?? selectedClient?.client_type;
+  const clientType = selectedClient?.client_type ?? initial?.client_type;
   const isCorporate = clientType === "CORPORATE";
+  const isGroupement = clientType === "PROFESSIONAL";
+  const isLegalEntity = isCorporate || isGroupement;
   const isIndividual = clientType === "INDIVIDUAL";
   const showTypedSections = !!clientType;
-  const purposeOptions = isCorporate
+  const purposeOptions = isLegalEntity
     ? PURPOSE_TYPES_CORPORATE
     : isIndividual
       ? PURPOSE_TYPES_INDIVIDUAL
@@ -420,8 +427,8 @@ export function CreditApplicationForm({
       [
         { id: "sec-conditions", icon: Banknote, label: "Conditions du crédit", show: true },
         { id: "sec-financing", icon: Wallet, label: "Plan de financement", show: showTypedSections },
-        { id: "sec-activity", icon: Store, label: "Activité de l'entreprise", show: showTypedSections && isCorporate },
-        { id: "sec-market", icon: Users, label: "Environnement commercial", show: showTypedSections && isCorporate },
+        { id: "sec-activity", icon: Store, label: isGroupement ? "Activité du groupement" : "Activité de l'entreprise", show: showTypedSections && isLegalEntity },
+        { id: "sec-market", icon: Users, label: "Environnement commercial", show: showTypedSections && isLegalEntity },
         { id: "sec-applicant", icon: Briefcase, label: "Profil du demandeur", show: showTypedSections && isIndividual },
         { id: "sec-banking", icon: History, label: "Relation bancaire", show: showTypedSections },
         { id: "sec-insurance", icon: HeartPulse, label: "Assurance", show: showTypedSections },
@@ -429,7 +436,7 @@ export function CreditApplicationForm({
         { id: "sec-special", icon: NotebookPen, label: "Conditions particulières", show: showTypedSections },
         { id: "sec-documents", icon: ClipboardList, label: "Pièces du dossier", show: showTypedSections },
       ].filter((s) => s.show),
-    [showTypedSections, isCorporate, isIndividual],
+    [showTypedSections, isLegalEntity, isIndividual, isGroupement],
   );
 
   const [activeSection, setActiveSection] = useState("sec-conditions");
@@ -468,7 +475,7 @@ export function CreditApplicationForm({
     if (isEdit || !clientType) return;
     const labels = [
       ...CHECKLIST_COMMON,
-      ...(isCorporate ? CHECKLIST_CORPORATE : CHECKLIST_INDIVIDUAL),
+      ...(isLegalEntity ? CHECKLIST_CORPORATE : CHECKLIST_INDIVIDUAL),
     ];
     setChecklist((prev) =>
       labels.map((label) => {
@@ -476,12 +483,12 @@ export function CreditApplicationForm({
         return { label, provided: existing?.provided ?? false };
       }),
     );
-  }, [isEdit, clientType, isCorporate]);
+  }, [isEdit, clientType, isLegalEntity]);
 
   function loadDefaultChecklist() {
     const labels = [
       ...CHECKLIST_COMMON,
-      ...(isCorporate ? CHECKLIST_CORPORATE : CHECKLIST_INDIVIDUAL),
+      ...(isLegalEntity ? CHECKLIST_CORPORATE : CHECKLIST_INDIVIDUAL),
     ];
     setChecklist((prev) => {
       const existing = new Set(prev.map((i) => i.label));
@@ -694,22 +701,40 @@ export function CreditApplicationForm({
             <span>
               Client <em className="req"> *</em>
             </span>
-            <ClientAutocomplete value={client} onChange={(id) => setClient(id)} />
+            <ClientAutocomplete
+              value={client}
+              onChange={(id) => setClient(id)}
+              initialLabel={
+                selectedClient ? clientOptionLabel(selectedClient) : undefined
+              }
+            />
           </label>
           {!client && (
             <p className="muted small" style={{ marginTop: 0 }}>
               Sélectionnez un client pour afficher les sections adaptées au
-              profil (particulier ou entreprise).
+              profil (particulier, groupement ou entreprise).
             </p>
           )}
           {showTypedSections && (
             <div
-              className={`profile-banner ${isCorporate ? "corp" : "indiv"}`}
+              className={`profile-banner ${isLegalEntity ? "corp" : "indiv"}`}
             >
-              {isCorporate ? <Store size={16} /> : <Briefcase size={16} />}
+              {isCorporate ? (
+                <Store size={16} />
+              ) : isGroupement ? (
+                <Users size={16} />
+              ) : (
+                <Briefcase size={16} />
+              )}
               <span>
                 Profil détecté :{" "}
-                <strong>{isCorporate ? "Entreprise" : "Particulier"}</strong>
+                <strong>
+                  {isCorporate
+                    ? "Entreprise"
+                    : isGroupement
+                      ? "Groupement"
+                      : "Particulier"}
+                </strong>
                 {selectedClient?.display_name
                   ? ` — ${selectedClient.display_name}`
                   : ""}
@@ -887,20 +912,28 @@ export function CreditApplicationForm({
             icon={Wallet}
             title="Plan de financement"
             description={
-              isCorporate
-                ? "Coût du projet et apport de l'entreprise."
+              isLegalEntity
+                ? isGroupement
+                  ? "Coût du projet et apport du groupement."
+                  : "Coût du projet et apport de l'entreprise."
                 : "Coût du besoin et apport personnel du demandeur."
             }
           >
             <div className="form-grid two-col">
               <Text
-                label={isCorporate ? "Coût total du projet" : "Coût total du besoin"}
+                label={isLegalEntity ? "Coût total du projet" : "Coût total du besoin"}
                 type="number"
                 value={text.project_total_cost}
                 onChange={set("project_total_cost")}
               />
               <Text
-                label={isCorporate ? "Apport de l'entreprise" : "Apport personnel"}
+                label={
+                  isGroupement
+                    ? "Apport du groupement"
+                    : isCorporate
+                      ? "Apport de l'entreprise"
+                      : "Apport personnel"
+                }
                 type="number"
                 value={text.personal_contribution}
                 onChange={set("personal_contribution")}
@@ -912,16 +945,16 @@ export function CreditApplicationForm({
             </div>
             <p className="muted small" style={{ marginBottom: 0 }}>
               La quotité financée = montant demandé / coût total
-              {isCorporate ? " du projet" : " du besoin"}.
+              {isLegalEntity ? " du projet" : " du besoin"}.
             </p>
           </FormSection>
         )}
 
-        {showTypedSections && isCorporate && (
+        {showTypedSections && isLegalEntity && (
           <FormSection
             id="sec-activity"
             icon={Store}
-            title="Activité de l'entreprise"
+            title={isGroupement ? "Activité du groupement" : "Activité de l'entreprise"}
             description="Contexte opérationnel. Le diagnostic sectoriel et l'effectif se saisissent dans l'analyse financière."
           >
             <div className="form-grid two-col">
@@ -941,7 +974,7 @@ export function CreditApplicationForm({
           </FormSection>
         )}
 
-        {showTypedSections && isCorporate && (
+        {showTypedSections && isLegalEntity && (
           <FormSection
             id="sec-market"
             icon={Users}
@@ -1017,7 +1050,7 @@ export function CreditApplicationForm({
             description="Lutte contre le blanchiment et le financement du terrorisme."
           >
             <div className="form-grid two-col">
-              {isCorporate && (
+              {isLegalEntity && (
                 <Text label="Bénéficiaire effectif" value={text.beneficial_owner} onChange={set("beneficial_owner")} />
               )}
               <Text label="Origine des fonds / apport" value={text.funds_origin} onChange={set("funds_origin")} />
@@ -1154,7 +1187,12 @@ export function CreditApplicationForm({
                 Ajouter
               </button>
               <button type="button" className="btn btn-ghost" onClick={loadDefaultChecklist}>
-                Liste type {isCorporate ? "entreprise" : "particulier"}
+                Liste type{" "}
+                {isGroupement
+                  ? "groupement"
+                  : isCorporate
+                    ? "entreprise"
+                    : "particulier"}
               </button>
             </div>
           </FormSection>

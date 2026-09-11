@@ -5,7 +5,9 @@ import { Navigate, useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import { useAuth } from "@/auth/AuthContext";
+import { homePath } from "@/auth/routePerms";
 import { useTenantBranding } from "@/hooks/useTenantBranding";
+import { apiErrorMessage } from "@/utils/apiError";
 
 function extractError(err: unknown): string {
   const data =
@@ -13,19 +15,21 @@ function extractError(err: unknown): string {
       ? (err as { response?: { data?: Record<string, unknown> } }).response
           ?.data
       : undefined;
-  if (!data) return "Impossible de changer le mot de passe.";
-  for (const key of [
-    "current_password",
-    "new_password",
-    "new_password_confirm",
-    "detail",
-    "non_field_errors",
-  ]) {
-    const val = data[key];
-    if (typeof val === "string" && val.trim()) return val;
-    if (Array.isArray(val) && val.length) return val.map(String).join(" ");
+  const errors = (data?.errors as Record<string, unknown> | undefined) || data;
+  if (errors) {
+    for (const key of [
+      "current_password",
+      "new_password",
+      "new_password_confirm",
+      "detail",
+      "non_field_errors",
+    ]) {
+      const val = errors[key];
+      if (typeof val === "string" && val.trim()) return val;
+      if (Array.isArray(val) && val.length) return val.map(String).join(" ");
+    }
   }
-  return "Impossible de changer le mot de passe.";
+  return apiErrorMessage(err, "Impossible de changer le mot de passe.");
 }
 
 export function ForceChangePasswordPage() {
@@ -56,13 +60,16 @@ export function ForceChangePasswordPage() {
       } catch {
         // Le drapeau local suffit pour sortir de l'écran forcé.
       }
-      navigate("/", { replace: true });
+      const nextUser = user
+        ? { ...user, must_change_password: false }
+        : user;
+      navigate(homePath(nextUser), { replace: true });
     },
     onError: (err: unknown) => setError(extractError(err)),
   });
 
   if (!user) return <Navigate to="/login" replace />;
-  if (!user.must_change_password) return <Navigate to="/" replace />;
+  if (!user.must_change_password) return <Navigate to={homePath(user)} replace />;
 
   function submit(e: FormEvent) {
     e.preventDefault();

@@ -1,14 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
+  Briefcase,
   Building2,
+  CircleDollarSign,
   Contact,
+  FileSignature,
   FileText,
   FilePlus2,
   FilePenLine,
+  FolderOpen,
   Trash2,
   GitBranch,
   Cable,
+  HandCoins,
   Heart,
   History,
   IdCard,
@@ -16,7 +21,11 @@ import {
   Landmark,
   Pencil,
   Phone,
+  Plus,
+  Scale,
+  ShieldCheck,
   TriangleAlert,
+  Unlock,
   User,
   UserRound,
   Users,
@@ -26,10 +35,34 @@ import { useState, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { api } from "@/api/client";
-import { CLIENT_LABELS, type AuditLog, type Client, type Paginated } from "@/api/types";
+import {
+  CLIENT_LABELS,
+  type AuditLog,
+  type Client,
+  type CollectionCase,
+  type CreditApplication,
+  type DationRequest,
+  type GedDocument,
+  type Guarantee,
+  type GuaranteeFormalizationRequest,
+  type GuaranteeReleaseRequest,
+  type Paginated,
+  type SuretyEngagement,
+} from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { hasPerm } from "@/auth/permissions";
-import { Badge, Card, ErrorState, Spinner, formatDate } from "@/components/ui";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import {
+  PERM_COLLECTIONS,
+  PERM_CREDIT_CREATE,
+  PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_DOCUMENTS,
+  PERM_FORMALIZATIONS,
+  PERM_GUARANTEES,
+  PERM_RELEASES,
+  PERM_SURETIES,
+} from "@/auth/routePerms";
+import { Badge, Card, ErrorState, Spinner, formatDate, formatMoney } from "@/components/ui";
 
 function label(map: Record<string, string>, key: string) {
   return map[key] || key || "—";
@@ -151,6 +184,490 @@ function InterventionHistory({ clientId }: { clientId: string }) {
   );
 }
 
+function ClientPortfolio({ client }: { client: Client }) {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const canViewCredits = hasAnyPerm(user, PERM_CREDITS);
+  const canCreateCredit = hasAnyPerm(user, PERM_CREDIT_CREATE);
+  const canViewGuarantees = hasAnyPerm(user, PERM_GUARANTEES);
+  const canViewSureties =
+    hasPerm(user, "sureties.view_suretyengagement") ||
+    hasAnyPerm(user, PERM_SURETIES);
+  const canViewDations = hasAnyPerm(user, PERM_DATIONS);
+  const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
+  const canViewFormalizations = hasAnyPerm(user, PERM_FORMALIZATIONS);
+  const canInitiateFormalization = hasPerm(
+    user,
+    "guarantees.initiate_guaranteeformalizationrequest",
+  );
+  const canViewReleases = hasAnyPerm(user, PERM_RELEASES);
+  const canInitiateRelease = hasPerm(
+    user,
+    "guarantees.initiate_guaranteereleaserequest",
+  );
+  const canViewCollections = hasAnyPerm(user, PERM_COLLECTIONS);
+  const canViewDocuments = hasAnyPerm(user, PERM_DOCUMENTS);
+
+  const show =
+    canViewCredits ||
+    canViewGuarantees ||
+    canViewSureties ||
+    canViewDations ||
+    canViewFormalizations ||
+    canViewReleases ||
+    canViewCollections ||
+    canViewDocuments;
+
+  const credits = useQuery({
+    queryKey: ["credit-applications", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CreditApplication>>("/credit-applications/", {
+          params: { client: client.id, page_size: 20 },
+        })
+      ).data,
+    enabled: canViewCredits,
+  });
+  const guarantees = useQuery({
+    queryKey: ["guarantees", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<Guarantee>>("/guarantees/", {
+          params: { client: client.id, page_size: 20 },
+        })
+      ).data,
+    enabled: canViewGuarantees,
+  });
+  const engagements = useQuery({
+    queryKey: ["surety-engagements", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<SuretyEngagement>>("/surety-engagements/", {
+          params: { client: client.id, page_size: 20 },
+        })
+      ).data,
+    enabled: canViewSureties,
+  });
+  const dations = useQuery({
+    queryKey: ["dation-requests", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<DationRequest>>("/dation-requests/", {
+          params: { client: client.id, page_size: 20 },
+        })
+      ).data,
+    enabled: canViewDations,
+  });
+  const formalizations = useQuery({
+    queryKey: ["guarantee-formalizations", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<GuaranteeFormalizationRequest>>(
+          "/guarantee-formalizations/",
+          { params: { client: client.id, page_size: 20 } },
+        )
+      ).data,
+    enabled: canViewFormalizations,
+  });
+  const releases = useQuery({
+    queryKey: ["guarantee-releases", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<GuaranteeReleaseRequest>>(
+          "/guarantee-releases/",
+          { params: { client: client.id, page_size: 20 } },
+        )
+      ).data,
+    enabled: canViewReleases,
+  });
+  const cases = useQuery({
+    queryKey: ["collection-cases", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CollectionCase>>("/collection-cases/", {
+          params: { client: client.id, page_size: 20 },
+        })
+      ).data,
+    enabled: canViewCollections,
+  });
+  const documents = useQuery({
+    queryKey: ["ged-documents", "client", client.id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<GedDocument>>("/documents/", {
+          params: { client: client.id, page_size: 1 },
+        })
+      ).data,
+    enabled: canViewDocuments,
+  });
+
+  if (!show) return null;
+
+  return (
+    <Card
+      title={
+        <>
+          <Briefcase size={17} /> Portefeuille
+        </>
+      }
+    >
+      {canViewCredits && (
+        <SubSection icon={FileText} title="Dossiers de crédit">
+          {credits.data && credits.data.results.length > 0 ? (
+            <ul className="link-list">
+              {credits.data.results.map((app) => (
+                <li
+                  key={app.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/dossiers/${app.id}`)}
+                >
+                  <span>
+                    <FileText size={14} /> {app.reference || app.id.slice(0, 8)}
+                    {app.product_label ? (
+                      <em className="muted small"> · {app.product_label}</em>
+                    ) : null}
+                  </span>
+                  <span className="muted small">
+                    {formatMoney(app.amount_requested, app.currency)}
+                  </span>
+                  {canViewCollections && app.collection_case_id ? (
+                    <Link
+                      className="muted small"
+                      to={`/recouvrement/${app.collection_case_id}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {app.collection_stage_display || "Recouvrement"}
+                    </Link>
+                  ) : null}
+                  <Badge
+                    value={app.status}
+                    label={app.status_display || app.status}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Aucun dossier de crédit.</p>
+          )}
+          <div className="row-actions">
+            {canCreateCredit && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/dossiers/nouveau?client=${client.id}`}
+              >
+                <Plus size={15} />
+                Nouveau dossier
+              </Link>
+            )}
+            {(credits.data?.count ?? 0) > 0 && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/dossiers?client=${client.id}`}
+              >
+                Voir tous
+              </Link>
+            )}
+          </div>
+        </SubSection>
+      )}
+
+      {canViewGuarantees && (
+        <SubSection icon={ShieldCheck} title="Garanties">
+          {guarantees.data && guarantees.data.results.length > 0 ? (
+            <ul className="link-list">
+              {guarantees.data.results.map((g) => (
+                <li
+                  key={g.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/garanties/${g.id}`)}
+                >
+                  <span>
+                    <ShieldCheck size={14} /> {g.reference || g.id.slice(0, 8)}
+                    {g.type_display ? (
+                      <em className="muted small"> · {g.type_display}</em>
+                    ) : null}
+                  </span>
+                  {canViewCredits && g.application ? (
+                    <Link
+                      className="muted small"
+                      to={`/dossiers/${g.application}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {g.application_reference || "Dossier"}
+                    </Link>
+                  ) : null}
+                  {canViewCollections && g.collection_case_id ? (
+                    <Link
+                      className="muted small"
+                      to={`/recouvrement/${g.collection_case_id}`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {g.collection_stage_display || "Recouvrement"}
+                    </Link>
+                  ) : null}
+                  <Badge value={g.status} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Aucune garantie.</p>
+          )}
+          {(guarantees.data?.count ?? 0) > 0 && (
+            <Link
+              className="btn btn-ghost btn-sm"
+              to={`/garanties?client=${client.id}`}
+            >
+              Voir toutes
+            </Link>
+          )}
+        </SubSection>
+      )}
+
+      {canViewSureties && (
+        <SubSection icon={Scale} title="Cautions">
+          {engagements.data && engagements.data.results.length > 0 ? (
+            <ul className="link-list">
+              {engagements.data.results.map((e) => (
+                <li
+                  key={e.id}
+                  className="row-clickable"
+                  onClick={() =>
+                    navigate(`/dossiers/${e.application}/cautions/${e.surety}`)
+                  }
+                >
+                  <span>
+                    <Scale size={14} /> {e.surety_display || "Caution"}
+                    {e.application_reference ? (
+                      <em className="muted small">
+                        {" "}
+                        · {e.application_reference}
+                      </em>
+                    ) : null}
+                  </span>
+                  <span className="muted small">{formatMoney(e.amount)}</span>
+                  <Badge
+                    value={e.status}
+                    label={e.status_display || e.status}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Aucun engagement de caution.</p>
+          )}
+        </SubSection>
+      )}
+
+      {canViewDations && (
+        <SubSection icon={HandCoins} title="Dations">
+          {dations.data && dations.data.results.length > 0 ? (
+            <ul className="link-list">
+              {dations.data.results.map((d) => (
+                <li
+                  key={d.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/dations/${d.id}`)}
+                >
+                  <span>
+                    <HandCoins size={14} /> {d.reference || "Dation"}
+                    {d.application_reference ? (
+                      <em className="muted small">
+                        {" "}
+                        · {d.application_reference}
+                      </em>
+                    ) : null}
+                  </span>
+                  <Badge
+                    value={d.status}
+                    label={d.status_display || d.status}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Aucune dation.</p>
+          )}
+          <div className="row-actions">
+            {canInitiateDation && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/dations/nouvelle?client=${client.id}`}
+              >
+                <Plus size={15} />
+                Nouvelle dation
+              </Link>
+            )}
+            {(dations.data?.count ?? 0) > 0 && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/dations?client=${client.id}`}
+              >
+                Voir toutes
+              </Link>
+            )}
+          </div>
+        </SubSection>
+      )}
+
+      {canViewFormalizations && (
+        <SubSection icon={FileSignature} title="Formalisations">
+          {formalizations.data && formalizations.data.results.length > 0 ? (
+            <ul className="link-list">
+              {formalizations.data.results.map((f) => (
+                <li
+                  key={f.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/formalisations/${f.id}`)}
+                >
+                  <span>
+                    <FileSignature size={14} /> {f.reference || "Formalisation"}
+                    {f.guarantee_reference ? (
+                      <em className="muted small">
+                        {" "}
+                        · {f.guarantee_reference}
+                      </em>
+                    ) : null}
+                  </span>
+                  <Badge
+                    value={f.status}
+                    label={f.status_display || f.status}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Aucune formalisation.</p>
+          )}
+          <div className="row-actions">
+            {canInitiateFormalization && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/formalisations/nouvelle?client=${client.id}`}
+              >
+                <Plus size={15} />
+                Nouvelle formalisation
+              </Link>
+            )}
+            {(formalizations.data?.count ?? 0) > 0 && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/formalisations?client=${client.id}`}
+              >
+                Voir toutes
+              </Link>
+            )}
+          </div>
+        </SubSection>
+      )}
+
+      {canViewReleases && (
+        <SubSection icon={Unlock} title="Mains levées">
+          {releases.data && releases.data.results.length > 0 ? (
+            <ul className="link-list">
+              {releases.data.results.map((r) => (
+                <li
+                  key={r.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/mains-levees/${r.id}`)}
+                >
+                  <span>
+                    <Unlock size={14} /> {r.reference || "Main levée"}
+                    {r.guarantee_reference ? (
+                      <em className="muted small">
+                        {" "}
+                        · {r.guarantee_reference}
+                      </em>
+                    ) : null}
+                  </span>
+                  <Badge
+                    value={r.status}
+                    label={r.status_display || r.status}
+                  />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Aucune main levée.</p>
+          )}
+          <div className="row-actions">
+            {canInitiateRelease && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/mains-levees/nouvelle?client=${client.id}`}
+              >
+                <Plus size={15} />
+                Nouvelle main levée
+              </Link>
+            )}
+            {(releases.data?.count ?? 0) > 0 && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/mains-levees?client=${client.id}`}
+              >
+                Voir toutes
+              </Link>
+            )}
+          </div>
+        </SubSection>
+      )}
+
+      {canViewCollections && (
+        <SubSection icon={CircleDollarSign} title="Recouvrement">
+          {cases.data && cases.data.results.length > 0 ? (
+            <ul className="link-list">
+              {cases.data.results.map((c) => (
+                <li
+                  key={c.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/recouvrement/${c.id}`)}
+                >
+                  <span>
+                    <CircleDollarSign size={14} />{" "}
+                    {c.application_reference || "Dossier"}
+                    {c.stage_display ? (
+                      <em className="muted small"> · {c.stage_display}</em>
+                    ) : null}
+                  </span>
+                  <span className="muted small">
+                    {c.days_overdue} j · {formatMoney(c.overdue_amount)}
+                  </span>
+                  <Badge value={c.par_class} label={c.par_class_display} />
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="muted small">Aucun dossier de recouvrement.</p>
+          )}
+          {(cases.data?.count ?? 0) > 0 && (
+            <Link
+              className="btn btn-ghost btn-sm"
+              to={`/recouvrement?client=${client.id}`}
+            >
+              Voir tous
+            </Link>
+          )}
+        </SubSection>
+      )}
+
+      {canViewDocuments && (
+        <SubSection icon={FolderOpen} title="GED — Documents">
+          <p className="muted small">
+            {(documents.data?.count ?? 0) > 0
+              ? `${documents.data?.count} document${(documents.data?.count ?? 0) > 1 ? "s" : ""} rattaché${(documents.data?.count ?? 0) > 1 ? "s" : ""} à ce client.`
+              : "Aucun document indexé pour ce client."}
+          </p>
+          <Link
+            className="btn btn-ghost btn-sm"
+            to={`/documents?client=${client.id}`}
+          >
+            Voir les documents
+          </Link>
+        </SubSection>
+      )}
+    </Card>
+  );
+}
+
 export function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -185,6 +702,8 @@ export function ClientDetailPage() {
   }
 
   const isCorporate = c.client_type === "CORPORATE";
+  const isLegalEntity =
+    c.client_type === "CORPORATE" || c.client_type === "PROFESSIONAL";
   const fullName = `${c.first_name} ${c.last_name}`.trim();
   const hasSpouse =
     c.spouse_last_name ||
@@ -197,7 +716,7 @@ export function ClientDetailPage() {
     c.mother_last_name ||
     c.mother_first_name;
 
-  const bannerName = isCorporate
+  const bannerName = isLegalEntity
     ? c.company_name || c.display_name
     : fullName || c.display_name;
 
@@ -233,7 +752,7 @@ export function ClientDetailPage() {
         <div className="client-banner-main">
           <div className="client-banner-info">
             <span className="client-banner-icon">
-              {isCorporate ? <Building2 size={26} /> : <UserRound size={26} />}
+              {isLegalEntity ? <Building2 size={26} /> : <UserRound size={26} />}
             </span>
             <div className="client-banner-identity">
               <h2 className="client-banner-name">{bannerName}</h2>
@@ -302,15 +821,21 @@ export function ClientDetailPage() {
       </div>
 
       <div className="detail-grid stacked client-detail-sections">
-        {isCorporate ? (
+        {isLegalEntity ? (
           <Card
             title={
               <>
-                <Building2 size={17} /> Informations de l'entreprise
+                <Building2 size={17} />{" "}
+                {isCorporate
+                  ? "Informations de l'entreprise"
+                  : "Informations du groupement"}
               </>
             }
           >
-            <SubSection icon={Building2} title="Entreprise">
+            <SubSection
+              icon={Building2}
+              title={isCorporate ? "Entreprise" : "Groupement"}
+            >
               <dl className="def-list two">
                 <Row term="Raison sociale" value={c.company_name} />
                 <Row
@@ -502,6 +1027,8 @@ export function ClientDetailPage() {
           </>
         )}
       </div>
+
+      <ClientPortfolio client={c} />
 
       {/* Historique des interventions — section discrète */}
       <section className="history-panel">

@@ -442,6 +442,18 @@ def test_live_demo_policy_endpoint_reachable(tenant_a):
         is_staff=True,
         tenant=tenant_a,
     )
+    from django.contrib.auth.models import Permission
+
+    for codename in (
+        "view_creditinstructionpolicy",
+        "view_analysisthreshold",
+    ):
+        perm = Permission.objects.filter(
+            content_type__app_label="credits",
+            codename=codename,
+        ).first()
+        if perm:
+            admin.user_permissions.add(perm)
     api = APIClient()
     api.force_authenticate(admin)
     res = api.get(

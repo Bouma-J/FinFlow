@@ -15,7 +15,9 @@ import type {
   Paginated,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { hasPerm } from "@/auth/permissions";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import { PERM_COLLECTIONS, PERM_LEGAL_PARTIES_MANAGE } from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
 import {
   Badge,
   Card,
@@ -24,6 +26,7 @@ import {
   Spinner,
   formatMoney,
 } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 import { exportLitigationPdf } from "@/utils/exportLitigationPdf";
 
 const STATUSES: { value: LitigationStatus; label: string }[] = [
@@ -75,11 +78,14 @@ const DOC_CATS = [
 export function LitigationDetailPage() {
   const { caseId, litId } = useParams<{ caseId: string; litId: string }>();
   const { user } = useAuth();
-  const canChange = hasPerm(user, "collections.change_litigationfile");
-  const canAddEvent = hasPerm(user, "collections.add_litigationevent");
-  const canAddSeizure = hasPerm(user, "collections.add_litigationseizure");
-  const canAddCost = hasPerm(user, "collections.add_litigationcost");
-  const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
+  const canChangePerm = hasPerm(user, "collections.change_litigationfile");
+  const canAddEventPerm = hasPerm(user, "collections.add_litigationevent");
+  const canAddSeizurePerm = hasPerm(user, "collections.add_litigationseizure");
+  const canAddCostPerm = hasPerm(user, "collections.add_litigationcost");
+  const canInitiateDationPerm = hasPerm(
+    user,
+    "guarantees.initiate_dationrequest",
+  );
   const qc = useQueryClient();
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -189,7 +195,7 @@ export function LitigationDetailPage() {
       setErr(null);
       invalidate();
     },
-    onError: () => setErr("Enregistrement impossible."),
+    onError: (err) => setErr(apiErrorMessage(err, "Enregistrement impossible.")),
   });
 
   const addEvent = useMutation({
@@ -206,7 +212,7 @@ export function LitigationDetailPage() {
       setMsg("Événement ajouté.");
       invalidate();
     },
-    onError: () => setErr("Événement non enregistré."),
+    onError: (err) => setErr(apiErrorMessage(err, "Événement non enregistré.")),
   });
 
   const addSeizure = useMutation({
@@ -224,7 +230,7 @@ export function LitigationDetailPage() {
       setMsg("Saisie enregistrée.");
       invalidate();
     },
-    onError: () => setErr("Saisie non enregistrée."),
+    onError: (err) => setErr(apiErrorMessage(err, "Saisie non enregistrée.")),
   });
 
   const addCost = useMutation({
@@ -243,7 +249,7 @@ export function LitigationDetailPage() {
       setMsg("Frais enregistrés.");
       invalidate();
     },
-    onError: () => setErr("Frais non enregistrés."),
+    onError: (err) => setErr(apiErrorMessage(err, "Frais non enregistrés.")),
   });
 
   const uploadDoc = useMutation({
@@ -262,7 +268,7 @@ export function LitigationDetailPage() {
       setMsg("Pièce déposée.");
       invalidate();
     },
-    onError: () => setErr("Dépôt de pièce impossible."),
+    onError: (err) => setErr(apiErrorMessage(err, "Dépôt de pièce impossible.")),
   });
 
   if (litQuery.isLoading) return <Spinner />;
@@ -275,6 +281,12 @@ export function LitigationDetailPage() {
     );
   }
   const lit = litQuery.data;
+  const canWrite = Boolean(lit.can_operate);
+  const canChange = canChangePerm && canWrite;
+  const canAddEvent = canAddEventPerm && canWrite;
+  const canAddSeizure = canAddSeizurePerm && canWrite;
+  const canAddCost = canAddCostPerm && canWrite;
+  const canInitiateDation = canInitiateDationPerm && canWrite;
   const firms = (parties.data || []).filter((p) => p.party_type === "LAW_FIRM");
   const lawyers = (parties.data || []).filter(
     (p) => p.party_type === "LAWYER" || p.party_type === "LAW_FIRM",
@@ -304,18 +316,27 @@ export function LitigationDetailPage() {
             >
               <Download size={14} /> PDF
             </button>
-            <Link
+            <PermLink
+              user={user}
+              anyOf={PERM_COLLECTIONS}
               to={`/recouvrement/${caseId}`}
               className="btn btn-ghost btn-sm"
+              fallback={null}
             >
               <ArrowLeft size={14} /> Retour dossier
-            </Link>
+            </PermLink>
           </>
         }
       />
 
       {msg && <div className="form-success" style={{ marginBottom: 12 }}>{msg}</div>}
       {err && <div className="form-error" style={{ marginBottom: 12 }}>{err}</div>}
+      {!canWrite && (
+        <p className="muted" style={{ marginBottom: 12 }}>
+          Consultation : les modifications contentieuses sont réservées au
+          responsable de cette tranche. Utilisez le dialogue du dossier.
+        </p>
+      )}
 
       <Card title="Procédure">
         <form
@@ -596,22 +617,39 @@ export function LitigationDetailPage() {
                 Enregistrer
               </button>
             )}
-            <Link className="btn btn-ghost btn-sm" to="/admin/intervenants-juridiques">
-              Gérer les cabinets
-            </Link>
+            {hasAnyPerm(user, PERM_LEGAL_PARTIES_MANAGE) && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to="/admin/intervenants-juridiques"
+              >
+                Gérer les cabinets
+              </Link>
+            )}
             {caseId && (
               <>
                 {canInitiateDation && (
-                  <Link className="btn btn-ghost btn-sm" to={`/dations/nouvelle`}>
+                  <Link
+                    className="btn btn-ghost btn-sm"
+                    to={
+                      lit.application_id
+                        ? `/dations/nouvelle?application=${lit.application_id}${
+                            lit.client_id ? `&client=${lit.client_id}` : ""
+                          }`
+                        : "/dations/nouvelle"
+                    }
+                  >
                     Proposer dation
                   </Link>
                 )}
-                <Link
-                  className="btn btn-ghost btn-sm"
+                <PermLink
+                  user={user}
+                  anyOf={PERM_COLLECTIONS}
                   to={`/recouvrement/${caseId}`}
+                  className="btn btn-ghost btn-sm"
+                  fallback={null}
                 >
                   Passage en perte (fiche)
-                </Link>
+                </PermLink>
               </>
             )}
           </div>

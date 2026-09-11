@@ -178,13 +178,11 @@ def initiate_formalization_request(
             "La formalisation ne concerne que les garanties attachées "
             "à un dossier de crédit."
         )
-    if GuaranteeFormalizationRequest.objects.filter(
-        guarantee=guarantee,
-        status__in=_OPEN_FORM_STATUSES,
-    ).exists():
-        raise ProcessError(
-            "Une formalisation est déjà en cours pour cette garantie."
-        )
+    from .busy import guarantee_busy
+
+    busy = guarantee_busy(guarantee)
+    if busy:
+        raise ProcessError(busy["message"])
 
     ensure_formalization_document_categories(guarantee.tenant)
     req = GuaranteeFormalizationRequest(
@@ -236,16 +234,12 @@ def formalization_compose_context(*, client=None, application=None) -> dict:
             application_id__isnull=False,
         )
 
-    busy_ids = set(
-        GuaranteeFormalizationRequest.objects.filter(
-            guarantee_id__in=guarantees_qs.values_list("id", flat=True),
-            status__in=_OPEN_FORM_STATUSES,
-        ).values_list("guarantee_id", flat=True)
-    )
+    from .busy import busy_map
 
     guarantees_qs = guarantees_qs.select_related(
         "application", "agency", "client"
     ).order_by("-created_at")
+    occupied = busy_map(list(guarantees_qs.values_list("id", flat=True)))
 
     # Dossiers ayant au moins une garantie attachée (ou le dossier ciblé).
     if application is None:
@@ -283,10 +277,11 @@ def formalization_compose_context(*, client=None, application=None) -> dict:
             }
         )
 
-    busy_id_strs = {str(b) for b in busy_ids}
     guarantees_data = GuaranteeSerializer(guarantees_qs, many=True).data
     for row in guarantees_data:
-        row["formalization_busy"] = str(row["id"]) in busy_id_strs
+        info = occupied.get(str(row["id"]))
+        row["process_busy"] = info
+        row["formalization_busy"] = bool(info)
 
     return {
         "client_id": str(client.pk),
@@ -475,6 +470,10 @@ def complete_formalization_request(request: GuaranteeFormalizationRequest, *, us
         GuaranteeFormalizationRequest.Status.REJECTED,
     ):
         raise ProcessError("Ce dossier est déjà clôturé.")
+    if request.status != GuaranteeFormalizationRequest.Status.APPROVED:
+        raise ProcessError(
+            "Le circuit doit être approuvé avant de clôturer la formalisation."
+        )
 
     if request.legal_stage not in (
         GuaranteeFormalizationRequest.LegalStage.SIGNED,

@@ -87,6 +87,15 @@ class TenantSerializer(serializers.ModelSerializer):
 
         return tenant_logo_url(obj, self.context.get("request"))
 
+    def validate_logo(self, value):
+        if not value:
+            return value
+        from apps.common.upload_validation import validate_uploaded_file
+
+        return validate_uploaded_file(
+            value, tenant=self.instance, check_quota=False
+        )
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         # Évite l'URL MinIO brute (AccessDenied) : même proxy que logo_url.

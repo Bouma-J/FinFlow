@@ -14,7 +14,6 @@ from .models import (
     Guarantee,
     GuaranteeJewelryItem,
     GuaranteeMovement,
-    GuaranteeReleaseRequest,
 )
 
 
@@ -39,10 +38,12 @@ _COPY_FIELDS = [
     "document_type",
     "document_number",
     "document_issue_date",
+    "document_validity_date",
     "address",
     "expertise_date",
     "expertise_firm",
     "expert_name",
+    "expertise_reference",
     "value_to_consider",
     "occupancy_status",
     "chassis_number",
@@ -88,15 +89,6 @@ _COPY_FILE_FIELDS = [
     "pledge_deed_scan",
 ]
 
-_OPEN_RELEASE = [
-    GuaranteeReleaseRequest.Status.DRAFT,
-    GuaranteeReleaseRequest.Status.IN_APPROVAL,
-    GuaranteeReleaseRequest.Status.RETURNED,
-    GuaranteeReleaseRequest.Status.APPROVED,
-    GuaranteeReleaseRequest.Status.BLOCKED,
-]
-
-
 def renewable_guarantees_for_application(application: CreditApplication):
     """
     Détection automatique des garanties reconductibles pour un dossier.
@@ -116,12 +108,18 @@ def renewable_guarantees_for_application(application: CreditApplication):
             renewed_from__isnull=False,
         ).values_list("renewed_from_id", flat=True)
     )
-    blocked_by_release = set(
-        GuaranteeReleaseRequest.objects.filter(
-            status__in=_OPEN_RELEASE,
-            guarantee__client_id=application.client_id,
-        ).values_list("guarantee_id", flat=True)
+    from .busy import busy_map
+
+    candidate_ids = list(
+        Guarantee.objects.filter(
+            client_id=application.client_id,
+            status=Guarantee.Status.ACTIVE,
+        )
+        .exclude(application_id=application.pk)
+        .exclude(id__in=already_renewed_ids)
+        .values_list("id", flat=True)
     )
+    blocked_by_process = set(busy_map(candidate_ids).keys())
 
     qs = (
         Guarantee.objects.filter(
@@ -130,7 +128,7 @@ def renewable_guarantees_for_application(application: CreditApplication):
         )
         .exclude(application_id=application.pk)
         .exclude(id__in=already_renewed_ids)
-        .exclude(id__in=blocked_by_release)
+        .exclude(id__in=blocked_by_process)
         .filter(
             Q(application__isnull=True)
             | Q(
@@ -188,11 +186,12 @@ def renew_guarantee(
         raise RenewalError(
             "Seule une garantie active (sans main levée) peut être reconduite."
         )
-    if GuaranteeReleaseRequest.objects.filter(
-        guarantee=source, status__in=_OPEN_RELEASE
-    ).exists():
+    from .busy import guarantee_busy
+
+    busy = guarantee_busy(source)
+    if busy:
         raise RenewalError(
-            "Impossible de reconduire : une main levée est en cours sur cette garantie."
+            f"Impossible de reconduire : {busy['label'].lower()} sur cette garantie."
         )
     if Guarantee.objects.filter(
         application=application, renewed_from=source
@@ -257,6 +256,24 @@ def renew_guarantee(
             setattr(clone, key, value)
         if not clone.last_valuation_date:
             clone.last_valuation_date = timezone.now().date()
+
+    from .uniqueness import uniqueness_error
+
+    conflict = uniqueness_error(
+        guarantee_type=clone.guarantee_type,
+        pledge_category=getattr(clone, "pledge_category", "") or "",
+        document_type=getattr(clone, "document_type", "") or "",
+        document_number=getattr(clone, "document_number", "") or "",
+        chassis_number=getattr(clone, "chassis_number", "") or "",
+        exclude_id=source.pk,
+        tenant_id=application.tenant_id,
+    )
+    if conflict:
+        details = conflict.get("already_taken") or {}
+        raise RenewalError(
+            details.get("message")
+            or "Ce bien est déjà pris en garantie active."
+        )
 
     clone.reference = _next_reference(application.tenant_id)
     clone.save()

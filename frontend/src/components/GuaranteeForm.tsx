@@ -9,9 +9,11 @@ import {
   Plus,
   ShieldCheck,
   Trash2,
+  TriangleAlert,
   UploadCloud,
 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
+import { createPortal } from "react-dom";
 import { Link } from "react-router-dom";
 
 import { api } from "@/api/client";
@@ -45,9 +47,28 @@ const CATEGORIES = [
   },
 ];
 
-const DOCUMENT_TYPES = [
+const MORTGAGE_DOCUMENT_TYPES = [
   { value: "LAND_TITLE", label: "Titre foncier" },
   { value: "ATTRIBUTION_CERT", label: "Attestation d'attribution" },
+  { value: "EXPLOITATION_PERMIT", label: "Permis d'exploiter" },
+  { value: "BUILDING_PERMIT", label: "Permis de construire" },
+  { value: "OCCUPANCY_PERMIT", label: "Permis d'habiter" },
+  { value: "LEASEHOLD", label: "Bail emphytéotique" },
+  { value: "SURFACE_RIGHT", label: "Droit de superficie" },
+  { value: "SALES_DEED", label: "Acte de vente / compromis" },
+  { value: "CADASTRAL_EXTRACT", label: "Extrait cadastral" },
+  { value: "CUSTOMARY_TITLE", label: "Titre / certificat coutumier" },
+  { value: "URBAN_CERT", label: "Certificat d'urbanisme" },
+  { value: "OTHER_REAL_ESTATE", label: "Autre titre immobilier" },
+];
+const VEHICLE_DOCUMENT_TYPES = [
+  { value: "REGISTRATION_CARD", label: "Carte grise" },
+  { value: "PURCHASE_INVOICE", label: "Facture d'achat" },
+  { value: "CUSTOMS_CLEARANCE", label: "Déclaration en douane" },
+  { value: "TRANSFER_CERT", label: "Certificat de cession" },
+  { value: "INSURANCE_CERT", label: "Attestation d'assurance" },
+  { value: "TECH_INSPECTION", label: "Visite technique" },
+  { value: "OTHER_VEHICLE", label: "Autre document véhicule" },
 ];
 const MARITAL = [
   { value: "SINGLE", label: "Célibataire" },
@@ -77,8 +98,10 @@ const TEXT_KEYS = [
   "owner_last_name", "owner_first_name", "owner_marital_status",
   "matrimonial_regime",
   // Hypothèque
-  "document_type", "document_number", "document_issue_date", "address",
-  "expertise_date", "expertise_firm", "expert_name", "value_to_consider",
+  "document_type", "document_number", "document_issue_date",
+  "document_validity_date", "address",
+  "expertise_date", "expertise_firm", "expert_name", "expertise_reference",
+  "value_to_consider",
   "occupancy_status",
   // Gage — moyen roulant
   "chassis_number", "engine_number", "brand", "model_name", "registration",
@@ -106,12 +129,14 @@ const FIELD_LABELS: Record<string, string> = {
   document_type: "Type de document",
   document_number: "Numéro du document",
   document_issue_date: "Date d'établissement",
+  document_validity_date: "Date de validité",
   owner_last_name: "Nom du propriétaire",
   owner_first_name: "Prénom du propriétaire",
   address: "Adresse du bien",
   expertise_date: "Date de l'expertise",
   expertise_firm: "Cabinet d'expertise",
   expert_name: "Nom de l'expert",
+  expertise_reference: "Référence du rapport",
   occupancy_status: "Statut d'occupation",
   chassis_number: "Numéro de châssis",
   engine_number: "Numéro du moteur",
@@ -148,6 +173,46 @@ const FILE_KEYS = [
 
 type FileKey = (typeof FILE_KEYS)[number];
 type FileState = Record<FileKey, File | null>;
+
+type AlreadyTaken = {
+  code?: string;
+  message: string;
+  id?: string;
+  reference?: string;
+  client_display?: string;
+  application_id?: string | null;
+  application_reference?: string;
+};
+
+function firstText(value: unknown): string {
+  if (value == null) return "";
+  if (Array.isArray(value)) return firstText(value[0]);
+  return String(value).trim();
+}
+
+function parseAlreadyTaken(errors: unknown): AlreadyTaken | null {
+  if (!errors || typeof errors !== "object" || Array.isArray(errors)) return null;
+  const raw = (errors as { already_taken?: unknown }).already_taken;
+  const payload = Array.isArray(raw) ? raw[0] : raw;
+  if (payload && typeof payload === "object" && payload !== null) {
+    const row = payload as Record<string, unknown>;
+    const message = firstText(row.message || row.detail);
+    if (!message) return null;
+    return {
+      code: firstText(row.code) || undefined,
+      message,
+      id: firstText(row.id) || undefined,
+      reference: firstText(row.reference) || undefined,
+      client_display: firstText(row.client_display) || undefined,
+      application_id: firstText(row.application_id) || null,
+      application_reference: firstText(row.application_reference) || undefined,
+    };
+  }
+  if (typeof payload === "string" && payload.trim()) {
+    return { message: payload.trim() };
+  }
+  return null;
+}
 
 interface JewelryItem {
   nature: string;
@@ -209,6 +274,7 @@ export function GuaranteeForm({
 }: GuaranteeFormProps) {
   const qc = useQueryClient();
   const [error, setError] = useState<string | null>(null);
+  const [existingAlert, setExistingAlert] = useState<AlreadyTaken | null>(null);
 
   const [gType, setGType] = useState(initial?.guarantee_type || "MORTGAGE");
   const [pledgeCat, setPledgeCat] = useState(
@@ -238,8 +304,9 @@ export function GuaranteeForm({
   }, [text.value_to_consider, loanAmount]);
 
   const mutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (acceptExisting?: boolean) => {
       const fd = new FormData();
+      if (acceptExisting) fd.append("accept_existing", "true");
       fd.append("guarantee_type", gType);
       if (gType === "PLEDGE") fd.append("pledge_category", pledgeCat);
       fd.append("is_insured", isInsured ? "true" : "false");
@@ -290,6 +357,12 @@ export function GuaranteeForm({
         data && typeof data === "object" && "errors" in data
           ? (data as { errors: unknown }).errors
           : data;
+      const taken = parseAlreadyTaken(errors);
+      if (taken) {
+        setExistingAlert(taken);
+        return;
+      }
+      setExistingAlert(null);
       if (errors && typeof errors === "object" && !Array.isArray(errors)) {
         setError(
           Object.entries(errors as Record<string, unknown>)
@@ -342,11 +415,123 @@ export function GuaranteeForm({
       );
       return;
     }
-    mutation.mutate();
+    const needsTitle = gType === "MORTGAGE" || (gType === "PLEDGE" && pledgeCat === "VEHICLE");
+    if (needsTitle) {
+      if (!text.document_type || !text.document_number.trim()) {
+        setError("Indiquez le type et le numéro du document pris en garantie.");
+        return;
+      }
+      if (mode === "create" && !text.document_issue_date) {
+        setError("Indiquez la date d'établissement du document.");
+        return;
+      }
+      if (mode === "create" && !text.expertise_value.trim()) {
+        setError("Indiquez la valeur d'expertise.");
+        return;
+      }
+      if (mode === "create" && !text.expertise_date) {
+        setError("Indiquez la date de l'expertise.");
+        return;
+      }
+      if (
+        mode === "create" &&
+        !text.expert_name.trim() &&
+        !text.expertise_firm.trim()
+      ) {
+        setError("Indiquez l'expert ou le cabinet d'expertise.");
+        return;
+      }
+    }
+    if (gType === "PLEDGE" && pledgeCat === "VEHICLE" && !text.chassis_number.trim()) {
+      setError("Le numéro de châssis est obligatoire pour un gage véhicule.");
+      return;
+    }
+    mutation.mutate(false);
   }
 
   return (
     <form className="stack" onSubmit={submit}>
+      {existingAlert &&
+        createPortal(
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onClick={() =>
+            !mutation.isPending && setExistingAlert(null)
+          }
+        >
+          <div
+            className="modal-card"
+            role="dialog"
+            aria-labelledby="already-taken-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 id="already-taken-title">
+              <TriangleAlert size={18} /> Garantie déjà prise
+            </h3>
+            <div className="notice-warning" style={{ marginBottom: 12 }}>
+              <TriangleAlert size={16} />
+              <span>{existingAlert.message}</span>
+            </div>
+            {(existingAlert.reference ||
+              existingAlert.client_display ||
+              existingAlert.application_reference) && (
+              <ul className="link-list" style={{ marginTop: 4 }}>
+                {existingAlert.reference ? (
+                  <li>
+                    <span>Garantie {existingAlert.reference}</span>
+                  </li>
+                ) : null}
+                {existingAlert.client_display ? (
+                  <li>
+                    <span>Client {existingAlert.client_display}</span>
+                  </li>
+                ) : null}
+                {existingAlert.application_reference ? (
+                  <li>
+                    <span>
+                      Dossier {existingAlert.application_reference}
+                    </span>
+                  </li>
+                ) : null}
+              </ul>
+            )}
+            <p className="muted small">
+              Vous pouvez laisser cette garantie telle quelle, ou
+              continuer pour l&apos;enregistrer quand même.
+            </p>
+            <div className="row-actions" style={{ marginTop: 16 }}>
+              <button
+                type="button"
+                className="btn btn-ghost"
+                disabled={mutation.isPending}
+                onClick={() => setExistingAlert(null)}
+              >
+                Laisser
+              </button>
+              {existingAlert.id ? (
+                <Link
+                  className="btn btn-ghost"
+                  to={`/garanties/${existingAlert.id}`}
+                >
+                  Voir l&apos;existante
+                </Link>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={mutation.isPending}
+                onClick={() => mutation.mutate(true)}
+              >
+                {mutation.isPending
+                  ? "Enregistrement…"
+                  : "Continuer quand même"}
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )}
       <Card
         title={
           <>
@@ -362,7 +547,23 @@ export function GuaranteeForm({
                 key={c.value}
                 type="button"
                 className={`category-card${gType === c.value ? " active" : ""}`}
-                onClick={() => setGType(c.value)}
+                onClick={() => {
+                  setGType(c.value);
+                  if (c.value === "PLEDGE") {
+                    setText((prev) => {
+                      const mortgageCodes = new Set(
+                        MORTGAGE_DOCUMENT_TYPES.map((d) => d.value),
+                      );
+                      if (
+                        !prev.document_type ||
+                        mortgageCodes.has(prev.document_type)
+                      ) {
+                        return { ...prev, document_type: "REGISTRATION_CARD" };
+                      }
+                      return prev;
+                    });
+                  }
+                }}
               >
                 <Icon size={22} />
                 <strong>{c.label}</strong>
@@ -582,14 +783,57 @@ function MortgageSection({
         }
       >
         <div className="form-grid two-col">
-          <Select label="Type de document" value={text.document_type} onChange={set("document_type")} options={DOCUMENT_TYPES} />
-          <Text label="Numéro du document" value={text.document_number} onChange={set("document_number")} />
-          <Text label="Date d'établissement" type="date" value={text.document_issue_date} onChange={set("document_issue_date")} />
+          <Select
+            label="Type de document *"
+            value={text.document_type}
+            onChange={set("document_type")}
+            options={MORTGAGE_DOCUMENT_TYPES}
+          />
+          <Text
+            label="Numéro du document *"
+            value={text.document_number}
+            onChange={set("document_number")}
+          />
+          <Text
+            label="Date d'établissement *"
+            type="date"
+            value={text.document_issue_date}
+            onChange={set("document_issue_date")}
+          />
+          <Text
+            label="Date de validité"
+            type="date"
+            value={text.document_validity_date}
+            onChange={set("document_validity_date")}
+          />
           <Text label="Adresse du bien" value={text.address} onChange={set("address")} />
-          <Text label="Valeur expertisée (XOF)" type="number" value={text.expertise_value} onChange={set("expertise_value")} />
-          <Text label="Date de l'expertise" type="date" value={text.expertise_date} onChange={set("expertise_date")} />
-          <Text label="Cabinet d'expertise" value={text.expertise_firm} onChange={set("expertise_firm")} />
-          <Text label="Nom de l'expert" value={text.expert_name} onChange={set("expert_name")} />
+          <Text
+            label="Valeur expertisée (XOF) *"
+            type="number"
+            value={text.expertise_value}
+            onChange={set("expertise_value")}
+          />
+          <Text
+            label="Date de l'expertise *"
+            type="date"
+            value={text.expertise_date}
+            onChange={set("expertise_date")}
+          />
+          <Text
+            label="Cabinet d'expertise"
+            value={text.expertise_firm}
+            onChange={set("expertise_firm")}
+          />
+          <Text
+            label="Nom de l'expert"
+            value={text.expert_name}
+            onChange={set("expert_name")}
+          />
+          <Text
+            label="Référence du rapport"
+            value={text.expertise_reference}
+            onChange={set("expertise_reference")}
+          />
           <Text label="Valeur à considérer (XOF)" type="number" value={text.value_to_consider} onChange={set("value_to_consider")} />
           <label className="field">
             <span>Taux de couverture (auto)</span>
@@ -658,7 +902,11 @@ function VehicleSection({
         <div className="form-grid two-col">
           <Text label="Nom du propriétaire" value={text.owner_last_name} onChange={set("owner_last_name")} />
           <Text label="Prénom du propriétaire" value={text.owner_first_name} onChange={set("owner_first_name")} />
-          <Text label="Numéro de châssis" value={text.chassis_number} onChange={set("chassis_number")} />
+          <Text
+            label="Numéro de châssis *"
+            value={text.chassis_number}
+            onChange={set("chassis_number")}
+          />
           <Text label="Numéro du moteur" value={text.engine_number} onChange={set("engine_number")} />
           <Text label="Marque" value={text.brand} onChange={set("brand")} />
           <Text label="Modèle" value={text.model_name} onChange={set("model_name")} />
@@ -669,9 +917,78 @@ function VehicleSection({
           <Text label="Valeur d'acquisition (XOF)" type="number" value={text.acquisition_value} onChange={set("acquisition_value")} />
           <Text label="Valeur estimée à la revente (XOF)" type="number" value={text.resale_value} onChange={set("resale_value")} />
           <Text label="Date d'estimation" type="date" value={text.estimation_date} onChange={set("estimation_date")} />
-          <Text label="Date de l'expertise" type="date" value={text.expertise_date} onChange={set("expertise_date")} />
-          <Text label="Cabinet d'expertise" value={text.expertise_firm} onChange={set("expertise_firm")} />
-          <Text label="Nom de l'expert" value={text.expert_name} onChange={set("expert_name")} />
+        </div>
+      </Card>
+
+      <Card
+        title={
+          <>
+            <Landmark size={17} /> Document pris en garantie
+          </>
+        }
+      >
+        <div className="form-grid two-col">
+          <Select
+            label="Type de document *"
+            value={text.document_type}
+            onChange={set("document_type")}
+            options={VEHICLE_DOCUMENT_TYPES}
+          />
+          <Text
+            label="Numéro du document *"
+            value={text.document_number}
+            onChange={set("document_number")}
+          />
+          <Text
+            label="Date d'établissement *"
+            type="date"
+            value={text.document_issue_date}
+            onChange={set("document_issue_date")}
+          />
+          <Text
+            label="Date de validité"
+            type="date"
+            value={text.document_validity_date}
+            onChange={set("document_validity_date")}
+          />
+        </div>
+      </Card>
+
+      <Card
+        title={
+          <>
+            <Banknote size={17} /> Expertise
+          </>
+        }
+      >
+        <div className="form-grid two-col">
+          <Text
+            label="Valeur expertisée (XOF) *"
+            type="number"
+            value={text.expertise_value}
+            onChange={set("expertise_value")}
+          />
+          <Text
+            label="Date de l'expertise *"
+            type="date"
+            value={text.expertise_date}
+            onChange={set("expertise_date")}
+          />
+          <Text
+            label="Cabinet d'expertise"
+            value={text.expertise_firm}
+            onChange={set("expertise_firm")}
+          />
+          <Text
+            label="Nom de l'expert"
+            value={text.expert_name}
+            onChange={set("expert_name")}
+          />
+          <Text
+            label="Référence du rapport"
+            value={text.expertise_reference}
+            onChange={set("expertise_reference")}
+          />
         </div>
         <label className="field">
           <span>Information complémentaire</span>

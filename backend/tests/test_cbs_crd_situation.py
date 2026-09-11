@@ -1,6 +1,7 @@
 """Perfect crd/situation → GET_LOAN_STATUS / main levée."""
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,7 @@ from apps.corebanking.services import (
     CoreBankingError,
     RestAdapter,
     _normalize_credit_schedule,
+    compute_cbs_overdue,
     get_loan_status,
 )
 from apps.catalog.defaults import ensure_catalog_defaults
@@ -160,3 +162,33 @@ def test_get_loan_status_via_simulated_connector(tenant_a):
         result_open = get_loan_status(tenant_a.id, "UNSOLDE-TEST-01")
         assert result_open["settled"] is False
         assert result_open["outstanding"] > 0
+        assert result_open["days_overdue"] >= 1
+
+
+def test_compute_cbs_overdue_uses_oldest_unpaid_due_date():
+    as_of = date(2026, 9, 10)
+    result = compute_cbs_overdue(
+        {
+            "datas": [
+                {
+                    "date": "2026-07-01",
+                    "montantTotal": 10000,
+                    "statut": "Payée",
+                },
+                {
+                    "date": "2026-08-01",
+                    "montantTotal": 20000,
+                    "statut": "En attente",
+                },
+                {
+                    "date": "2026-10-01",
+                    "montantTotal": 30000,
+                    "statut": "En attente",
+                },
+            ]
+        },
+        as_of=as_of,
+    )
+    assert result["settled"] is False
+    assert result["days_overdue"] == 40
+    assert result["overdue_amount"] == Decimal("20000")

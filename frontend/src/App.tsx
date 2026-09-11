@@ -20,11 +20,14 @@ import {
   PERM_COLLECTIONS,
   PERM_CREDIT_CREATE,
   PERM_CREDITS,
+  PERM_CREDITS_CHANGE,
   PERM_DASHBOARD,
   PERM_DATIONS,
   PERM_DOCUMENTS,
   PERM_FORMALIZATIONS,
   PERM_GUARANTEES,
+  PERM_GUARANTEES_ADD,
+  PERM_GUARANTEES_CHANGE,
   PERM_LEGAL_PARTIES,
   PERM_LITIGATION,
   PERM_PRODUCTS,
@@ -32,7 +35,9 @@ import {
   PERM_SIMULATOR,
   PERM_SURETIES,
   PERM_TASKS,
+  homePath,
 } from "@/auth/routePerms";
+import { useAuth } from "@/auth/AuthContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AdminRoute } from "@/components/AdminRoute";
 import { PermissionRoute } from "@/components/PermissionRoute";
@@ -90,6 +95,8 @@ import { AdminBusinessReferentialsPage } from "@/pages/admin/BusinessReferential
 import { AdminConnectorsPage } from "@/pages/admin/ConnectorsPage";
 import { AdminContractsPage } from "@/pages/admin/ContractsAdminPage";
 import { AdminNotificationsPage } from "@/pages/admin/NotificationsPage";
+import { AdminCollectionEscalationRulesPage } from "@/pages/admin/CollectionEscalationRulesPage";
+import { AdminCollectionTranchesPage } from "@/pages/admin/CollectionTranchesPage";
 import { AdminCreditPolicyPage } from "@/pages/admin/CreditPolicyPage";
 import { AdminDelegationsPage } from "@/pages/admin/DelegationsPage";
 import { AdminProductsPage } from "@/pages/admin/ProductsAdminPage";
@@ -97,6 +104,11 @@ import { AdminCbsReferentialsPage } from "@/pages/admin/CbsReferentialsPage";
 import { AdminRolesPage } from "@/pages/admin/RolesPage";
 import { AdminUsersPage } from "@/pages/admin/UsersPage";
 import { AdminWorkflowPage } from "@/pages/admin/WorkflowPage";
+
+function FallbackHome() {
+  const { user } = useAuth();
+  return <Navigate to={homePath(user)} replace />;
+}
 
 export default function App() {
   return (
@@ -186,7 +198,7 @@ export default function App() {
         <Route
           path="/dossiers/:id/modifier"
           element={
-            <PermissionRoute anyOf={PERM_CREDITS}>
+            <PermissionRoute anyOf={PERM_CREDITS_CHANGE}>
               <CreditApplicationEditPage />
             </PermissionRoute>
           }
@@ -210,7 +222,7 @@ export default function App() {
         <Route
           path="/dossiers/:id/garanties/nouvelle"
           element={
-            <PermissionRoute anyOf={PERM_GUARANTEES}>
+            <PermissionRoute anyOf={PERM_GUARANTEES_ADD}>
               <GuaranteeAddPage />
             </PermissionRoute>
           }
@@ -298,7 +310,7 @@ export default function App() {
         <Route
           path="/garanties/:id/modifier"
           element={
-            <PermissionRoute anyOf={PERM_GUARANTEES}>
+            <PermissionRoute anyOf={PERM_GUARANTEES_CHANGE}>
               <GuaranteeEditPage />
             </PermissionRoute>
           }
@@ -513,11 +525,9 @@ export default function App() {
         <Route
           path="/admin/intervenants-juridiques"
           element={
-            <AdminRoute>
-              <PermissionRoute anyOf={PERM_LEGAL_PARTIES}>
-                <LegalPartiesPage />
-              </PermissionRoute>
-            </AdminRoute>
+            <PermissionRoute anyOf={PERM_LEGAL_PARTIES}>
+              <LegalPartiesPage />
+            </PermissionRoute>
           }
         />
         <Route
@@ -581,6 +591,22 @@ export default function App() {
           }
         />
         <Route
+          path="/admin/tranches-recouvrement"
+          element={
+            <AdminRoute>
+              <AdminCollectionTranchesPage />
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/regles-escalade"
+          element={
+            <AdminRoute>
+              <AdminCollectionEscalationRulesPage />
+            </AdminRoute>
+          }
+        />
+        <Route
           path="/admin/audit"
           element={
             <AdminRoute>
@@ -591,7 +617,7 @@ export default function App() {
           }
         />
       </Route>
-      <Route path="*" element={<Navigate to="/" replace />} />
+      <Route path="*" element={<FallbackHome />} />
     </Routes>
   );
 }

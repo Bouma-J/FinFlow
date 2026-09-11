@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
-  Database,
   Plus,
   TriangleAlert,
   UserRound,
@@ -15,12 +14,20 @@ import type { Client, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
 import { ClientCbsImportForm } from "@/components/ClientCbsImportForm";
-import { ClientForm } from "@/components/ClientForm";
+import {
+  AgencyFilter,
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  SearchInput,
+  countActive,
+} from "@/components/ListFilters";
 import {
   Badge,
   PageHeader,
   PaginationBar,
   QueryStatus,
+  TenantScopeNotice,
 } from "@/components/ui";
 
 function typeLabel(t: string) {
@@ -31,26 +38,55 @@ function typeLabel(t: string) {
       : "Personne physique";
 }
 
-type CreateMode = "manual" | "cbs";
-
 export function ClientsPage() {
   const { user, activeTenant } = useAuth();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
   const canCreateClient = hasPerm(user, "clients.add_client");
   const [showForm, setShowForm] = useState(false);
-  const [createMode, setCreateMode] = useState<CreateMode>("manual");
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [clientType, setClientType] = useState("");
+  const [kycStatus, setKycStatus] = useState("");
+  const [agency, setAgency] = useState("");
+  const [isActive, setIsActive] = useState("");
   const [importNotice, setImportNotice] = useState<string | null>(null);
 
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
+
   const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["clients", page],
+    queryKey: [
+      "clients",
+      activeTenant,
+      page,
+      search,
+      clientType,
+      kycStatus,
+      agency,
+      isActive,
+    ],
     queryFn: async () =>
-      (await api.get<Paginated<Client>>("/clients/", { params: { page } })).data,
+      (
+        await api.get<Paginated<Client>>("/clients/", {
+          params: {
+            page,
+            ...(search.trim() ? { search: search.trim() } : {}),
+            ...(clientType ? { client_type: clientType } : {}),
+            ...(kycStatus ? { kyc_status: kycStatus } : {}),
+            ...(agency ? { agency } : {}),
+            ...(isActive ? { is_active: isActive } : {}),
+          },
+        })
+      ).data,
+    enabled: !needsTenant,
   });
 
   function closeForm() {
     setShowForm(false);
-    setCreateMode("manual");
   }
 
   return (
@@ -74,6 +110,7 @@ export function ClientsPage() {
           ) : undefined
         }
       />
+      {needsTenant && <TenantScopeNotice />}
 
       {importNotice && (
         <div className="notice-warning">
@@ -92,51 +129,71 @@ export function ClientsPage() {
         </div>
       )}
 
-      {showForm && !needsTenant && (
-        <div className="type-toggle" style={{ marginBottom: "1rem" }}>
-          <button
-            type="button"
-            className={`type-choice${createMode === "manual" ? " active" : ""}`}
-            onClick={() => setCreateMode("manual")}
-          >
-            <UserRound size={18} />
-            Saisie manuelle
-          </button>
-          <button
-            type="button"
-            className={`type-choice${createMode === "cbs" ? " active" : ""}`}
-            onClick={() => setCreateMode("cbs")}
-          >
-            <Database size={18} />
-            Import CBS
-          </button>
-        </div>
-      )}
-
-      {showForm ? (
-        createMode === "cbs" ? (
-          <ClientCbsImportForm
-            onSuccess={(client) => {
-              closeForm();
-              if ((client as Client & { kyc_alert?: boolean }).kyc_alert) {
-                setImportNotice(
-                  `Client « ${client.display_name} » créé. Alerte KYC : le compte CBS n'était pas valide — à vérifier.`,
-                );
-              } else {
-                setImportNotice(null);
-              }
-            }}
-            onCancel={closeForm}
-          />
-        ) : (
-          <ClientForm onSuccess={closeForm} onCancel={closeForm} />
-        )
+      {showForm && !needsTenant ? (
+        <ClientCbsImportForm
+          onSuccess={(client) => {
+            closeForm();
+            if ((client as Client & { kyc_alert?: boolean }).kyc_alert) {
+              setImportNotice(
+                `Client « ${client.display_name} » créé. Alerte KYC : le compte CBS n'était pas valide — à vérifier.`,
+              );
+            } else {
+              setImportNotice(null);
+            }
+          }}
+          onCancel={closeForm}
+        />
       ) : (
+        <>
+        <ListFilters
+          search={
+            <SearchInput
+              value={search}
+              onChange={setFilter(setSearch)}
+              placeholder="Nom, référence, téléphone, pièce, CBS…"
+            />
+          }
+          activeCount={countActive(search, clientType, kycStatus, agency, isActive)}
+          onReset={() => {
+            setSearch("");
+            setClientType("");
+            setKycStatus("");
+            setAgency("");
+            setIsActive("");
+            setPage(1);
+          }}
+        >
+          <FilterField label="Type" active={!!clientType}>
+            <FilterSelect value={clientType} onChange={setFilter(setClientType)}>
+              <option value="">Tous types</option>
+              <option value="INDIVIDUAL">Personne physique</option>
+              <option value="PROFESSIONAL">Groupement</option>
+              <option value="CORPORATE">Personne morale</option>
+            </FilterSelect>
+          </FilterField>
+          <FilterField label="KYC" active={!!kycStatus}>
+            <FilterSelect value={kycStatus} onChange={setFilter(setKycStatus)}>
+              <option value="">Tous KYC</option>
+              <option value="PENDING">En attente</option>
+              <option value="VALIDATED">Validé</option>
+              <option value="REJECTED">Rejeté</option>
+              <option value="EXPIRED">Expiré</option>
+            </FilterSelect>
+          </FilterField>
+          <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+          <FilterField label="Statut" active={!!isActive}>
+            <FilterSelect value={isActive} onChange={setFilter(setIsActive)}>
+              <option value="">Actifs et inactifs</option>
+              <option value="true">Actifs</option>
+              <option value="false">Inactifs</option>
+            </FilterSelect>
+          </FilterField>
+        </ListFilters>
         <QueryStatus
           isLoading={isLoading}
           isError={isError}
           isEmpty={!data?.results.length}
-          emptyMessage="Aucun client enregistré."
+          emptyMessage="Aucun client ne correspond à ces critères."
           onRetry={() => refetch()}
         >
         <>
@@ -181,6 +238,7 @@ export function ClientsPage() {
           />
         </>
         </QueryStatus>
+        </>
       )}
     </div>
   );

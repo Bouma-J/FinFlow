@@ -7,6 +7,7 @@ import {
   Cable,
   CalendarClock,
   Check,
+  CircleDollarSign,
   ChevronDown,
   ClipboardCheck,
   ClipboardList,
@@ -27,11 +28,14 @@ import {
   NotebookPen,
   Paperclip,
   Plus,
+  RefreshCw,
+  Scale,
   Send,
   ShieldAlert,
   ShieldCheck,
   Store,
   Trash2,
+  Unlock,
   Upload,
   UserRound,
   Wallet,
@@ -59,16 +63,31 @@ import {
   type Client,
   type CreditApplication,
   type CreditReadiness,
+  type DationRequest,
   type FieldVisit,
   type FinancialAnalysis,
   type GeneratedContract,
   type Guarantee,
+  type GuaranteeFormalizationRequest,
+  type GuaranteeReleaseRequest,
+  type LoanDetail,
   type Paginated,
   type SuretyEngagement,
   WORKFLOW_LABELS,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { hasPerm } from "@/auth/permissions";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import { RestructureRequestPanel } from "@/components/FinancialDecisionPanels";
+import {
+  PERM_CLIENTS,
+  PERM_DATIONS,
+  PERM_FORMALIZATIONS,
+  PERM_GUARANTEES,
+  PERM_RELEASES,
+  PERM_SURETIES,
+  isControlePermanent,
+} from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
 import { ApprovalConditionsCard } from "@/components/ApprovalConditionsCard";
 import { CollateralSummaryCard } from "@/components/CollateralSummaryCard";
 import { DecisionPanel } from "@/components/DecisionPanel";
@@ -644,6 +663,7 @@ function AnalysisDetail({
 }) {
   const cur = currency;
   const isCorp = analysis.client_type === "CORPORATE";
+  const isGroupement = analysis.client_type === "PROFESSIONAL";
   const flags = analysis.flags;
   const m = analysis.metrics;
   const rl = (v: string) =>
@@ -716,7 +736,12 @@ function AnalysisDetail({
       </div>
 
       <p className="muted small" style={{ marginTop: 0 }}>
-        {isCorp ? "Entreprise" : "Particulier"} · période{" "}
+        {isCorp
+          ? "Entreprise"
+          : isGroupement
+            ? "Groupement"
+            : "Particulier"}{" "}
+        · période{" "}
         {FINANCE_LABELS.reference_period[analysis.reference_period] ||
           analysis.reference_period}
         {analysis.analysis_date
@@ -750,6 +775,42 @@ function AnalysisDetail({
               label="Ratio d'endettement"
               value={pct(analysis.debt_ratio)}
               tone={debtTone}
+            />
+          </>
+        ) : isGroupement ? (
+          <>
+            <Metric label="Membres" value={analysis.members_count ?? "—"} />
+            <Metric
+              label="Membres cotisants"
+              value={analysis.active_contributing_members ?? "—"}
+              tone={boolTone(flags?.members_ok)}
+            />
+            <Metric
+              label="Cotisations"
+              value={formatMoney(analysis.collective_contributions, cur)}
+            />
+            <Metric
+              label="CA collectif"
+              value={formatMoney(analysis.group_activity_turnover, cur)}
+            />
+            <Metric
+              label="Capacité collective"
+              value={
+                analysis.collective_capacity
+                  ? formatMoney(analysis.collective_capacity, cur)
+                  : "—"
+              }
+              tone={boolTone(flags?.capacity_ok)}
+            />
+            <Metric
+              label="Taux d'endettement"
+              value={pct(analysis.debt_ratio)}
+              tone={debtTone}
+            />
+            <Metric
+              label="Solidarité"
+              value={analysis.solidarity_commitment ? "Oui" : "Non"}
+              tone={boolTone(flags?.solidarity_ok)}
             />
           </>
         ) : (
@@ -802,6 +863,18 @@ function AnalysisDetail({
               <Metric label="Croissance du CA" value={fPct(mNum(m, "turnover_growth"))} />
               <Metric label="Croissance du résultat" value={fPct(mNum(m, "result_growth"))} />
             </>
+          ) : isGroupement ? (
+            <>
+              <Metric label="Taux d'endettement global" value={fPct(mNum(m, "debt_ratio"))} tone={boolTone(flags?.debt_ratio_ok)} />
+              <Metric label="Revenus collectifs" value={formatMoney(mNum(m, "collective_income") ?? 0, cur)} />
+              <Metric label="Charges collectives" value={formatMoney(mNum(m, "collective_charges") ?? 0, cur)} />
+              <Metric
+                label="Capacité nette"
+                value={formatMoney(mNum(m, "collective_net_capacity") ?? 0, cur)}
+                tone={boolTone(flags?.capacity_ok)}
+              />
+              <Metric label="Concentration cotisants" value={fPct(mNum(m, "contribution_concentration"))} />
+            </>
           ) : (
             <>
               <Metric label="Taux d'endettement global" value={fPct(mNum(m, "debt_ratio"))} tone={boolTone(flags?.debt_ratio_ok)} />
@@ -840,7 +913,7 @@ function AnalysisDetail({
         <p className="muted small" style={{ marginTop: 8 }}>
           Sensibilité calculée avec une baisse de{" "}
           {analysis.thresholds?.stress_pct ?? 20} % des{" "}
-          {isCorp ? "flux d'exploitation" : "revenus"}.
+          {isCorp ? "flux d'exploitation" : isGroupement ? "recettes collectives" : "revenus"}.
         </p>
       </SubSection>
 
@@ -1675,11 +1748,63 @@ export function CreditApplicationDetailPage() {
     enabled: !!id,
   });
 
+  const canViewDations = hasPerm(user, "guarantees.view_dationrequest");
+  const canViewFormalizations = hasPerm(
+    user,
+    "guarantees.view_guaranteeformalizationrequest",
+  );
+  const canViewReleases = hasPerm(
+    user,
+    "guarantees.view_guaranteereleaserequest",
+  );
+
+  const { data: dations } = useQuery({
+    queryKey: ["dation-requests", id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<DationRequest>>("/dation-requests/", {
+          params: { application: id },
+        })
+      ).data,
+    enabled: !!id && canViewDations,
+  });
+
+  const { data: formalizations } = useQuery({
+    queryKey: ["guarantee-formalizations", id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<GuaranteeFormalizationRequest>>(
+          "/guarantee-formalizations/",
+          { params: { application: id } },
+        )
+      ).data,
+    enabled: !!id && canViewFormalizations,
+  });
+
+  const { data: releases } = useQuery({
+    queryKey: ["guarantee-releases", id],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<GuaranteeReleaseRequest>>(
+          "/guarantee-releases/",
+          { params: { application: id } },
+        )
+      ).data,
+    enabled: !!id && canViewReleases,
+  });
+
   const { data: client } = useQuery({
     queryKey: ["client", app?.client],
     queryFn: async () =>
       (await api.get<Client>(`/clients/${app!.client}/`)).data,
     enabled: !!app?.client,
+  });
+
+  const { data: loan } = useQuery({
+    queryKey: ["loan", app?.loan_id],
+    queryFn: async () =>
+      (await api.get<LoanDetail>(`/loans/${app!.loan_id}/`)).data,
+    enabled: !!app?.loan_id,
   });
 
   const { data: financials } = useQuery({
@@ -1883,8 +2008,36 @@ export function CreditApplicationDetailPage() {
   const canAddVisit = hasPerm(user, "credits.add_fieldvisit");
   const canAddContract = hasPerm(user, "contracts.add_generatedcontract");
   const canAddGuarantee = hasPerm(user, "guarantees.add_guarantee");
+  const canViewGuarantees = hasAnyPerm(user, PERM_GUARANTEES);
   const canAddSurety = hasPerm(user, "sureties.add_suretyengagement");
+  const canViewSureties = hasAnyPerm(user, PERM_SURETIES);
   const canManageSuretyEng = hasPerm(user, "sureties.change_suretyengagement");
+  const canViewCollections = hasPerm(user, "collections.view_collectioncase");
+  const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
+  const canInitiateFormalization = hasPerm(
+    user,
+    "guarantees.initiate_guaranteeformalizationrequest",
+  );
+  const canInitiateRelease = hasPerm(
+    user,
+    "guarantees.initiate_guaranteereleaserequest",
+  );
+  const canProposeRestructure = hasPerm(user, "collections.add_loanrestructure");
+  const canDecideRestructure = hasPerm(
+    user,
+    "collections.change_loanrestructure",
+  );
+  const showRestructure = Boolean(
+    loan &&
+      (canProposeRestructure ||
+        canDecideRestructure ||
+        (loan.restructures?.length ?? 0) > 0),
+  );
+  const showAfterSales = hasAnyPerm(user, [
+    ...PERM_DATIONS,
+    ...PERM_FORMALIZATIONS,
+    ...PERM_RELEASES,
+  ]);
   const isOwner =
     !!uid && (app.created_by === uid || app.submitted_by === uid);
   // Soumission et suppression : réservées au créateur du dossier (ou super-admin),
@@ -1970,10 +2123,17 @@ export function CreditApplicationDetailPage() {
   const canContributeWindow =
     isSuper || ((isOwner && openForContribution) || !!myTask);
   const canContributeAnalysis = canContributeWindow && canAddAnalysis;
-  const canContributeVisit = canContributeWindow && canAddVisit;
+  const canContributeVisit =
+    canAddVisit && (canContributeWindow || isControlePermanent(user));
   const cur = app.currency;
 
-  const guaranteeTotal = (guarantees?.results ?? []).reduce(
+  const activeGuarantees = (guarantees?.results ?? []).filter(
+    (g) => g.status === "ACTIVE",
+  );
+  const excludedGuaranteeCount = (guarantees?.results ?? []).filter((g) =>
+    ["REALIZED", "RELEASED", "TRANSFERRED"].includes(g.status),
+  ).length;
+  const guaranteeTotal = activeGuarantees.reduce(
     (s, g) => s + Number(g.current_value || 0),
     0,
   );
@@ -2047,6 +2207,20 @@ export function CreditApplicationDetailPage() {
     { id: "sec-terms", icon: Banknote, label: "Conditions du crédit", show: true, group: "Instruction" },
     { id: "sec-financial", icon: LineChart, label: "Analyse financière", show: true, group: "Instruction" },
     { id: "sec-patrimoine", icon: Landmark, label: "Garanties & cautions", show: true, group: "Instruction" },
+    {
+      id: "sec-aftersales",
+      icon: Scale,
+      label: "Après-vente",
+      show: showAfterSales,
+      group: "Suivi",
+    },
+    {
+      id: "sec-restructure",
+      icon: RefreshCw,
+      label: "Restructuration",
+      show: showRestructure,
+      group: "Suivi",
+    },
     { id: "sec-activity", icon: Store, label: "Activité & commerce", show: showActivity, group: "Profil" },
     { id: "sec-applicant", icon: Briefcase, label: "Demandeur & emploi", show: showApplicant, group: "Profil" },
     { id: "sec-banking", icon: History, label: "Relation bancaire", show: showBanking, group: "Profil" },
@@ -2116,6 +2290,18 @@ export function CreditApplicationDetailPage() {
               <ArrowLeft />
               Retour
             </Link>
+            {canViewCollections && app.collection_case_id && (
+              <Link
+                className="btn btn-ghost"
+                to={`/recouvrement/${app.collection_case_id}`}
+              >
+                <CircleDollarSign />
+                Recouvrement
+                {app.collection_stage_display
+                  ? ` · ${app.collection_stage_display}`
+                  : ""}
+              </Link>
+            )}
             {canEdit && (
               <Link className="btn btn-ghost" to={`/dossiers/${id}/modifier`}>
                 <FilePenLine />
@@ -2231,9 +2417,14 @@ export function CreditApplicationDetailPage() {
           <div className="credit-hero-text">
             <p className="credit-hero-kicker">Fiche dossier</p>
             <h2 className="credit-hero-name">
-              <Link className="link-inline" to={`/clients/${app.client}`}>
+              <PermLink
+                user={user}
+                anyOf={PERM_CLIENTS}
+                className="link-inline"
+                to={`/clients/${app.client}`}
+              >
                 {app.client_display}
-              </Link>
+              </PermLink>
             </h2>
             <div className="credit-hero-meta">
               <code>{app.reference || "—"}</code>
@@ -2654,8 +2845,12 @@ export function CreditApplicationDetailPage() {
                 {guarantees.results.map((g) => (
                   <li
                     key={g.id}
-                    className="row-clickable"
-                    onClick={() => navigate(`/dossiers/${id}/garanties/${g.id}`)}
+                    className={canViewGuarantees ? "row-clickable" : undefined}
+                    onClick={
+                      canViewGuarantees
+                        ? () => navigate(`/dossiers/${id}/garanties/${g.id}`)
+                        : undefined
+                    }
                   >
                     <span>
                       <ShieldCheck size={14} /> {g.type_display}
@@ -2695,10 +2890,10 @@ export function CreditApplicationDetailPage() {
             ) : (
               <p className="muted small">Aucune garantie rattachée.</p>
             )}
-            {guaranteeTotal > 0 && (
+            {(guaranteeTotal > 0 || excludedGuaranteeCount > 0) && (
               <div className="finance-recap" style={{ marginTop: 10 }}>
                 <div className="recap-item">
-                  <span className="recap-label">Valeur totale des garanties</span>
+                  <span className="recap-label">Valeur des garanties actives</span>
                   <span className="recap-value">{formatMoney(guaranteeTotal, cur)}</span>
                 </div>
                 {coveragePct !== null && (
@@ -2706,6 +2901,16 @@ export function CreditApplicationDetailPage() {
                     <span className="recap-label">Taux de couverture</span>
                     <span className="recap-value">{coveragePct.toFixed(0)} %</span>
                   </div>
+                )}
+                {excludedGuaranteeCount > 0 && (
+                  <p className="muted small" style={{ marginTop: 6 }}>
+                    {excludedGuaranteeCount} garantie
+                    {excludedGuaranteeCount > 1 ? "s" : ""} réalisée
+                    {excludedGuaranteeCount > 1 ? "s" : ""}, levée
+                    {excludedGuaranteeCount > 1 ? "s" : ""} ou transférée
+                    {excludedGuaranteeCount > 1 ? "s" : ""} exclue
+                    {excludedGuaranteeCount > 1 ? "s" : ""} du taux.
+                  </p>
                 )}
               </div>
             )}
@@ -2729,15 +2934,18 @@ export function CreditApplicationDetailPage() {
                     style={{ flexDirection: "column", alignItems: "stretch" }}
                   >
                     <div
-                      className="row-clickable"
+                      className={canViewSureties ? "row-clickable" : undefined}
                       style={{
                         display: "flex",
                         justifyContent: "space-between",
                         gap: 12,
-                        cursor: "pointer",
+                        cursor: canViewSureties ? "pointer" : "default",
                       }}
-                      onClick={() =>
-                        navigate(`/dossiers/${id}/cautions/${e.surety}`)
+                      onClick={
+                        canViewSureties
+                          ? () =>
+                              navigate(`/dossiers/${id}/cautions/${e.surety}`)
+                          : undefined
                       }
                     >
                       <span>
@@ -2783,6 +2991,179 @@ export function CreditApplicationDetailPage() {
             )}
           </SubSection>
           </ViewSection>
+
+          {showAfterSales && (
+          <ViewSection
+            id="sec-aftersales"
+            icon={Scale}
+            title="Après-vente"
+            description="Dations, formalisations et mains levées rattachées à ce dossier."
+          >
+            {canViewDations && (
+              <SubSection icon={CircleDollarSign} title="Dations">
+                {dations && dations.results.length > 0 ? (
+                  <ul className="link-list">
+                    {dations.results.map((d) => (
+                      <li
+                        key={d.id}
+                        className="row-clickable"
+                        onClick={() => navigate(`/dations/${d.id}`)}
+                      >
+                        <span>
+                          <CircleDollarSign size={14} />{" "}
+                          {d.reference || "Dation"}
+                        </span>
+                        <span className="muted small">
+                          {formatDate(d.created_at)}
+                        </span>
+                        <Badge
+                          value={d.status}
+                          label={d.status_display || d.status}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted small">Aucune dation sur ce dossier.</p>
+                )}
+                {canInitiateDation && (
+                  <Link
+                    className="btn btn-ghost btn-sm"
+                    to={`/dations/nouvelle?application=${id}&client=${app.client}`}
+                  >
+                    <Plus size={15} />
+                    Nouvelle dation
+                  </Link>
+                )}
+              </SubSection>
+            )}
+
+            {canViewFormalizations && (
+              <SubSection icon={FileSignature} title="Formalisations">
+                {formalizations && formalizations.results.length > 0 ? (
+                  <ul className="link-list">
+                    {formalizations.results.map((f) => (
+                      <li
+                        key={f.id}
+                        className="row-clickable"
+                        onClick={() => navigate(`/formalisations/${f.id}`)}
+                      >
+                        <span>
+                          <FileSignature size={14} />{" "}
+                          {f.reference || "Formalisation"}
+                          {f.guarantee_reference ? (
+                            <em className="muted small">
+                              {" "}
+                              · {f.guarantee_reference}
+                            </em>
+                          ) : null}
+                        </span>
+                        <span className="muted small">
+                          {f.legal_stage_display || f.legal_stage}
+                        </span>
+                        <Badge
+                          value={f.status}
+                          label={f.status_display || f.status}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted small">
+                    Aucune formalisation sur ce dossier.
+                  </p>
+                )}
+                {canInitiateFormalization && (
+                  <Link
+                    className="btn btn-ghost btn-sm"
+                    to={`/formalisations/nouvelle?application=${id}&client=${app.client}`}
+                  >
+                    <Plus size={15} />
+                    Nouvelle formalisation
+                  </Link>
+                )}
+              </SubSection>
+            )}
+
+            {canViewReleases && (
+              <SubSection icon={Unlock} title="Mains levées">
+                {releases && releases.results.length > 0 ? (
+                  <ul className="link-list">
+                    {releases.results.map((r) => (
+                      <li
+                        key={r.id}
+                        className="row-clickable"
+                        onClick={() => navigate(`/mains-levees/${r.id}`)}
+                      >
+                        <span>
+                          <Unlock size={14} /> {r.reference || "Main levée"}
+                          {r.guarantee_reference ? (
+                            <em className="muted small">
+                              {" "}
+                              · {r.guarantee_reference}
+                            </em>
+                          ) : null}
+                        </span>
+                        <span className="muted small">
+                          {formatDate(r.created_at)}
+                        </span>
+                        <Badge
+                          value={r.status}
+                          label={r.status_display || r.status}
+                        />
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="muted small">
+                    Aucune main levée sur ce dossier.
+                  </p>
+                )}
+                {canInitiateRelease && (
+                  <Link
+                    className="btn btn-ghost btn-sm"
+                    to={`/mains-levees/nouvelle?application=${id}&client=${app.client}`}
+                  >
+                    <Plus size={15} />
+                    Nouvelle main levée
+                  </Link>
+                )}
+              </SubSection>
+            )}
+          </ViewSection>
+          )}
+
+          {showRestructure && loan && (
+          <ViewSection
+            id="sec-restructure"
+            icon={RefreshCw}
+            title="Restructuration"
+            description="Analyse d'une demande client ou interne. Perfect n'a pas d'API : l'échéancier CBS n'est pas modifié."
+          >
+            <RestructureRequestPanel
+              origin="LOAN"
+              loanId={loan.id}
+              caseId={loan.collection_case_id}
+              currency={loan.currency || cur}
+              outstanding={loan.outstanding_principal}
+              currentDuration={loan.duration_months}
+              currentRate={loan.interest_rate}
+              restructures={loan.restructures || []}
+              canPropose={canProposeRestructure && loan.status === "ACTIVE"}
+              canDecide={canDecideRestructure}
+              frozen={loan.financial_ops_frozen}
+              frozenReason={loan.financial_ops_frozen_reason}
+              loanActive={loan.status === "ACTIVE"}
+              currentUserId={uid}
+              onChanged={() => {
+                qc.invalidateQueries({ queryKey: ["loan", app.loan_id] });
+                qc.invalidateQueries({ queryKey: ["credit-application", id] });
+              }}
+              onError={(msg) => setActionError(msg || null)}
+              onSuccess={() => setActionError(null)}
+            />
+          </ViewSection>
+          )}
 
           {showApplicant && (
           <ViewSection
@@ -3025,13 +3406,15 @@ export function CreditApplicationDetailPage() {
                   {docs.map((d) => (
                     <DocLink key={d.label} label={d.label} url={d.url} />
                   ))}
-                  <Link
-                    className="doc-chip ghost"
-                    to={`/dossiers/${id}/garanties/${g.id}`}
-                  >
-                    <ShieldCheck size={15} />
-                    Voir la garantie
-                  </Link>
+                  {canViewGuarantees && (
+                    <Link
+                      className="doc-chip ghost"
+                      to={`/dossiers/${id}/garanties/${g.id}`}
+                    >
+                      <ShieldCheck size={15} />
+                      Voir la garantie
+                    </Link>
+                  )}
                 </div>
                 {photos.length > 0 && (
                   <div className="photo-gallery" style={{ marginTop: 10 }}>

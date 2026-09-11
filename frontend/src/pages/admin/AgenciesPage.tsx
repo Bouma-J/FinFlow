@@ -11,19 +11,7 @@ import {
   QueryStatus,
   TenantScopeNotice,
 } from "@/components/ui";
-
-function apiErrorMessage(err: unknown, fallback: string): string {
-  const data = (err as { response?: { data?: Record<string, unknown> } })
-    ?.response?.data;
-  if (!data) return fallback;
-  if (typeof data.detail === "string") return data.detail;
-  const errors = data.errors as Record<string, string[]> | undefined;
-  if (errors) {
-    const first = Object.entries(errors)[0];
-    if (first) return `${first[0]} : ${first[1][0]}`;
-  }
-  return fallback;
-}
+import { apiErrorMessage } from "@/utils/apiError";
 
 const EMPTY = {
   code: "",

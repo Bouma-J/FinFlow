@@ -29,8 +29,21 @@ import type {
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
+import { PERM_GUARANTEES } from "@/auth/routePerms";
 import { ClientAutocomplete } from "@/components/ClientAutocomplete";
+import { PermLink } from "@/components/PermLink";
 import { DecisionPanel } from "@/components/DecisionPanel";
+import {
+  AgencyFilter,
+  ClientFilterBanner,
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  PROCESS_STATUS_OPTIONS,
+  SearchInput,
+  countActive,
+  useClientSearchParam,
+} from "@/components/ListFilters";
 import {
   Badge,
   Card,
@@ -58,18 +71,35 @@ function todayISO() {
 
 export function GuaranteeReleasesPage() {
   const { user } = useAuth();
+  const { clientFilter, clearClientFilter } = useClientSearchParam();
   const canInitiate = hasPerm(
     user,
     "guarantees.initiate_guaranteereleaserequest",
   );
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [agency, setAgency] = useState("");
+
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
 
   const list = useQuery({
-    queryKey: ["guarantee-releases", page],
+    queryKey: ["guarantee-releases", page, search, status, agency, clientFilter],
     queryFn: async () =>
       (
         await api.get<Paginated<GuaranteeReleaseRequest>>("/guarantee-releases/", {
-          params: { page },
+          params: {
+            page,
+            ...(search.trim() ? { search: search.trim() } : {}),
+            ...(status ? { status } : {}),
+            ...(agency ? { agency } : {}),
+            ...(clientFilter ? { client: clientFilter } : {}),
+          },
         })
       ).data,
   });
@@ -90,11 +120,47 @@ export function GuaranteeReleasesPage() {
         }
       />
 
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={setFilter(setSearch)}
+            placeholder="Réf. ML, prêt CBS, client…"
+          />
+        }
+        activeCount={countActive(search, status, agency, clientFilter)}
+        onReset={() => {
+          setSearch("");
+          setStatus("");
+          setAgency("");
+          setPage(1);
+          if (clientFilter) clearClientFilter();
+        }}
+      >
+        <FilterField label="Statut" active={!!status}>
+          <FilterSelect value={status} onChange={setFilter(setStatus)}>
+            {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
+              <option key={value || "all"} value={value}>
+                {label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+      </ListFilters>
+      <ClientFilterBanner
+        clientId={clientFilter}
+        onClear={() => {
+          clearClientFilter();
+          setPage(1);
+        }}
+      />
+
       <QueryStatus
         isLoading={list.isLoading}
         isError={list.isError}
         isEmpty={!list.data?.results.length}
-        emptyMessage="Aucune demande de main levée."
+        emptyMessage="Aucune demande de main levée ne correspond à ces critères."
         onRetry={() => list.refetch()}
       >
         <>
@@ -116,7 +182,15 @@ export function GuaranteeReleasesPage() {
                 <td>
                   <code>{r.reference || "—"}</code>
                 </td>
-                <td>{r.guarantee_reference || r.guarantee.slice(0, 8)}</td>
+                <td>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_GUARANTEES}
+                    to={`/garanties/${r.guarantee}`}
+                  >
+                    {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                  </PermLink>
+                </td>
                 <td>{r.client_display}</td>
                 <td>{r.request_date ? formatDate(r.request_date) : "—"}</td>
                 <td className="muted small">{r.cbs_loan_reference || "—"}</td>
@@ -151,6 +225,7 @@ export function GuaranteeReleaseNewPage() {
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const [clientId, setClientId] = useState(searchParams.get("client") || "");
+  const applicationFromQuery = searchParams.get("application") || "";
   const [cbsClientId, setCbsClientId] = useState("");
   const [guaranteeId, setGuaranteeId] = useState(
     searchParams.get("guarantee") || "",
@@ -187,7 +262,20 @@ export function GuaranteeReleaseNewPage() {
     ) {
       setGuaranteeId(gParam);
     }
-  }, [context.data, cbsClientId, guaranteeId, searchParams]);
+    if (!selectedCreditKey && applicationFromQuery) {
+      const match = context.data.credits.find(
+        (c) => c.application_id === applicationFromQuery,
+      );
+      if (match) setSelectedCreditKey(creditKey(match));
+    }
+  }, [
+    context.data,
+    cbsClientId,
+    guaranteeId,
+    searchParams,
+    selectedCreditKey,
+    applicationFromQuery,
+  ]);
 
   const selectedCredit: ReleaseClientCredit | null = useMemo(() => {
     const credits = context.data?.credits ?? [];
@@ -382,6 +470,7 @@ export function GuaranteeReleaseNewPage() {
                     <div className="dation-guarantee-list" role="list">
                       {guarantees.map((g) => {
                         const checked = guaranteeId === g.id;
+                        const busy = Boolean(g.process_busy);
                         const val =
                           g.current_value ||
                           g.value_to_consider ||
@@ -390,12 +479,13 @@ export function GuaranteeReleaseNewPage() {
                           <label
                             key={g.id}
                             role="listitem"
-                            className={`dation-guarantee-row${checked ? " selected" : ""}`}
+                            className={`dation-guarantee-row${checked ? " selected" : ""}${busy ? " muted" : ""}`}
                           >
                             <input
                               type="radio"
                               name="release-guarantee"
                               checked={checked}
+                              disabled={busy}
                               onChange={() => setGuaranteeId(g.id)}
                             />
                             <span className="dation-guarantee-body">
@@ -408,6 +498,11 @@ export function GuaranteeReleaseNewPage() {
                               {g.description && (
                                 <span className="dation-guarantee-desc">
                                   {g.description.slice(0, 140)}
+                                </span>
+                              )}
+                              {busy && (
+                                <span className="muted small">
+                                  {g.process_busy?.label}
                                 </span>
                               )}
                             </span>
@@ -1042,9 +1137,13 @@ export function GuaranteeReleaseDetailPage() {
               <div>
                 <dt>Garantie</dt>
                 <dd>
-                  <Link to={`/garanties/${r.guarantee}`}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_GUARANTEES}
+                    to={`/garanties/${r.guarantee}`}
+                  >
                     {r.guarantee_reference || r.guarantee.slice(0, 8)}
-                  </Link>
+                  </PermLink>
                 </dd>
               </div>
               <div>

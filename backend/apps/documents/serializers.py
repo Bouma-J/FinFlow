@@ -17,6 +17,7 @@ class DocumentSerializer(serializers.ModelSerializer):
     category_code = serializers.CharField(source="category.code", read_only=True)
     uploaded_by_name = serializers.SerializerMethodField()
     related_type = serializers.SerializerMethodField()
+    related_kind = serializers.SerializerMethodField()
     related_label = serializers.SerializerMethodField()
     related_path = serializers.SerializerMethodField()
     file_url = serializers.SerializerMethodField()
@@ -40,6 +41,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "content_type",
             "object_id",
             "related_type",
+            "related_kind",
             "related_label",
             "related_path",
             "uploaded_by",
@@ -63,6 +65,7 @@ class DocumentSerializer(serializers.ModelSerializer):
             "category_label",
             "uploaded_by_name",
             "related_type",
+            "related_kind",
             "related_label",
             "related_path",
             "file_url",
@@ -79,6 +82,14 @@ class DocumentSerializer(serializers.ModelSerializer):
         if not ct:
             return ""
         return f"{ct.app_label}.{ct.model}"
+
+    def get_related_kind(self, obj) -> str:
+        from .list_filters import related_kind_for
+
+        ct = obj.content_type
+        if not ct:
+            return "OTHER"
+        return related_kind_for(ct.app_label, ct.model)
 
     def get_related_label(self, obj) -> str:
         related = obj.related_object
@@ -103,6 +114,12 @@ class DocumentSerializer(serializers.ModelSerializer):
             return f"/mains-levees/{oid}"
         if key == "guarantees.dationrequest":
             return f"/dations/{oid}"
+        if key == "guarantees.dationasset":
+            related = obj.related_object
+            dation_id = getattr(related, "dation_id", None) if related else None
+            if dation_id:
+                return f"/dations/{dation_id}"
+            return None
         if key == "guarantees.guaranteeformalizationrequest":
             return f"/formalisations/{oid}"
         if key == "guarantees.guarantee":
@@ -115,6 +132,16 @@ class DocumentSerializer(serializers.ModelSerializer):
             return None
         if key == "collections.collectioncase":
             return f"/recouvrement/{oid}"
+        if key == "clients.client":
+            return f"/clients/{oid}"
+        if key == "sureties.surety":
+            return f"/cautions/{oid}"
+        if key == "credits.loan":
+            related = obj.related_object
+            app_id = getattr(related, "application_id", None) if related else None
+            if app_id:
+                return f"/dossiers/{app_id}"
+            return "/prets"
         return None
 
     def get_file_url(self, obj) -> str | None:

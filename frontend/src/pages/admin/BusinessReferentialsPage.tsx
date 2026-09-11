@@ -19,6 +19,7 @@ import {
   Spinner,
   TenantScopeNotice,
 } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 
 type TabKey = "rejects" | "checklists" | "thresholds" | "ged";
 
@@ -109,18 +110,7 @@ const EMPTY_THRESHOLD: AnalysisThresholdConfig = {
 };
 
 function errMsg(err: unknown, fallback: string) {
-  const data = (err as { response?: { data?: unknown } })?.response?.data;
-  if (typeof data === "string") return data;
-  if (data && typeof data === "object") {
-    const detail = (data as { detail?: unknown }).detail;
-    if (typeof detail === "string") return detail;
-    const parts = Object.values(data as Record<string, unknown>)
-      .flatMap((v) => (Array.isArray(v) ? v : [v]))
-      .map(String)
-      .filter(Boolean);
-    if (parts.length) return parts.join(" · ");
-  }
-  return fallback;
+  return apiErrorMessage(err, fallback);
 }
 
 export function AdminBusinessReferentialsPage() {

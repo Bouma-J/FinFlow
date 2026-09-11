@@ -1,19 +1,71 @@
 import { useQuery } from "@tanstack/react-query";
-import { Download, FolderOpen, Search } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Download, FolderOpen } from "lucide-react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type { DocumentCategory, GedDocument, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
-  Card,
+  PERM_ADMIN_REFERENTIALS,
+  PERM_CLIENTS,
+  PERM_COLLECTIONS,
+  PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_FORMALIZATIONS,
+  PERM_GUARANTEES,
+  PERM_LITIGATION,
+  PERM_RELEASES,
+  PERM_SURETIES,
+} from "@/auth/routePerms";
+import {
+  ClientFilterBanner,
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  OfficerFilter,
+  SearchInput,
+  countActive,
+  useClientSearchParam,
+} from "@/components/ListFilters";
+import { PermLink } from "@/components/PermLink";
+import {
   PageHeader,
   PaginationBar,
   QueryStatus,
   TenantScopeNotice,
   formatDate,
 } from "@/components/ui";
+
+const RELATED_KIND_OPTIONS = [
+  ["", "Tous les modules"],
+  ["CREDIT", "Dossier"],
+  ["CLIENT", "Client"],
+  ["GUARANTEE", "Garantie"],
+  ["SURETY", "Caution"],
+  ["DATION", "Dation"],
+  ["FORMALIZATION", "Formalisation"],
+  ["RELEASE", "Main levée"],
+  ["COLLECTION", "Recouvrement"],
+  ["LITIGATION", "Contentieux"],
+  ["LOAN", "Prêt"],
+  ["OTHER", "Autre"],
+] as const;
+
+const RELATED_KIND_LABELS: Record<string, string> = Object.fromEntries(
+  RELATED_KIND_OPTIONS.filter(([value]) => value).map(([value, label]) => [
+    value,
+    label,
+  ]),
+);
+
+const EXPIRY_OPTIONS = [
+  ["", "Toutes les échéances"],
+  ["expired", "Expirés"],
+  ["expiring", "Expirant ≤ 30 j"],
+  ["dated", "Avec date d'expiration"],
+  ["none", "Sans date d'expiration"],
+] as const;
 
 function formatBytes(n: number) {
   if (!n || n < 0) return "—";
@@ -33,26 +85,50 @@ function relatedHref(doc: GedDocument): string | null {
   if (t.includes("guaranteeformalizationrequest"))
     return `/formalisations/${doc.object_id}`;
   if (t.includes("collectioncase")) return `/recouvrement/${doc.object_id}`;
-  // litigationfile sans related_path : pas de caseId → pas de lien trompeur
-  if (t.includes("litigationfile")) return null;
+  if (t.includes("litigationfile")) return `/recouvrement`;
+  if (t === "clients.client" || t.endsWith(".client"))
+    return `/clients/${doc.object_id}`;
+  if (t.includes("surety") && !t.includes("engagement"))
+    return `/cautions/${doc.object_id}`;
   if (t.includes("guarantee") && !t.includes("request"))
     return `/garanties/${doc.object_id}`;
+  if (t.includes("loan")) return "/prets";
   return null;
+}
+
+function relatedPerms(href: string): readonly string[] | null {
+  if (href.startsWith("/dossiers")) return PERM_CREDITS;
+  if (href.startsWith("/mains-levees")) return PERM_RELEASES;
+  if (href.startsWith("/dations")) return PERM_DATIONS;
+  if (href.startsWith("/formalisations")) return PERM_FORMALIZATIONS;
+  if (href.includes("/contentieux/")) return PERM_LITIGATION;
+  if (href.startsWith("/recouvrement")) return PERM_COLLECTIONS;
+  if (href.startsWith("/garanties")) return PERM_GUARANTEES;
+  if (href.startsWith("/clients")) return PERM_CLIENTS;
+  if (href.startsWith("/cautions")) return PERM_SURETIES;
+  if (href.startsWith("/prets")) return PERM_CREDITS;
+  return null;
+}
+
+function relatedKindLabel(doc: GedDocument) {
+  if (doc.related_kind && RELATED_KIND_LABELS[doc.related_kind]) {
+    return RELATED_KIND_LABELS[doc.related_kind];
+  }
+  return doc.related_type || "—";
 }
 
 export function DocumentsPage() {
   const { user, activeTenant } = useAuth();
+  const { clientFilter, clearClientFilter } = useClientSearchParam();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
   const [category, setCategory] = useState("");
-  const [expiringOnly, setExpiringOnly] = useState(false);
-
-  useEffect(() => {
-    const t = setTimeout(() => setDebounced(search.trim()), 280);
-    return () => clearTimeout(t);
-  }, [search]);
+  const [relatedKind, setRelatedKind] = useState("");
+  const [expiry, setExpiry] = useState("");
+  const [uploadedBy, setUploadedBy] = useState("");
+  const [createdAfter, setCreatedAfter] = useState("");
+  const [createdBefore, setCreatedBefore] = useState("");
 
   const categories = useQuery({
     queryKey: ["document-categories", activeTenant],
@@ -70,193 +146,243 @@ export function DocumentsPage() {
       "ged-documents",
       activeTenant,
       page,
-      debounced,
+      search,
       category,
-      expiringOnly,
+      relatedKind,
+      expiry,
+      uploadedBy,
+      createdAfter,
+      createdBefore,
+      clientFilter,
     ],
-    queryFn: async () => {
-      if (expiringOnly) {
-        return (
-          await api.get<Paginated<GedDocument> | GedDocument[]>(
-            "/documents/expiring_soon/",
-            { params: { page, page_size: 25 } },
-          )
-        ).data;
-      }
-      return (
+    queryFn: async () =>
+      (
         await api.get<Paginated<GedDocument>>("/documents/", {
           params: {
             page,
             page_size: 25,
-            ...(debounced ? { search: debounced } : {}),
+            ...(search.trim() ? { search: search.trim() } : {}),
             ...(category ? { category } : {}),
+            ...(relatedKind ? { related_kind: relatedKind } : {}),
+            ...(expiry ? { expiry } : {}),
+            ...(uploadedBy ? { uploaded_by: uploadedBy } : {}),
+            ...(createdAfter ? { created_after: createdAfter } : {}),
+            ...(createdBefore ? { created_before: createdBefore } : {}),
+            ...(clientFilter ? { client: clientFilter } : {}),
           },
         })
-      ).data;
-    },
+      ).data,
     enabled: !needsTenant,
   });
+
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
 
   if (needsTenant) {
     return (
       <div className="page-shell">
         <PageHeader
           icon={FolderOpen}
-          title="GED"
-          subtitle="Consultation des documents"
+          title="GED — Documents"
+          subtitle="Consultation unifiée de tous les modules"
         />
         <TenantScopeNotice />
       </div>
     );
   }
 
-  const results: GedDocument[] = Array.isArray(docs.data)
-    ? docs.data
-    : (docs.data?.results ?? []);
-  const count = Array.isArray(docs.data)
-    ? docs.data.length
-    : (docs.data?.count ?? 0);
+  const results = docs.data?.results ?? [];
+  const count = docs.data?.count ?? 0;
 
   return (
-    <div>
+    <div className="page-shell">
       <PageHeader
         icon={FolderOpen}
         title="GED — Documents"
-        subtitle="Consultation unifiée (crédits, formalisations, mains levées, dations, contentieux)"
+        subtitle="Consultation unifiée (clients, dossiers, garanties, cautions, formalisations, mains levées, dations, recouvrement, contentieux)"
       />
 
-      <Card title="Filtres">
-        <div className="form-grid" style={{ alignItems: "end" }}>
-          <label className="field">
-            <span>
-              <Search size={13} style={{ verticalAlign: "-2px", marginRight: 4 }} />
-              Recherche
-            </span>
-            <input
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Nom de fichier, catégorie…"
-            />
-          </label>
-          <label className="field">
-            <span>Catégorie</span>
-            <select
-              value={category}
-              disabled={expiringOnly}
-              onChange={(e) => {
-                setCategory(e.target.value);
-                setPage(1);
-              }}
-            >
-              <option value="">Toutes</option>
-              {(categories.data?.results ?? []).map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} — {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Expirant ≤ 30 j</span>
-            <input
-              type="checkbox"
-              checked={expiringOnly}
-              onChange={(e) => {
-                setExpiringOnly(e.target.checked);
-                setPage(1);
-              }}
-            />
-          </label>
-        </div>
-        <p className="muted small" style={{ marginTop: 10 }}>
-          Les catégories se paramètrent dans{" "}
-          <Link to="/admin/referentiels-metier">Référentiels métier</Link>.
-          Les pièces dossier sont aussi indexées ici à l&apos;upload.
-        </p>
-      </Card>
-
-      <Card title="Documents">
-        <QueryStatus
-          isLoading={docs.isLoading}
-          isError={docs.isError}
-          isEmpty={results.length === 0}
-          emptyMessage="Aucun document dans la GED pour ces filtres."
-          onRetry={() => docs.refetch()}
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={setFilter(setSearch)}
+            placeholder="Nom de fichier, catégorie, déposant…"
+          />
+        }
+        activeCount={countActive(
+          search,
+          category,
+          relatedKind,
+          expiry,
+          uploadedBy,
+          createdAfter,
+          createdBefore,
+          clientFilter,
+        )}
+        onReset={() => {
+          setSearch("");
+          setCategory("");
+          setRelatedKind("");
+          setExpiry("");
+          setUploadedBy("");
+          setCreatedAfter("");
+          setCreatedBefore("");
+          setPage(1);
+          if (clientFilter) clearClientFilter();
+        }}
+      >
+        <FilterField label="Module" active={!!relatedKind}>
+          <FilterSelect
+            value={relatedKind}
+            onChange={setFilter(setRelatedKind)}
+          >
+            {RELATED_KIND_OPTIONS.map(([value, label]) => (
+              <option key={value || "all"} value={value}>
+                {label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Catégorie" active={!!category}>
+          <FilterSelect value={category} onChange={setFilter(setCategory)}>
+            <option value="">Toutes les catégories</option>
+            {(categories.data?.results ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.code} — {c.label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Expiration" active={!!expiry}>
+          <FilterSelect value={expiry} onChange={setFilter(setExpiry)}>
+            {EXPIRY_OPTIONS.map(([value, label]) => (
+              <option key={value || "all"} value={value}>
+                {label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <OfficerFilter
+          value={uploadedBy}
+          onChange={setFilter(setUploadedBy)}
+          label="Déposé par"
+          emptyLabel="Tous les déposants"
+        />
+        <FilterField label="Déposé du" active={!!createdAfter}>
+          <input
+            type="date"
+            value={createdAfter}
+            onChange={(e) => setFilter(setCreatedAfter)(e.target.value)}
+          />
+        </FilterField>
+        <FilterField label="jusqu'au" active={!!createdBefore}>
+          <input
+            type="date"
+            value={createdBefore}
+            onChange={(e) => setFilter(setCreatedBefore)(e.target.value)}
+          />
+        </FilterField>
+      </ListFilters>
+      <ClientFilterBanner
+        clientId={clientFilter}
+        onClear={() => {
+          clearClientFilter();
+          setPage(1);
+        }}
+      />
+      <p className="muted small" style={{ marginTop: 8, marginBottom: 16 }}>
+        Les catégories se paramètrent dans{" "}
+        <PermLink
+          user={user}
+          anyOf={PERM_ADMIN_REFERENTIALS}
+          to="/admin/referentiels-metier"
         >
-          <>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Nom</th>
-                  <th>Catégorie</th>
-                  <th>Rattaché à</th>
-                  <th>Taille</th>
-                  <th>Créé le</th>
-                  <th>Expire</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {results.map((d) => {
-                  const href = relatedHref(d);
-                  const url = d.file_url || d.file;
-                  return (
-                    <tr key={d.id}>
-                      <td>
-                        <strong>{d.name}</strong>
-                        {d.uploaded_by_name ? (
-                          <div className="muted small">{d.uploaded_by_name}</div>
-                        ) : null}
-                      </td>
-                      <td>
-                        <code>{d.category_code || "—"}</code>
-                        <div className="muted small">{d.category_label}</div>
-                      </td>
-                      <td>
-                        {href && d.related_label ? (
-                          <Link to={href}>{d.related_label}</Link>
+          Référentiels métier
+        </PermLink>
+        . Les pièces dossier sont aussi indexées ici à l&apos;upload.
+      </p>
+
+      <QueryStatus
+        isLoading={docs.isLoading}
+        isError={docs.isError}
+        isEmpty={results.length === 0}
+        emptyMessage="Aucun document dans la GED pour ces filtres."
+        onRetry={() => docs.refetch()}
+      >
+        <>
+          <table className="table card">
+            <thead>
+              <tr>
+                <th>Nom</th>
+                <th>Catégorie</th>
+                <th>Module</th>
+                <th>Rattaché à</th>
+                <th>Taille</th>
+                <th>Créé le</th>
+                <th>Expire</th>
+                <th />
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((d) => {
+                const href = relatedHref(d);
+                const hrefPerms = href ? relatedPerms(href) : null;
+                const url = d.file_url || d.file;
+                return (
+                  <tr key={d.id}>
+                    <td>
+                      <strong>{d.name}</strong>
+                      {d.uploaded_by_name ? (
+                        <div className="muted small">{d.uploaded_by_name}</div>
+                      ) : null}
+                    </td>
+                    <td>
+                      <code>{d.category_code || "—"}</code>
+                      <div className="muted small">{d.category_label}</div>
+                    </td>
+                    <td>{relatedKindLabel(d)}</td>
+                    <td>
+                      {href && d.related_label ? (
+                        hrefPerms ? (
+                          <PermLink user={user} anyOf={hrefPerms} to={href}>
+                            {d.related_label}
+                          </PermLink>
                         ) : (
-                          d.related_label || (
-                            <span className="muted">—</span>
-                          )
-                        )}
-                      </td>
-                      <td>{formatBytes(d.size_bytes)}</td>
-                      <td>{formatDate(d.created_at)}</td>
-                      <td>
-                        {d.expiry_date ? formatDate(d.expiry_date) : "—"}
-                      </td>
-                      <td>
-                        {url ? (
-                          <a
-                            className="btn btn-ghost btn-sm"
-                            href={url}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            <Download size={14} />
-                            Ouvrir
-                          </a>
-                        ) : null}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {!expiringOnly && (
-              <PaginationBar
-                page={page}
-                count={count}
-                onPageChange={setPage}
-              />
-            )}
-          </>
-        </QueryStatus>
-      </Card>
+                          <Link to={href}>{d.related_label}</Link>
+                        )
+                      ) : (
+                        d.related_label || <span className="muted">—</span>
+                      )}
+                    </td>
+                    <td>{formatBytes(d.size_bytes)}</td>
+                    <td>{formatDate(d.created_at)}</td>
+                    <td>{d.expiry_date ? formatDate(d.expiry_date) : "—"}</td>
+                    <td>
+                      {url ? (
+                        <a
+                          className="btn btn-ghost btn-sm"
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          <Download size={14} />
+                          Ouvrir
+                        </a>
+                      ) : null}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <PaginationBar page={page} count={count} onPageChange={setPage} />
+        </>
+      </QueryStatus>
     </div>
   );
 }

@@ -6,6 +6,11 @@ import { api } from "@/api/client";
 import type { DashboardData } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
+  FilterField,
+  FilterSelect,
+  ListFilters,
+} from "@/components/ListFilters";
+import {
   ErrorState,
   PageHeader,
   Spinner,
@@ -111,21 +116,17 @@ export function GroupConsolidationPage() {
         />
       </div>
 
-      <div className="filters-bar" style={{ marginBottom: 12 }}>
-        <label>
-          Axe{" "}
-          <select
-            value={dimension}
-            onChange={(e) => setDimension(e.target.value)}
-          >
+      <ListFilters>
+        <FilterField label="Axe" active>
+          <FilterSelect value={dimension} onChange={setDimension}>
             {DIMENSIONS.map((d) => (
               <option key={d.value} value={d.value}>
                 {d.label}
               </option>
             ))}
-          </select>
-        </label>
-      </div>
+          </FilterSelect>
+        </FilterField>
+      </ListFilters>
 
       {breakdown.isLoading ? (
         <Spinner />

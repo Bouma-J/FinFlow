@@ -7,22 +7,38 @@ import {
   ClipboardCheck,
   FileText,
   Layers,
-  RotateCcw,
-  Search,
   User,
   UserCircle,
-  X,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "@/api/client";
-import type { MyDossierRow } from "@/api/types";
+import type { MyDossierRow, Paginated } from "@/api/types";
+import { useAuth } from "@/auth/AuthContext";
+import { hasAnyPerm } from "@/auth/permissions";
+import {
+  PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_FORMALIZATIONS,
+  PERM_RELEASES,
+} from "@/auth/routePerms";
+import {
+  FilterField,
+  FilterSelect,
+  FilterToggle,
+  ListFilters,
+  OfficerFilter,
+  SearchInput,
+  countActive,
+} from "@/components/ListFilters";
 import {
   Badge,
   EmptyState,
   PageHeader,
+  PaginationBar,
   QueryStatus,
+  TenantScopeNotice,
   formatDate,
   formatMoney,
 } from "@/components/ui";
@@ -35,90 +51,96 @@ const MY_TASK_LABELS: Record<string, string> = {
   SKIPPED: "Ignoré",
 };
 
-function clientKind(t: MyDossierRow["client_type"]): "particulier" | "entreprise" {
-  return t === "INDIVIDUAL" ? "particulier" : "entreprise";
+type DossiersPage = Paginated<MyDossierRow> & { actionable_count?: number };
+
+const TASK_STATUS_OPTIONS = [
+  ["", "Tous"],
+  ["DRAFT", "Brouillon"],
+  ["SUBMITTED", "Soumis"],
+  ["IN_PROGRESS", "En cours"],
+  ["IN_APPROVAL", "En cours d'approbation"],
+  ["APPROVED", "Approuvé"],
+  ["REJECTED", "Rejeté"],
+  ["RETURNED", "Retourné"],
+  ["COMPLETED", "Clôturé"],
+  ["DISBURSED", "Décaissé"],
+  ["CANCELLED", "Annulé"],
+  ["BLOCKED", "Bloqué"],
+] as const;
+
+function taskHref(row: MyDossierRow): string {
+  return row.detail_path || `/dossiers/${row.id}`;
+}
+
+function canOpenTask(user: ReturnType<typeof useAuth>["user"], href: string) {
+  if (href.startsWith("/formalisations"))
+    return hasAnyPerm(user, PERM_FORMALIZATIONS);
+  if (href.startsWith("/dations")) return hasAnyPerm(user, PERM_DATIONS);
+  if (href.startsWith("/mains-levees")) return hasAnyPerm(user, PERM_RELEASES);
+  if (href.startsWith("/dossiers")) return hasAnyPerm(user, PERM_CREDITS);
+  return true;
 }
 
 export function TasksPage() {
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ["my-dossiers"],
-    queryFn: async () =>
-      (await api.get<{ results: MyDossierRow[] }>("/approval-tasks/my_dossiers/"))
-        .data,
-  });
-
+  const { user, activeTenant } = useAuth();
+  const needsTenant = Boolean(user?.is_group_level && !activeTenant);
+  const [page, setPage] = useState(1);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [kindFilter, setKindFilter] = useState("");
   const [clientTypeFilter, setClientTypeFilter] = useState("");
   const [initiatorFilter, setInitiatorFilter] = useState("");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [onlyActionable, setOnlyActionable] = useState(false);
 
-  const rows = useMemo(() => data?.results ?? [], [data]);
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
 
-  const statusOptions = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const r of rows) if (r.status) map.set(r.status, r.status_display);
-    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
-  }, [rows]);
+  const { data, isLoading, isError, refetch } = useQuery({
+    queryKey: [
+      "my-dossiers",
+      activeTenant,
+      page,
+      query,
+      statusFilter,
+      kindFilter,
+      clientTypeFilter,
+      initiatorFilter,
+      dateFrom,
+      dateTo,
+      onlyActionable,
+    ],
+    queryFn: async () =>
+      (
+        await api.get<DossiersPage>("/approval-tasks/my_dossiers/", {
+          params: {
+            page,
+            ...(query.trim() ? { search: query.trim() } : {}),
+            ...(statusFilter ? { status: statusFilter } : {}),
+            ...(kindFilter ? { target_kind: kindFilter } : {}),
+            ...(clientTypeFilter ? { client_type: clientTypeFilter } : {}),
+            ...(initiatorFilter ? { gestionnaire: initiatorFilter } : {}),
+            ...(dateFrom ? { created_after: dateFrom } : {}),
+            ...(dateTo ? { created_before: dateTo } : {}),
+            ...(onlyActionable ? { actionable: 1 } : {}),
+          },
+        })
+      ).data,
+    enabled: !needsTenant,
+  });
 
-  const initiatorOptions = useMemo(() => {
-    const seen = new Set<string>();
-    for (const r of rows) if (r.created_by_display) seen.add(r.created_by_display);
-    return Array.from(seen).sort();
-  }, [rows]);
-
-  const actionableCount = useMemo(
-    () => rows.filter((r) => r.is_actionable).length,
-    [rows],
-  );
-
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    const from = dateFrom ? new Date(dateFrom) : null;
-    const to = dateTo ? new Date(`${dateTo}T23:59:59`) : null;
-    return rows.filter((r) => {
-      if (onlyActionable && !r.is_actionable) return false;
-      if (statusFilter && r.status !== statusFilter) return false;
-      if (clientTypeFilter && clientKind(r.client_type) !== clientTypeFilter)
-        return false;
-      if (initiatorFilter && r.created_by_display !== initiatorFilter)
-        return false;
-      if ((from || to) && r.created_at) {
-        const d = new Date(r.created_at);
-        if (from && d < from) return false;
-        if (to && d > to) return false;
-      }
-      if (!q) return true;
-      const haystack = [
-        r.reference,
-        r.client_display,
-        r.product_label,
-        r.created_by_display,
-        r.definition_name,
-        r.current_step_name,
-        r.my_step_name,
-      ]
-        .filter(Boolean)
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(q);
-    });
-  }, [
-    rows,
-    query,
-    statusFilter,
-    clientTypeFilter,
-    initiatorFilter,
-    dateFrom,
-    dateTo,
-    onlyActionable,
-  ]);
+  const rows = data?.results ?? [];
+  const actionableCount = data?.actionable_count ?? 0;
 
   const hasFilters =
     !!query ||
     !!statusFilter ||
+    !!kindFilter ||
     !!clientTypeFilter ||
     !!initiatorFilter ||
     !!dateFrom ||
@@ -128,11 +150,13 @@ export function TasksPage() {
   function resetFilters() {
     setQuery("");
     setStatusFilter("");
+    setKindFilter("");
     setClientTypeFilter("");
     setInitiatorFilter("");
     setDateFrom("");
     setDateTo("");
     setOnlyActionable(false);
+    setPage(1);
   }
 
   return (
@@ -142,139 +166,123 @@ export function TasksPage() {
         title="Mes validations"
         subtitle="Tous les dossiers de vos niveaux de validation"
       />
+      {needsTenant && <TenantScopeNotice />}
+      <ListFilters
+        search={
+          <SearchInput
+            value={query}
+            onChange={setFilter(setQuery)}
+            placeholder="Référence, client, produit, initiateur, étape…"
+          />
+        }
+        activeCount={countActive(
+          query,
+          statusFilter,
+          kindFilter,
+          clientTypeFilter,
+          initiatorFilter,
+          dateFrom,
+          dateTo,
+          onlyActionable,
+        )}
+        onReset={resetFilters}
+        extra={
+          <>
+            <FilterToggle
+              label={
+                <>
+                  <Bell size={14} />À traiter ({actionableCount})
+                </>
+              }
+              checked={onlyActionable}
+              onChange={setFilter(setOnlyActionable)}
+              title="N'afficher que les dossiers en attente de mon action"
+            />
+            <span className="toolbar-count">
+              {data?.count ?? rows.length} dossier(s)
+            </span>
+          </>
+        }
+      >
+        <FilterField label="Type de dossier" active={!!kindFilter}>
+          <FilterSelect
+            value={kindFilter}
+            onChange={setFilter(setKindFilter)}
+          >
+            <option value="">Tous</option>
+            <option value="CREDIT">Crédit</option>
+            <option value="MAIN_LEVEE">Main levée</option>
+            <option value="DATION">Dation</option>
+            <option value="FORMALISATION">Formalisation</option>
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Statut" active={!!statusFilter}>
+          <FilterSelect
+            value={statusFilter}
+            onChange={setFilter(setStatusFilter)}
+          >
+            {TASK_STATUS_OPTIONS.map(([value, label]) => (
+              <option key={value || "all"} value={value}>
+                {label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Type de client" active={!!clientTypeFilter}>
+          <FilterSelect
+            value={clientTypeFilter}
+            onChange={setFilter(setClientTypeFilter)}
+          >
+            <option value="">Tous</option>
+            <option value="particulier">Particulier</option>
+            <option value="groupement">Groupement</option>
+            <option value="entreprise">Entreprise</option>
+          </FilterSelect>
+        </FilterField>
+        <OfficerFilter
+          value={initiatorFilter}
+          onChange={setFilter(setInitiatorFilter)}
+        />
+        <FilterField label="Créé du" active={!!dateFrom}>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => setFilter(setDateFrom)(e.target.value)}
+          />
+        </FilterField>
+        <FilterField label="au" active={!!dateTo}>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => setFilter(setDateTo)(e.target.value)}
+          />
+        </FilterField>
+      </ListFilters>
+
       <QueryStatus
         isLoading={isLoading}
         isError={isError}
-        isEmpty={rows.length === 0}
+        isEmpty={!hasFilters && rows.length === 0}
         emptyMessage="Aucun dossier ne concerne vos niveaux de validation."
         onRetry={() => refetch()}
       >
         <>
-          <div className="valid-filters">
-            <div className="list-toolbar">
-              <div className="toolbar-search">
-                <Search size={16} />
-                <input
-                  type="text"
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Rechercher (référence, client, produit, initiateur, étape)…"
-                />
-                {query && (
-                  <button
-                    type="button"
-                    className="toolbar-clear"
-                    aria-label="Effacer la recherche"
-                    onClick={() => setQuery("")}
-                  >
-                    <X size={15} />
-                  </button>
-                )}
-              </div>
-              <button
-                type="button"
-                className={`chip-toggle${onlyActionable ? " is-on" : ""}`}
-                onClick={() => setOnlyActionable((v) => !v)}
-                title="N'afficher que les dossiers en attente de mon action"
-              >
-                <Bell size={14} />À traiter ({actionableCount})
-              </button>
-            </div>
-
-            <div className="filter-row">
-              <label className="filter-field">
-                <span>Statut</span>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => setStatusFilter(e.target.value)}
-                >
-                  <option value="">Tous</option>
-                  {statusOptions.map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="filter-field">
-                <span>Type de client</span>
-                <select
-                  value={clientTypeFilter}
-                  onChange={(e) => setClientTypeFilter(e.target.value)}
-                >
-                  <option value="">Tous</option>
-                  <option value="particulier">Particulier</option>
-                  <option value="entreprise">Entreprise</option>
-                </select>
-              </label>
-
-              <label className="filter-field">
-                <span>Initiateur</span>
-                <select
-                  value={initiatorFilter}
-                  onChange={(e) => setInitiatorFilter(e.target.value)}
-                >
-                  <option value="">Tous</option>
-                  {initiatorOptions.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-
-              <label className="filter-field">
-                <span>Créé du</span>
-                <input
-                  type="date"
-                  value={dateFrom}
-                  onChange={(e) => setDateFrom(e.target.value)}
-                />
-              </label>
-
-              <label className="filter-field">
-                <span>au</span>
-                <input
-                  type="date"
-                  value={dateTo}
-                  onChange={(e) => setDateTo(e.target.value)}
-                />
-              </label>
-
-              {hasFilters && (
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm filter-reset"
-                  onClick={resetFilters}
-                >
-                  <RotateCcw size={14} />
-                  Réinitialiser
-                </button>
-              )}
-              <span className="toolbar-count">
-                {filtered.length} / {rows.length} dossier(s)
-              </span>
-            </div>
-          </div>
-
-          {filtered.length === 0 ? (
+          {rows.length === 0 ? (
             <EmptyState message="Aucun dossier ne correspond à vos critères." />
           ) : (
             <div className="valid-grid">
-              {filtered.map((r) => {
+              {rows.map((r) => {
                 const overdue =
                   r.is_actionable &&
                   !!r.my_task_due_at &&
                   new Date(r.my_task_due_at) < new Date();
-                return (
-                  <Link
-                    key={`${r.target_kind || "CREDIT"}-${r.id}`}
-                    to={r.detail_path || `/dossiers/${r.id}`}
-                    className={`valid-card${r.is_actionable ? " is-actionable" : ""}${
-                      overdue ? " is-overdue" : ""
-                    }`}
-                  >
+                const href = taskHref(r);
+                const openable = canOpenTask(user, href);
+                const cardClass = `valid-card${r.is_actionable ? " is-actionable" : ""}${
+                  overdue ? " is-overdue" : ""
+                }`;
+                const body = (
+                  <>
                     <div className="valid-card-top">
                       <span className="valid-ref">
                         <FileText size={15} />
@@ -293,8 +301,15 @@ export function TasksPage() {
                     </div>
 
                     <div className="valid-amount">
-                      {formatMoney(r.amount_requested, r.currency || "XOF")}
-                      <small>{r.product_label || "Montant demandé"}</small>
+                      {formatMoney(
+                        r.amount_proposed || r.amount_requested,
+                        r.currency || "XOF",
+                      )}
+                      <small>
+                        {r.amount_proposed
+                          ? r.product_label || "Montant proposé"
+                          : r.product_label || "Montant demandé"}
+                      </small>
                     </div>
 
                     <div className="valid-meta">
@@ -327,16 +342,39 @@ export function TasksPage() {
                       ) : (
                         <Badge value="SUBMITTED" label="En amont" />
                       )}
-                      <span className="valid-open">
-                        Ouvrir le dossier
-                        <ArrowRight size={16} />
-                      </span>
+                      {openable && (
+                        <span className="valid-open">
+                          Ouvrir le dossier
+                          <ArrowRight size={16} />
+                        </span>
+                      )}
                     </div>
+                  </>
+                );
+                return openable ? (
+                  <Link
+                    key={`${r.target_kind || "CREDIT"}-${r.id}`}
+                    to={href}
+                    className={cardClass}
+                  >
+                    {body}
                   </Link>
+                ) : (
+                  <div
+                    key={`${r.target_kind || "CREDIT"}-${r.id}`}
+                    className={cardClass}
+                  >
+                    {body}
+                  </div>
                 );
               })}
             </div>
           )}
+          <PaginationBar
+            page={page}
+            count={data?.count ?? 0}
+            onPageChange={setPage}
+          />
         </>
       </QueryStatus>
     </div>

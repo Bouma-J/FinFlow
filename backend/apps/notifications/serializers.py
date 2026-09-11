@@ -40,6 +40,8 @@ class TenantNotificationSettingsSerializer(serializers.ModelSerializer):
             "notify_on_return",
             "notify_collection_email",
             "notify_collection_sms",
+            "notify_collection_transfer",
+            "notify_collection_dialogue",
             "from_email",
             "reply_to",
             "cc_tenant_email",

@@ -2,13 +2,33 @@
 from __future__ import annotations
 
 
+def assert_surety_generation(template, engagement_id) -> None:
+    """Un cautionnement se génère depuis l'engagement, pas depuis le dossier."""
+    from rest_framework.exceptions import ValidationError
+
+    from .models import ContractCategory
+
+    if (
+        getattr(template, "category", "") == ContractCategory.SURETY
+        and not engagement_id
+    ):
+        raise ValidationError(
+            {
+                "surety_engagement": (
+                    "Générez le cautionnement depuis la fiche de la caution, "
+                    "pas depuis le dossier."
+                )
+            }
+        )
+
+
 def required_templates_for(application):
     """Modèles obligatoires (actifs) applicables à un dossier donné."""
-    from .models import ContractTemplate
+    from .models import ContractCategory, ContractTemplate
 
     templates = ContractTemplate.all_tenants.filter(
         tenant_id=application.tenant_id, is_active=True, is_required=True
-    ).select_related("product")
+    ).exclude(category=ContractCategory.SURETY).select_related("product")
     return [t for t in templates if t.applies_to_application(application)]
 
 

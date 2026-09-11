@@ -9,11 +9,13 @@ import {
   History,
   Images,
   Info,
+  CircleDollarSign,
   Landmark,
   ShieldCheck,
   ShieldOff,
   Stamp,
   Trash2,
+  Unlock,
   UploadCloud,
   User,
   type LucideIcon,
@@ -29,7 +31,17 @@ import {
   type Paginated,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { hasPerm } from "@/auth/permissions";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import {
+  PERM_CLIENTS,
+  PERM_COLLECTIONS,
+  PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_FORMALIZATIONS,
+  PERM_RELEASES,
+  PERM_SURETIES,
+} from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
 import {
   Badge,
   Card,
@@ -160,7 +172,13 @@ export function GuaranteeDetailPage({
     );
   }
 
-  const backTo = appId ? `/dossiers/${appId}` : "/garanties";
+  const canViewFormalizations = hasAnyPerm(user, PERM_FORMALIZATIONS);
+  const canViewDations = hasAnyPerm(user, PERM_DATIONS);
+  const canViewReleases = hasAnyPerm(user, PERM_RELEASES);
+  const canViewCollections = hasAnyPerm(user, PERM_COLLECTIONS);
+  const canViewCredits = hasAnyPerm(user, PERM_CREDITS);
+  const backTo =
+    appId && canViewCredits ? `/dossiers/${appId}` : "/garanties";
   const isMortgage = g.guarantee_type === "MORTGAGE";
   const isPledge = g.guarantee_type === "PLEDGE";
   const isVehicle = isPledge && g.pledge_category === "VEHICLE";
@@ -171,17 +189,32 @@ export function GuaranteeDetailPage({
   const movements = g.movements ?? [];
   const canEdit = manageable && hasPerm(user, "guarantees.change_guarantee");
   const canDelete = manageable && hasPerm(user, "guarantees.delete_guarantee");
+  const busy = g.process_busy ?? null;
   const canRelease =
     g.status === "ACTIVE" &&
+    !busy &&
     hasPerm(user, "guarantees.initiate_guaranteereleaserequest");
   const canFormalize =
     g.status === "ACTIVE" &&
     !!g.application &&
-    !openFormalization.data &&
+    !busy &&
     !g.formalized_at &&
     hasPerm(user, "guarantees.initiate_guaranteeformalizationrequest");
   const openFormId =
-    openFormalization.data?.id || g.open_formalization_id || null;
+    (busy?.kind === "FORMALIZATION" ? busy.id : null) ||
+    openFormalization.data?.id ||
+    g.open_formalization_id ||
+    null;
+  const openDationId =
+    (busy?.kind === "DATION" ? busy.id : null) || g.open_dation_id || null;
+  const openReleaseId =
+    (busy?.kind === "RELEASE" ? busy.id : null) || g.open_release_id || null;
+  const completedDationId = g.completed_dation_id || null;
+  const originDationId = g.origin_dation_id || null;
+  const canProposeDation =
+    g.status === "ACTIVE" &&
+    !busy &&
+    hasPerm(user, "guarantees.initiate_dationrequest");
 
   const scanEntries: { label: string; href: string | null }[] = [
     { label: "Scan du document", href: g.document_scan },
@@ -237,7 +270,12 @@ export function GuaranteeDetailPage({
               canDelete ||
               canRelease ||
               canFormalize ||
-              openFormId) && (
+              canProposeDation ||
+              (canViewFormalizations && openFormId) ||
+              (canViewDations &&
+                (openDationId || completedDationId || originDationId)) ||
+              (canViewReleases && openReleaseId) ||
+              (canViewCollections && g.collection_case_id)) && (
               <>
                 {canEdit && (
                   <Link
@@ -257,7 +295,7 @@ export function GuaranteeDetailPage({
                     Formaliser
                   </Link>
                 )}
-                {openFormId && (
+                {canViewFormalizations && openFormId && (
                   <Link
                     className="btn btn-ghost"
                     to={`/formalisations/${openFormId}`}
@@ -266,10 +304,71 @@ export function GuaranteeDetailPage({
                     Voir formalisation
                   </Link>
                 )}
+                {canViewCollections && g.collection_case_id && (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/recouvrement/${g.collection_case_id}`}
+                  >
+                    <CircleDollarSign />
+                    Recouvrement
+                    {g.collection_stage_display
+                      ? ` · ${g.collection_stage_display}`
+                      : ""}
+                  </Link>
+                )}
+                {canViewDations && openDationId && (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/dations/${openDationId}`}
+                  >
+                    <Unlock />
+                    Voir dation
+                  </Link>
+                )}
+                {canViewReleases && openReleaseId && (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/mains-levees/${openReleaseId}`}
+                  >
+                    <ShieldOff />
+                    Voir main levée
+                  </Link>
+                )}
+                {canViewDations && completedDationId && (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/dations/${completedDationId}`}
+                  >
+                    <Unlock />
+                    Voir la dation de réalisation
+                  </Link>
+                )}
+                {canViewDations && originDationId && (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/dations/${originDationId}`}
+                  >
+                    <Unlock />
+                    Dation d&apos;origine
+                  </Link>
+                )}
+                {canProposeDation && (
+                  <Link
+                    className="btn btn-ghost"
+                    to={`/dations/nouvelle?client=${g.client}&guarantee=${g.id}${
+                      g.application ? `&application=${g.application}` : ""
+                    }`}
+                  >
+                    <Unlock />
+                    Proposer dation
+                  </Link>
+                )}
                 {canRelease && (
                   <Link
                     className="btn btn-primary"
-                    to={`/mains-levees/nouvelle?client=${g.client}&guarantee=${g.id}`}
+                    to={`/mains-levees/nouvelle?client=${g.client}&guarantee=${g.id}${
+                      g.application ? `&application=${g.application}` : ""
+                    }`}
                   >
                     <ShieldOff />
                     Main levée
@@ -291,6 +390,21 @@ export function GuaranteeDetailPage({
         }
       />
 
+      {busy && (
+        <div className="callout" style={{ marginBottom: 12 }}>
+          {busy.message}{" "}
+          {busy.kind === "DATION" && canViewDations && (
+            <Link to={`/dations/${busy.id}`}>Voir la dation</Link>
+          )}
+          {busy.kind === "FORMALIZATION" && canViewFormalizations && (
+            <Link to={`/formalisations/${busy.id}`}>Voir la formalisation</Link>
+          )}
+          {busy.kind === "RELEASE" && canViewReleases && (
+            <Link to={`/mains-levees/${busy.id}`}>Voir la main levée</Link>
+          )}
+        </div>
+      )}
+
       <div className="client-banner">
         <div className="client-banner-info">
           <span className="client-banner-icon">
@@ -311,6 +425,12 @@ export function GuaranteeDetailPage({
                 <Badge value="IN_PROGRESS" label="Formalisation en cours" />
               )}
               {g.formalized_at && <Badge value="OK" label="Formalisée" />}
+              {completedDationId && (
+                <Badge value="REALIZED" label="Réalisée par dation" />
+              )}
+              {originDationId && (
+                <Badge value="DATION" label="Issue d'une dation" />
+              )}
               <span className="muted">
                 Valeur actualisée : {formatMoney(g.current_value)}
               </span>
@@ -344,9 +464,13 @@ export function GuaranteeDetailPage({
               term="Client"
               value={
                 g.client ? (
-                  <Link to={`/clients/${g.client}`}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CLIENTS}
+                    to={`/clients/${g.client}`}
+                  >
                     {g.client_display || "Voir le client"}
-                  </Link>
+                  </PermLink>
                 ) : (
                   g.client_display
                 )
@@ -356,9 +480,99 @@ export function GuaranteeDetailPage({
               term="Dossier de crédit"
               value={
                 g.application ? (
-                  <Link to={`/dossiers/${g.application}`}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    to={`/dossiers/${g.application}`}
+                  >
                     {g.application_reference || "Voir le dossier"}
-                  </Link>
+                  </PermLink>
+                ) : undefined
+              }
+            />
+            <Row
+              term="Recouvrement"
+              value={
+                g.collection_case_id ? (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_COLLECTIONS}
+                    to={`/recouvrement/${g.collection_case_id}`}
+                  >
+                    {g.collection_stage_display || "Voir le dossier"}
+                  </PermLink>
+                ) : undefined
+              }
+            />
+            <Row
+              term="Formalisation"
+              value={
+                openFormId ? (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_FORMALIZATIONS}
+                    to={`/formalisations/${openFormId}`}
+                  >
+                    En cours
+                  </PermLink>
+                ) : g.formalized_at ? (
+                  "Formalisée"
+                ) : undefined
+              }
+            />
+            <Row
+              term="Main levée"
+              value={
+                openReleaseId ? (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_RELEASES}
+                    to={`/mains-levees/${openReleaseId}`}
+                  >
+                    En cours
+                  </PermLink>
+                ) : undefined
+              }
+            />
+            <Row
+              term="Dation en cours"
+              value={
+                openDationId ? (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_DATIONS}
+                    to={`/dations/${openDationId}`}
+                  >
+                    Voir la dation
+                  </PermLink>
+                ) : undefined
+              }
+            />
+            <Row
+              term="Réalisée par"
+              value={
+                completedDationId ? (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_DATIONS}
+                    to={`/dations/${completedDationId}`}
+                  >
+                    Voir la dation
+                  </PermLink>
+                ) : undefined
+              }
+            />
+            <Row
+              term="Issue de la dation"
+              value={
+                originDationId ? (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_DATIONS}
+                    to={`/dations/${originDationId}`}
+                  >
+                    Voir la dation
+                  </PermLink>
                 ) : undefined
               }
             />
@@ -437,6 +651,7 @@ export function GuaranteeDetailPage({
             />
             <Row term="Cabinet d'expertise" value={g.expertise_firm} />
             <Row term="Nom de l'expert" value={g.expert_name} />
+            <Row term="Référence du rapport" value={g.expertise_reference} />
             <Row term="Bien assuré" value={g.is_insured ? "Oui" : "Non"} />
             <Row term="Réf. assurance" value={g.insurance_reference} />
           </dl>
@@ -453,9 +668,13 @@ export function GuaranteeDetailPage({
                 term="Caution (propriétaire)"
                 value={
                   g.surety ? (
-                    <Link to={`/cautions/${g.surety}`}>
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_SURETIES}
+                      to={`/cautions/${g.surety}`}
+                    >
                       {g.surety_display || "Voir la caution"}
-                    </Link>
+                    </PermLink>
                   ) : (
                     g.surety_display
                   )
@@ -533,6 +752,12 @@ export function GuaranteeDetailPage({
                   g.document_issue_date && formatDate(g.document_issue_date)
                 }
               />
+              <Row
+                term="Date de validité"
+                value={
+                  g.document_validity_date && formatDate(g.document_validity_date)
+                }
+              />
               <Row term="Adresse du bien" value={g.address} />
               <Row
                 term="Statut d'occupation"
@@ -550,6 +775,27 @@ export function GuaranteeDetailPage({
           <Section icon={Car} title="Moyen roulant">
             <dl className="def-list two">
               <Row term="Numéro de châssis" value={g.chassis_number} />
+              <Row
+                term="Type de document"
+                value={
+                  g.document_type
+                    ? lbl(GUARANTEE_LABELS.document_type, g.document_type)
+                    : undefined
+                }
+              />
+              <Row term="Numéro du document" value={g.document_number} />
+              <Row
+                term="Date d'établissement"
+                value={
+                  g.document_issue_date && formatDate(g.document_issue_date)
+                }
+              />
+              <Row
+                term="Date de validité"
+                value={
+                  g.document_validity_date && formatDate(g.document_validity_date)
+                }
+              />
               <Row term="Numéro du moteur" value={g.engine_number} />
               <Row term="Marque" value={g.brand} />
               <Row term="Modèle" value={g.model_name} />

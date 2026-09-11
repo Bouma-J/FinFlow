@@ -12,7 +12,7 @@ from apps.common.tenancy import get_current_tenant_id
 from apps.common.viewsets import TenantScopedViewSet
 
 from .context import LOOP_HELP, VARIABLE_CATALOG, build_context
-from .models import ContractTemplate, GeneratedContract
+from .models import ContractCategory, ContractTemplate, GeneratedContract
 from .rendering import ContractRenderError, render_template
 from .serializers import (
     ContractTemplateSerializer,
@@ -31,8 +31,8 @@ def _get_application(application_id):
     tenant_id = require_tenant_id()
     try:
         return CreditApplication.all_tenants.select_related(
-            "client", "product", "agency", "tenant"
-        ).get(pk=application_id, tenant_id=tenant_id)
+            "client", "client__agency", "product", "agency", "tenant"
+        ).prefetch_related("client__phones").get(pk=application_id, tenant_id=tenant_id)
     except (CreditApplication.DoesNotExist, ValueError, TypeError, ValidationError):
         raise Http404("Dossier introuvable.")
 
@@ -67,6 +67,8 @@ class ContractTemplateViewSet(TenantScopedViewSet):
         }
         result = []
         for tpl in self.get_queryset().filter(is_active=True):
+            if tpl.category == ContractCategory.SURETY:
+                continue
             if not tpl.applies_to_application(application):
                 continue
             gc = generated.get(tpl.id)
@@ -136,6 +138,9 @@ class GeneratedContractViewSet(TenantScopedViewSet):
         extra_values = data.get("extra_values") or {}
         primary_engagement = None
         engagement_id = data.get("surety_engagement")
+        from .services import assert_surety_generation
+
+        assert_surety_generation(template, engagement_id)
         if engagement_id:
             from apps.sureties.models import SuretyEngagement
 

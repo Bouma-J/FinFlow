@@ -9,6 +9,7 @@ implémenter `send` et les opérations métier normalisées.
 from __future__ import annotations
 
 import logging
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
@@ -32,12 +33,14 @@ OP_GET_LOAN_STATUS = "GET_LOAN_STATUS"
 OP_GET_CLIENT_OUTSTANDING = "GET_CLIENT_OUTSTANDING"
 OP_GET_CLIENT_SITUATION = "GET_CLIENT_SITUATION"
 OP_SUBMIT_CREDIT = "SUBMIT_CREDIT"
+OP_LIST_OVERDUE_CREDITS = "LIST_OVERDUE_CREDITS"
 
 # Chemins Perfect API (modifiables via mapping_rules.endpoints).
 DEFAULT_AUTH_PATH = PERFECT_ENDPOINTS["authentification"]
 DEFAULT_ADH_SITUATION_PATH = PERFECT_ENDPOINTS["adh_situation"]
 DEFAULT_CRD_SIMPLE_PATH = PERFECT_ENDPOINTS["crd_simple"]
 DEFAULT_CRD_SITUATION_PATH = PERFECT_ENDPOINTS["crd_situation"]
+DEFAULT_CRD_IMPAYES_PATH = PERFECT_ENDPOINTS["crd_impayes"]
 
 
 class BaseAdapter:
@@ -72,6 +75,45 @@ class SimulatedAdapter(BaseAdapter):
 
         if operation == OP_GET_LOAN_STATUS:
             loan_ref = str(payload.get("loan_ref") or "").strip()
+            by_ref = simulate.get("loan_situation_by_ref") or {}
+            if loan_ref and loan_ref in by_ref:
+                raw = dict(by_ref[loan_ref])
+                raw.setdefault("responseCode", 200)
+                raw.setdefault("refDemande", loan_ref)
+                raw.setdefault("simulated", True)
+                settled, outstanding = _normalize_credit_schedule(raw)
+                overdue = compute_cbs_overdue(raw)
+                return {
+                    "status": "ACK",
+                    "settled": overdue["settled"],
+                    "outstanding": str(overdue["outstanding"] or outstanding),
+                    "days_overdue": overdue["days_overdue"],
+                    "overdue_amount": str(overdue["overdue_amount"]),
+                    "currency": payload.get("currency") or "XOF",
+                    "external_reference": f"CBS-LOAN-{loan_ref or 'NA'}",
+                    "schedule": raw.get("datas") or [],
+                    "raw": raw,
+                }
+            portfolio_row = _sim_portfolio_row_for_ref(simulate, loan_ref)
+            if portfolio_row is not None:
+                raw = _situation_from_portfolio_row(portfolio_row, loan_ref)
+                overdue = compute_cbs_overdue(raw)
+                return {
+                    "status": "ACK",
+                    "settled": overdue["settled"],
+                    "outstanding": str(overdue["outstanding"]),
+                    "days_overdue": overdue["days_overdue"],
+                    "overdue_amount": str(overdue["overdue_amount"]),
+                    "currency": payload.get("currency") or "XOF",
+                    "external_reference": f"CBS-LOAN-{loan_ref or 'NA'}",
+                    "num_demande": str(portfolio_row.get("numDemande") or ""),
+                    "ref_demande": str(
+                        portfolio_row.get("refDemande") or loan_ref
+                    ),
+                    "num_contrat": str(portfolio_row.get("numContrat") or ""),
+                    "schedule": raw.get("datas") or [],
+                    "raw": raw,
+                }
             unsettled = {
                 str(x).strip() for x in (simulate.get("loan_unsettled_refs") or [])
             }
@@ -86,34 +128,60 @@ class SimulatedAdapter(BaseAdapter):
             outstanding = Decimal("0") if settled else Decimal(
                 str(simulate.get("loan_outstanding_default", "100000"))
             )
+            overdue_days = int(simulate.get("loan_overdue_days_default") or 40)
+            due = date.today() - timedelta(days=overdue_days)
+            datas = (
+                []
+                if settled
+                else [
+                    {
+                        "echeance": 1,
+                        "date": due.isoformat(),
+                        "montantCapital": float(outstanding),
+                        "montantInteret": 0,
+                        "montantTotal": float(outstanding),
+                        "statut": "En attente",
+                    }
+                ]
+            )
+            raw = {
+                "simulated": True,
+                "loan_ref": loan_ref,
+                "responseCode": 200,
+                "refDemande": loan_ref,
+                "datas": datas,
+                "context": "CREDIT SITUATION",
+            }
+            overdue = compute_cbs_overdue(raw)
             return {
                 "status": "ACK",
-                "settled": settled,
+                "settled": overdue["settled"] if not settled else True,
                 "outstanding": str(outstanding),
+                "days_overdue": 0 if settled else overdue["days_overdue"],
+                "overdue_amount": "0" if settled else str(overdue["overdue_amount"]),
                 "currency": payload.get("currency") or "XOF",
                 "external_reference": f"CBS-LOAN-{loan_ref or 'NA'}",
-                "schedule": [],
-                "raw": {
-                    "simulated": True,
-                    "loan_ref": loan_ref,
-                    "responseCode": 200,
-                    "refDemande": loan_ref,
-                    "datas": (
-                        []
-                        if settled
-                        else [
-                            {
-                                "echeance": 1,
-                                "date": "2026-01-15",
-                                "montantCapital": float(outstanding),
-                                "montantInteret": 0,
-                                "montantTotal": float(outstanding),
-                                "statut": "En attente",
-                            }
-                        ]
-                    ),
-                    "context": "CREDIT SITUATION",
-                },
+                "schedule": datas,
+                "raw": raw,
+            }
+
+        if operation == OP_LIST_OVERDUE_CREDITS:
+            rows = _sim_portfolio_rows(simulate)
+            overdue_only = payload.get("overdue_only", True)
+            credits = []
+            for row in rows:
+                snap = credit_snapshot_from_cbs_row(row)
+                if not snap.get("loan_ref"):
+                    continue
+                if overdue_only and int(snap.get("days_overdue") or 0) <= 0:
+                    continue
+                credits.append({**row, **snap})
+            return {
+                "status": "ACK",
+                "credits": credits,
+                "datas": credits,
+                "external_reference": f"CBS-PORTFOLIO-{self.connector.id}",
+                "raw": {"simulated": True, "credits": credits},
             }
 
         if operation == OP_GET_CLIENT_OUTSTANDING:
@@ -191,25 +259,33 @@ class SimulatedAdapter(BaseAdapter):
         code = str(payload.get("codeAdherent") or "").strip()
         num_manuel = str(payload.get("numManuel") or "").strip()
         num_piece = str(payload.get("numPieceIdentite") or "").strip()
+        id_nat = str(payload.get("identificationNationale") or "").strip()
+        num_carte = str(
+            payload.get("numCarteOperateurEconomique") or ""
+        ).strip()
+        client_type = str(
+            payload.get("clientType") or payload.get("client_type") or ""
+        ).strip().upper()
         by_id = simulate.get("client_situation_by_id") or {}
         raw = None
-        for key in (code, num_manuel, num_piece):
+        for key in (code, num_manuel, num_piece, id_nat, num_carte):
             if key and key in by_id:
                 raw = dict(by_id[key])
                 break
         if raw is None:
-            if not (code or num_manuel or num_piece):
+            if not (code or num_manuel or num_piece or id_nat or num_carte):
                 raise CoreBankingError(
                     "Au moins un identifiant CBS est requis "
-                    "(codeAdherent, numManuel ou numPieceIdentite)."
+                    "(codeAdherent, numManuel, numPieceIdentite, "
+                    "identificationNationale ou numCarteOperateurEconomique)."
                 )
-            # Défaut démo si aucun fixture : succès synthétique.
             if simulate.get("client_situation_not_found"):
                 raise CoreBankingError("Adhérent introuvable !")
+            is_corporate = client_type == "CORPORATE" or bool(id_nat or num_carte)
             raw = {
                 "responseCode": 200,
                 "message": "Opération effectuée avec succès ! (simulé)",
-                "codeAdherent": code or "A0012345",
+                "codeAdherent": code or ("E00999" if is_corporate else "A0012345"),
                 "numManuel": num_manuel or "M00987",
                 "limitCredit": float(
                     simulate.get("client_limit_credit_default", 500000)
@@ -217,19 +293,57 @@ class SimulatedAdapter(BaseAdapter):
                 "estValide": bool(simulate.get("client_est_valide_default", True)),
                 "idPointService": "PS01",
                 "nomPointService": "Agence Principale",
-                "nomAdherent": simulate.get(
-                    "client_nom_default", "Koné Awa Démo"
-                ),
-                "numPieceIdentite": num_piece or "CI1234567890",
-                "identificationNationale": "",
                 "telephone": "+2250700000000",
-                "email": "awa.kone@example.com",
+                "email": (
+                    "contact@demo.ci"
+                    if is_corporate
+                    else "awa.kone@example.com"
+                ),
                 "boitePostale": "N/A",
                 "ville": "Abidjan",
                 "adresse": "Cocody, Angré 8e tranche",
                 "dateInscription": "2020-01-15",
                 "context": "ADHERENT SITUATION",
             }
+            if is_corporate:
+                corp_name = simulate.get(
+                    "client_raison_sociale_default", "SODECI Démo"
+                )
+                raw.update(
+                    {
+                        "nom": corp_name,
+                        "nomAdherent": corp_name,
+                        "sigle": "SDC",
+                        "identificationNationale": id_nat or "IFU-CI-001",
+                        "numCarteOperateurEconomique": num_carte or "RCCM-CI-001",
+                        "numOrdre": "ORD-001",
+                        "dateCreation": "2015-06-01",
+                        "siegeSocial": "Plateau, Abidjan",
+                        "idSecteurActivite": "COMMERCE",
+                        "idTypeClient": "ENT",
+                        "nbreSignature": 2,
+                    }
+                )
+            else:
+                default_name = simulate.get("client_nom_default", "Koné Awa Démo")
+                parts = str(default_name).split(None, 1)
+                raw.update(
+                    {
+                        "nom": parts[0] if parts else default_name,
+                        "prenoms": parts[1] if len(parts) > 1 else "",
+                        "nomAdherent": default_name,
+                        "numPieceIdentite": num_piece or "CI1234567890",
+                        "dateNaissance": "1990-03-12",
+                        "lieuNaissance": "Bouaké",
+                        "civilite": "Mme",
+                        "statutMatrimonial": "Célibataire",
+                        "nomConjoint": "N/A",
+                        "dateEtablissementPiece": "2018-01-10",
+                        "dateExpirationPiece": "2028-01-10",
+                        "idProfession": "COMMERCANT",
+                        "idNationalite": "IVOIRIENNE",
+                    }
+                )
         code_http = int(raw.get("responseCode") or 200)
         if code_http >= 400:
             raise CoreBankingError(
@@ -257,6 +371,7 @@ class RestAdapter(BaseAdapter):
     - ``adh_situation`` (défaut ``gateway-perfect/adh/situation``)
     - ``crd_simple`` (défaut ``gateway-perfect/crd/simple``)
     - ``crd_situation`` (défaut ``gateway-perfect/crd/situation``)
+    - ``crd_impayes`` (défaut ``gateway-perfect/crd/impayes``)
     """
 
     def send(self, operation: str, payload: dict) -> dict:
@@ -271,6 +386,8 @@ class RestAdapter(BaseAdapter):
             return self._crd_simple(payload)
         if operation == OP_GET_LOAN_STATUS:
             return self._crd_situation(payload)
+        if operation == OP_LIST_OVERDUE_CREDITS:
+            return self._crd_impayes(payload)
         # Autres ops REST : non encore branchées → simulation locale.
         return SimulatedAdapter(self.connector).send(operation, payload)
 
@@ -365,6 +482,85 @@ class RestAdapter(BaseAdapter):
             "raw": data,
         }
 
+    def _crd_impayes(self, payload: dict) -> dict:
+        """POST Perfect ``crd/impayes`` → liste des crédits / impayés."""
+        import requests
+
+        body = {}
+        if payload.get("overdue_only", True):
+            body["impayes"] = True
+            body["uniquementImpayes"] = True
+        for src, dest in (
+            ("idPointService", "idPointService"),
+            ("codeAdherent", "codeAdherent"),
+        ):
+            value = str(payload.get(src) or "").strip()
+            if value:
+                body[dest] = value
+
+        url = self._build_url(
+            self._endpoint("crd_impayes", DEFAULT_CRD_IMPAYES_PATH)
+        )
+        token = self._resolve_bearer_token()
+        timeout = self.connector.timeout_seconds or 30
+        try:
+            resp = requests.post(
+                url,
+                json=body,
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                timeout=timeout,
+            )
+        except requests.RequestException as exc:
+            raise CoreBankingError(
+                f"Impossible de joindre le CBS (liste des crédits) ({exc})."
+            ) from exc
+
+        try:
+            data = resp.json() if resp.content else {}
+        except ValueError as exc:
+            raise CoreBankingError(
+                f"Réponse CBS non JSON (HTTP {resp.status_code})."
+            ) from exc
+
+        if resp.status_code >= 400:
+            message = ""
+            if isinstance(data, dict):
+                message = str(data.get("message") or "")
+            raise CoreBankingError(
+                message
+                or (
+                    "Échec liste des crédits CBS "
+                    f"(HTTP {resp.status_code}). Vérifiez l'endpoint "
+                    "crd_impayes du connecteur."
+                )
+            )
+
+        if isinstance(data, list):
+            data = {"datas": data, "responseCode": resp.status_code}
+        if not isinstance(data, dict):
+            raise CoreBankingError("Réponse CBS liste des crédits invalide.")
+
+        code_http = int(data.get("responseCode") or resp.status_code or 0)
+        if code_http >= 400:
+            raise CoreBankingError(
+                str(
+                    data.get("message")
+                    or f"Échec liste des crédits CBS (HTTP {code_http})."
+                )
+            )
+
+        credits = normalize_cbs_credit_rows(data)
+        return {
+            "status": "ACK",
+            "credits": credits,
+            "datas": data.get("datas") or credits,
+            "external_reference": f"CBS-PORTFOLIO-{self.connector.id}",
+            "raw": data,
+        }
+
     def _crd_simple(self, payload: dict) -> dict:
         import requests
 
@@ -455,10 +651,15 @@ class RestAdapter(BaseAdapter):
         code = str(payload.get("codeAdherent") or "").strip()
         num_manuel = str(payload.get("numManuel") or "").strip()
         num_piece = str(payload.get("numPieceIdentite") or "").strip()
-        if not (code or num_manuel or num_piece):
+        id_nat = str(payload.get("identificationNationale") or "").strip()
+        num_carte = str(
+            payload.get("numCarteOperateurEconomique") or ""
+        ).strip()
+        if not (code or num_manuel or num_piece or id_nat or num_carte):
             raise CoreBankingError(
                 "Au moins un identifiant CBS est requis "
-                "(codeAdherent, numManuel ou numPieceIdentite)."
+                "(codeAdherent, numManuel, numPieceIdentite, "
+                "identificationNationale ou numCarteOperateurEconomique)."
             )
 
         body = {}
@@ -468,6 +669,10 @@ class RestAdapter(BaseAdapter):
             body["numManuel"] = num_manuel
         if num_piece:
             body["numPieceIdentite"] = num_piece
+        if id_nat:
+            body["identificationNationale"] = id_nat
+        if num_carte:
+            body["numCarteOperateurEconomique"] = num_carte
 
         url = self._build_url(
             self._endpoint("adh_situation", DEFAULT_ADH_SITUATION_PATH)
@@ -837,6 +1042,328 @@ def _normalize_credit_schedule(data: dict) -> tuple[bool, Decimal]:
     return outstanding <= 0, outstanding
 
 
+def _parse_schedule_date(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    text = text[:10]
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def compute_cbs_overdue(data: dict, as_of=None) -> dict:
+    """
+    Calcule le retard à partir de l'échéancier CBS (``crd/situation``).
+
+    Jours de retard = aujourd'hui − date de la plus ancienne échéance
+    impayée et échue. Le montant = somme de ces échéances.
+    """
+    as_of = as_of or date.today()
+    raw = data or {}
+    rows = raw.get("datas")
+    if not isinstance(rows, list):
+        rows = raw.get("schedule")
+    if not isinstance(rows, list):
+        rows = []
+
+    overdue_amount = Decimal("0")
+    oldest = None
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if _is_paid_schedule_status(str(row.get("statut") or row.get("status") or "")):
+            continue
+        due = _parse_schedule_date(
+            row.get("date")
+            or row.get("dateEcheance")
+            or row.get("dueDate")
+            or row.get("date_echeance")
+        )
+        if due is None or due >= as_of:
+            continue
+        try:
+            if row.get("montantTotal") not in (None, ""):
+                amount = Decimal(str(row["montantTotal"]))
+            else:
+                amount = Decimal(str(row.get("montantCapital") or "0"))
+                amount += Decimal(str(row.get("montantInteret") or "0"))
+        except (InvalidOperation, TypeError, ValueError):
+            amount = Decimal("0")
+        overdue_amount += amount
+        if oldest is None or due < oldest:
+            oldest = due
+
+    settled, outstanding = _normalize_credit_schedule(
+        raw if isinstance(raw.get("datas"), list) else {**raw, "datas": rows}
+    )
+    if settled or (outstanding <= 0 and overdue_amount <= 0):
+        return {
+            "settled": True,
+            "days_overdue": 0,
+            "overdue_amount": Decimal("0"),
+            "outstanding": Decimal("0"),
+            "oldest_due": None,
+        }
+    days = (as_of - oldest).days if oldest else (1 if outstanding > 0 else 0)
+    amount = overdue_amount if overdue_amount > 0 else outstanding
+    return {
+        "settled": False,
+        "days_overdue": max(days, 0),
+        "overdue_amount": amount,
+        "outstanding": outstanding,
+        "oldest_due": oldest,
+    }
+
+
+def _first_text(*values) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def default_simulated_overdue_portfolio() -> list[dict]:
+    """Portefeuille démo : un crédit par tranche de recouvrement."""
+    today = date.today()
+    specs = (
+        ("CBS-IMP-GEST-001", "CTR-GEST-001", "A100001", "Koné Awa", 15, "25000", "200000"),
+        ("CBS-IMP-REC-002", "CTR-REC-002", "A100002", "Traoré Ibrahim", 45, "80000", "500000"),
+        ("CBS-IMP-JUR-003", "CTR-JUR-003", "A100003", "SODECI Démo", 110, "150000", "800000"),
+    )
+    rows = []
+    for ref, contrat, code, name, days, impaye, principal in specs:
+        due = today - timedelta(days=days)
+        rows.append(
+            {
+                "refDemande": ref,
+                "numDemande": ref.replace("CBS-", "DEM-"),
+                "numContrat": contrat,
+                "codeAdherent": code,
+                "nomAdherent": name,
+                "montant": float(principal),
+                "montantImpaye": float(impaye),
+                "encours": float(impaye),
+                "joursRetard": days,
+                "datas": [
+                    {
+                        "echeance": 1,
+                        "date": due.isoformat(),
+                        "montantTotal": float(impaye),
+                        "statut": "En attente",
+                    }
+                ],
+            }
+        )
+    return rows
+
+
+def _sim_portfolio_rows(simulate: dict) -> list[dict]:
+    if "overdue_portfolio" in (simulate or {}):
+        rows = simulate.get("overdue_portfolio") or []
+        return [row for row in rows if isinstance(row, dict)]
+    return default_simulated_overdue_portfolio()
+
+
+def _sim_portfolio_row_for_ref(simulate: dict, loan_ref: str) -> dict | None:
+    ref = (loan_ref or "").strip()
+    if not ref:
+        return None
+    for row in _sim_portfolio_rows(simulate):
+        snap = credit_snapshot_from_cbs_row(row)
+        if ref in {
+            snap.get("loan_ref"),
+            snap.get("ref_demande"),
+            snap.get("num_contrat"),
+            snap.get("num_demande"),
+        }:
+            return row
+    return None
+
+
+def _situation_from_portfolio_row(row: dict, loan_ref: str) -> dict:
+    snap = credit_snapshot_from_cbs_row(row)
+    days = int(snap.get("days_overdue") or 0)
+    amount = snap.get("overdue_amount") or snap.get("principal") or Decimal("0")
+    due = date.today() - timedelta(days=max(days, 1))
+    datas = row.get("datas") if isinstance(row.get("datas"), list) else None
+    if not datas:
+        datas = [
+            {
+                "echeance": 1,
+                "date": due.isoformat(),
+                "montantTotal": float(amount),
+                "statut": "En attente",
+            }
+        ]
+    return {
+        "simulated": True,
+        "responseCode": 200,
+        "refDemande": snap.get("ref_demande") or loan_ref,
+        "numDemande": snap.get("num_demande") or "",
+        "numContrat": snap.get("num_contrat") or "",
+        "codeAdherent": snap.get("code_adherent") or "",
+        "montant": snap.get("principal") or amount,
+        "datas": datas,
+        "context": "CREDIT SITUATION",
+    }
+
+
+def credit_snapshot_from_cbs_row(row: dict) -> dict:
+    """Normalise une ligne de liste crédits / impayés CBS."""
+    row = row if isinstance(row, dict) else {}
+    loan_ref = _first_text(
+        row.get("loan_ref"),
+        row.get("refDemande"),
+        row.get("ref_demande"),
+        row.get("numContrat"),
+        row.get("num_contrat"),
+        row.get("numDemande"),
+        row.get("num_demande"),
+        row.get("reference"),
+        row.get("ref"),
+    )
+    days_raw = (
+        row.get("days_overdue")
+        or row.get("joursRetard")
+        or row.get("nbreJoursRetard")
+        or row.get("nbJoursRetard")
+        or row.get("retard")
+        or 0
+    )
+    try:
+        days = int(days_raw or 0)
+    except (TypeError, ValueError):
+        days = 0
+    try:
+        overdue_amount = Decimal(
+            str(
+                row.get("overdue_amount")
+                or row.get("montantImpaye")
+                or row.get("montantRetard")
+                or row.get("impaye")
+                or "0"
+            )
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        overdue_amount = Decimal("0")
+    try:
+        principal = Decimal(
+            str(
+                row.get("principal")
+                or row.get("montantCredit")
+                or row.get("montantDemande")
+                or row.get("montant")
+                or overdue_amount
+                or "0"
+            )
+        )
+    except (InvalidOperation, TypeError, ValueError):
+        principal = overdue_amount
+    return {
+        "loan_ref": loan_ref,
+        "ref_demande": _first_text(row.get("refDemande"), row.get("ref_demande"), loan_ref),
+        "num_demande": _first_text(row.get("numDemande"), row.get("num_demande")),
+        "num_contrat": _first_text(row.get("numContrat"), row.get("num_contrat")),
+        "code_adherent": _first_text(
+            row.get("codeAdherent"),
+            row.get("code_adherent"),
+            row.get("cbs_client_id"),
+            row.get("code"),
+        ),
+        "num_manuel": _first_text(row.get("numManuel"), row.get("num_manuel")),
+        "num_piece_identite": _first_text(
+            row.get("numPieceIdentite"), row.get("num_piece_identite")
+        ),
+        "client_name": _first_text(
+            row.get("nomAdherent"),
+            row.get("nom"),
+            row.get("raisonSociale"),
+            row.get("client_name"),
+        ),
+        "product_code": _first_text(
+            row.get("idProduitCrd"),
+            row.get("produit"),
+            row.get("product_code"),
+        ),
+        "days_overdue": max(days, 0),
+        "overdue_amount": str(overdue_amount),
+        "principal": str(principal),
+        "outstanding": str(overdue_amount or principal),
+        "raw": row,
+    }
+
+
+def normalize_cbs_credit_rows(payload) -> list[dict]:
+    raw = payload if isinstance(payload, dict) else {}
+    if isinstance(payload, list):
+        rows = payload
+        raw = {"datas": payload}
+    else:
+        inner = raw.get("raw") if isinstance(raw.get("raw"), dict) else {}
+        rows = (
+            raw.get("credits")
+            or raw.get("datas")
+            or raw.get("impayes")
+            or raw.get("liste")
+            or raw.get("items")
+            or inner.get("credits")
+            or inner.get("datas")
+            or inner.get("impayes")
+            or []
+        )
+    if not isinstance(rows, list):
+        rows = []
+    out = []
+    seen = set()
+    for row in rows:
+        snap = credit_snapshot_from_cbs_row(row if isinstance(row, dict) else {})
+        ref = snap.get("loan_ref")
+        if not ref or ref in seen:
+            continue
+        seen.add(ref)
+        out.append(snap)
+    return out
+
+
+def list_cbs_outstanding_credits(
+    tenant_id, *, overdue_only=True, connector=None
+) -> dict:
+    """Liste les crédits / impayés CBS (portefeuille initial)."""
+    connector = connector or resolve_active_connector(tenant_id)
+    extra = ((connector.mapping_rules or {}).get("portfolio") or {}).get(
+        "loan_refs"
+    ) or []
+    log = send_operation(
+        connector,
+        OP_LIST_OVERDUE_CREDITS,
+        {"overdue_only": overdue_only},
+    )
+    payload = _require_success(log, OP_LIST_OVERDUE_CREDITS)
+    credits = normalize_cbs_credit_rows(payload)
+    seen = {row["loan_ref"] for row in credits}
+    for ref in extra:
+        ref = str(ref or "").strip()
+        if ref and ref not in seen:
+            credits.append(
+                credit_snapshot_from_cbs_row({"refDemande": ref, "loan_ref": ref})
+            )
+            seen.add(ref)
+    return {
+        "credits": credits,
+        "log_id": str(log.id),
+        "raw": payload.get("raw") or payload,
+        "external_reference": log.external_reference,
+    }
+
+
 def get_loan_status(
     tenant_id,
     loan_ref,
@@ -845,6 +1372,7 @@ def get_loan_status(
     code_adherent=None,
     num_manuel=None,
     num_piece_identite=None,
+    connector=None,
 ) -> dict:
     """
     Vérifie dans le CBS si un crédit/prêt est soldé (Perfect ``crd/situation``).
@@ -872,17 +1400,33 @@ def get_loan_status(
     if num_piece_identite:
         op_payload["numPieceIdentite"] = str(num_piece_identite).strip()
 
-    connector = resolve_active_connector(tenant_id)
+    connector = connector or resolve_active_connector(tenant_id)
     log = send_operation(connector, OP_GET_LOAN_STATUS, op_payload)
     payload = _require_success(log, OP_GET_LOAN_STATUS)
     settled = bool(payload.get("settled"))
     outstanding = _to_decimal(payload.get("outstanding", "0"), "outstanding")
+    raw = payload.get("raw") or payload
+    schedule = payload.get("schedule") or raw.get("datas") or []
+    overdue = compute_cbs_overdue(
+        {**raw, "datas": schedule, "montant": payload.get("montant") or outstanding},
+    )
+    days = payload.get("days_overdue")
+    if days in (None, ""):
+        days = overdue["days_overdue"]
+    amount = payload.get("overdue_amount")
+    if amount in (None, ""):
+        amount = overdue["overdue_amount"]
+    else:
+        amount = _to_decimal(amount, "overdue_amount")
     return {
-        "settled": settled,
-        "outstanding": outstanding,
+        "settled": overdue["settled"] if overdue["settled"] else settled,
+        "outstanding": overdue["outstanding"] or outstanding,
+        "days_overdue": int(days or 0),
+        "overdue_amount": amount,
+        "oldest_due": overdue.get("oldest_due"),
         "currency": payload.get("currency") or currency,
-        "schedule": payload.get("schedule") or [],
-        "raw": payload.get("raw") or payload,
+        "schedule": schedule,
+        "raw": raw,
         "log_id": str(log.id),
         "external_reference": log.external_reference,
         "num_demande": payload.get("num_demande") or "",
@@ -977,6 +1521,14 @@ def assert_client_outstanding_for_dation(
     return result
 
 
+def _raw_str(raw: dict, *keys) -> str:
+    for key in keys:
+        value = raw.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
 def normalize_client_situation(raw: dict) -> dict:
     """Normalise la réponse Perfect ``adh/situation`` pour l'UI / l'import."""
     raw = raw or {}
@@ -986,7 +1538,15 @@ def normalize_client_situation(raw: dict) -> dict:
     else:
         est_valide = bool(est_valide)
 
-    full_name = str(raw.get("nomAdherent") or "").strip()
+    last_name = _raw_str(raw, "nom", "lastName")
+    first_name = _raw_str(raw, "prenoms", "prenom", "firstName")
+    company_name = _raw_str(raw, "nom", "raisonSociale")
+    full_name = _raw_str(raw, "nomAdherent")
+    if not full_name:
+        full_name = " ".join(p for p in (first_name, last_name) if p).strip()
+    if not full_name:
+        full_name = company_name
+
     limit = raw.get("limitCredit")
     try:
         limit_credit = Decimal(str(limit)) if limit not in (None, "") else None
@@ -995,24 +1555,49 @@ def normalize_client_situation(raw: dict) -> dict:
 
     return {
         "full_name": full_name,
-        "code_adherent": str(raw.get("codeAdherent") or "").strip(),
-        "num_manuel": str(raw.get("numManuel") or "").strip(),
-        "num_piece_identite": str(raw.get("numPieceIdentite") or "").strip(),
-        "identification_nationale": str(
-            raw.get("identificationNationale") or ""
-        ).strip(),
-        "phone": str(raw.get("telephone") or "").strip(),
-        "email": str(raw.get("email") or "").strip(),
-        "boite_postale": str(raw.get("boitePostale") or "").strip(),
-        "city": str(raw.get("ville") or "").strip(),
-        "address": str(raw.get("adresse") or "").strip(),
-        "date_inscription": str(raw.get("dateInscription") or "").strip(),
+        "last_name": last_name,
+        "first_name": first_name,
+        "company_name": company_name,
+        "sigle": _raw_str(raw, "sigle"),
+        "code_adherent": _raw_str(raw, "codeAdherent"),
+        "num_manuel": _raw_str(raw, "numManuel"),
+        "num_piece_identite": _raw_str(raw, "numPieceIdentite"),
+        "identification_nationale": _raw_str(raw, "identificationNationale"),
+        "num_carte_operateur": _raw_str(
+            raw, "numCarteOperateurEconomique", "rccm"
+        ),
+        "num_ordre": _raw_str(raw, "numOrdre"),
+        "birth_date": _raw_str(raw, "dateNaissance"),
+        "birth_place": _raw_str(raw, "lieuNaissance"),
+        "civility": _raw_str(raw, "civilite"),
+        "marital_status": _raw_str(raw, "statutMatrimonial"),
+        "spouse_name": _raw_str(raw, "nomConjoint"),
+        "id_document_issue_date": _raw_str(raw, "dateEtablissementPiece"),
+        "id_document_expiry_date": _raw_str(raw, "dateExpirationPiece"),
+        "id_profession": _raw_str(raw, "idProfession"),
+        "profession": _raw_str(raw, "profession", "libelleProfession"),
+        "id_nationalite": _raw_str(raw, "idNationalite"),
+        "nationality": _raw_str(raw, "nationalite", "libelleNationalite"),
+        "date_creation": _raw_str(raw, "dateCreation"),
+        "head_office": _raw_str(raw, "siegeSocial"),
+        "id_secteur_activite": _raw_str(raw, "idSecteurActivite"),
+        "id_type_client": _raw_str(raw, "idTypeClient"),
+        "id_zone": _raw_str(raw, "idZone"),
+        "id_produit_epg": _raw_str(raw, "idProduitEpg"),
+        "nbre_signature": raw.get("nbreSignature"),
+        "distance": raw.get("distance"),
+        "phone": _raw_str(raw, "telephone"),
+        "email": _raw_str(raw, "email"),
+        "boite_postale": _raw_str(raw, "boitePostale"),
+        "city": _raw_str(raw, "ville"),
+        "address": _raw_str(raw, "adresse"),
+        "date_inscription": _raw_str(raw, "dateInscription"),
         "limit_credit": str(limit_credit) if limit_credit is not None else None,
         "est_valide": est_valide,
-        "id_point_service": str(raw.get("idPointService") or "").strip(),
-        "nom_point_service": str(raw.get("nomPointService") or "").strip(),
-        "context": str(raw.get("context") or "").strip(),
-        "message": str(raw.get("message") or "").strip(),
+        "id_point_service": _raw_str(raw, "idPointService"),
+        "nom_point_service": _raw_str(raw, "nomPointService"),
+        "context": _raw_str(raw, "context"),
+        "message": _raw_str(raw, "message"),
         "kyc_alert": not est_valide,
         "raw": raw,
     }
@@ -1024,6 +1609,9 @@ def get_client_situation(
     code_adherent: str = "",
     num_manuel: str = "",
     num_piece_identite: str = "",
+    identification_nationale: str = "",
+    num_carte_operateur: str = "",
+    client_type: str = "",
 ) -> dict:
     """
     Récupère la situation / identité d'un adhérent CBS (Perfect).
@@ -1033,10 +1621,20 @@ def get_client_situation(
     code_adherent = (code_adherent or "").strip()
     num_manuel = (num_manuel or "").strip()
     num_piece_identite = (num_piece_identite or "").strip()
-    if not (code_adherent or num_manuel or num_piece_identite):
+    identification_nationale = (identification_nationale or "").strip()
+    num_carte_operateur = (num_carte_operateur or "").strip()
+    client_type = (client_type or "").strip().upper()
+    if not (
+        code_adherent
+        or num_manuel
+        or num_piece_identite
+        or identification_nationale
+        or num_carte_operateur
+    ):
         raise CoreBankingError(
             "Au moins un identifiant CBS est requis "
-            "(code adhérent, n° manuel ou n° pièce d'identité)."
+            "(code adhérent, n° manuel, n° pièce, identification nationale "
+            "ou n° carte / RCCM)."
         )
 
     connector = resolve_active_connector(tenant_id)
@@ -1047,6 +1645,9 @@ def get_client_situation(
             "codeAdherent": code_adherent,
             "numManuel": num_manuel,
             "numPieceIdentite": num_piece_identite,
+            "identificationNationale": identification_nationale,
+            "numCarteOperateurEconomique": num_carte_operateur,
+            "clientType": client_type,
         },
     )
     payload = _require_success(log, OP_GET_CLIENT_SITUATION)

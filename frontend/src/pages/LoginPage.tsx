@@ -12,6 +12,7 @@ import {
   MfaRequiredError,
   useAuth,
 } from "@/auth/AuthContext";
+import { homePath } from "@/auth/routePerms";
 import {
   applyTenantTheme,
   readRememberedLoginTenantCode,
@@ -69,7 +70,7 @@ export function LoginPage() {
   if (user) {
     return (
       <Navigate
-        to={user.must_change_password ? "/changer-mot-de-passe" : "/"}
+        to={user.must_change_password ? "/changer-mot-de-passe" : homePath(user)}
         replace
       />
     );
@@ -91,7 +92,9 @@ export function LoginPage() {
         mfaStep ? otp : undefined,
       );
       navigate(
-        result.mustChangePassword ? "/changer-mot-de-passe" : "/",
+        result.mustChangePassword
+          ? "/changer-mot-de-passe"
+          : homePath(result.user),
         { replace: true },
       );
     } catch (err) {
@@ -101,7 +104,9 @@ export function LoginPage() {
       } else if (err instanceof MfaInvalidError) {
         setError("Code MFA invalide.");
       } else {
-        setError("Identifiants invalides.");
+        setError(
+          err instanceof Error ? err.message : "Identifiants invalides.",
+        );
         setMfaStep(false);
         setOtp("");
       }

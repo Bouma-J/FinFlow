@@ -210,6 +210,8 @@ def test_complete_formalization_stays_active(
             registration_authority="Conservation",
         )
         req.refresh_from_db()
+        req.status = GuaranteeFormalizationRequest.Status.APPROVED
+        req.save(update_fields=["status", "updated_at"])
         complete_formalization_request(req, user=agent)
         req.refresh_from_db()
         g.refresh_from_db()

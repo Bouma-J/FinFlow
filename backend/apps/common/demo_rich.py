@@ -121,6 +121,8 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
             defaults["company_name"] = (
                 "Négoce Abidjan SA" if ref.endswith("07") else "Transilog SARL"
             )
+        elif ctype == Client.ClientType.PROFESSIONAL:
+            defaults["company_name"] = "GIE Marie N'Guessan"
         else:
             defaults["first_name"] = first
             defaults["last_name"] = last
@@ -136,6 +138,12 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
         obj, _ = Client.objects.get_or_create(
             tenant=tenant, reference=ref, defaults=defaults
         )
+        if (
+            obj.client_type == Client.ClientType.PROFESSIONAL
+            and not (obj.company_name or "").strip()
+        ):
+            obj.company_name = defaults.get("company_name") or "GIE Marie N'Guessan"
+            obj.save(update_fields=["company_name", "updated_at"])
         clients[ref] = obj
 
     sureties = {}
@@ -835,7 +843,14 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
                     },
                 )
         if make_overdue and loan.status == Loan.Status.ACTIVE:
-            case = refresh_loan_overdue(loan)
+            case = refresh_loan_overdue(
+                loan,
+                cbs_status={
+                    "settled": False,
+                    "days_overdue": days_overdue,
+                    "overdue_amount": Decimal(principal),
+                },
+            )
             if case:
                 if days_overdue >= 90:
                     case.stage = CollectionCase.Stage.LITIGATION

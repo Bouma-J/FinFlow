@@ -49,7 +49,7 @@ export function FinancialAnalysisPage() {
     enabled: !!analysisId,
   });
 
-  const { data: myTasks } = useQuery({
+  const { data: myTasks, isLoading: loadingTasks } = useQuery({
     queryKey: ["my-pending-tasks"],
     queryFn: async () =>
       (await api.get<Paginated<ApprovalTask>>("/approval-tasks/my_pending/"))
@@ -57,7 +57,11 @@ export function FinancialAnalysisPage() {
     enabled: !!user && !analysisId,
   });
 
-  if (loadingApp || (analysisId && loadingAnalysis)) {
+  if (
+    loadingApp ||
+    (analysisId && loadingAnalysis) ||
+    (!analysisId && !!user && loadingTasks)
+  ) {
     return <Spinner />;
   }
 

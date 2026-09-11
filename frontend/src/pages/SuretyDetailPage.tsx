@@ -19,7 +19,9 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "@/api/client";
 import { CLIENT_LABELS, type Surety } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { hasPerm } from "@/auth/permissions";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import { PERM_CREDITS } from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
 import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
 import { Badge, Card, ErrorState, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
 
@@ -77,7 +79,8 @@ export function SuretyDetailPage({
   const qc = useQueryClient();
   const { user } = useAuth();
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const backTo = appId ? `/dossiers/${appId}` : "/cautions";
+  const canViewCredits = hasAnyPerm(user, PERM_CREDITS);
+  const backTo = appId && canViewCredits ? `/dossiers/${appId}` : "/cautions";
   const canEdit = manageable && hasPerm(user, "sureties.change_surety");
   const canDelete = manageable && hasPerm(user, "sureties.delete_surety");
   const canManageEng = hasPerm(user, "sureties.change_suretyengagement");
@@ -253,9 +256,13 @@ export function SuretyDetailPage({
                   <li key={e.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
                     <div className="row-actions" style={{ width: "100%" }}>
                       <span>
-                        <Link to={`/dossiers/${e.application}`}>
+                        <PermLink
+                          user={user}
+                          anyOf={PERM_CREDITS}
+                          to={`/dossiers/${e.application}`}
+                        >
                           {e.application_reference || e.application.slice(0, 8)}
-                        </Link>
+                        </PermLink>
                         {e.client_display ? (
                           <em className="muted small"> · {e.client_display}</em>
                         ) : null}

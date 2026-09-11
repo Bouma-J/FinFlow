@@ -59,6 +59,19 @@ def _display(choice_value, choices) -> str:
     return mapping.get(choice_value, choice_value or "")
 
 
+def _full_name(*parts) -> str:
+    return " ".join(p for p in parts if p).strip()
+
+
+def _client_type_label(client) -> str:
+    ctype = getattr(client, "client_type", "")
+    if ctype == "CORPORATE":
+        return "Entreprise"
+    if ctype == "PROFESSIONAL":
+        return "Groupement"
+    return "Particulier"
+
+
 # --------------------------------------------------------------------------- #
 # Catalogue documenté (exposé à l'interface)
 # --------------------------------------------------------------------------- #
@@ -97,7 +110,7 @@ VARIABLE_CATALOG = [
         ("dossier_date_decision", "Date de décision"),
     ]},
     {"group": "Client", "items": [
-        ("client_type", "Type de client (Particulier/Entreprise)"),
+        ("client_type", "Type de client (Particulier / Groupement / Entreprise)"),
         ("client_civilite", "Civilité"),
         ("client_nom", "Nom du client"),
         ("client_prenom", "Prénom du client"),
@@ -108,24 +121,47 @@ VARIABLE_CATALOG = [
         ("client_cni_expiration", "Date d'expiration de la pièce d'identité"),
         ("client_adresse", "Adresse du client"),
         ("client_ville", "Ville du client"),
-        ("client_telephone", "Téléphone du client"),
+        ("client_pays", "Pays de résidence du client"),
+        ("client_telephone", "Téléphone principal du client"),
+        ("client_telephones", "Tous les téléphones (principal + additionnels)"),
+        ("client_telephones_autres", "Téléphones additionnels (libellé — numéro)"),
+        ("client_telephone2", "2e téléphone (1er numéro additionnel)"),
+        ("client_telephone3", "3e téléphone (2e numéro additionnel)"),
         ("client_email", "Email du client"),
         ("client_profession", "Profession"),
         ("client_date_naissance", "Date de naissance"),
-        ("client_lieu_naissance", "Lieu de naissance"),
+        ("client_lieu_naissance", "Pays / lieu de naissance (pays de naissance)"),
+        ("client_pays_naissance", "Pays de naissance"),
         ("client_nationalite", "Nationalité"),
         ("client_situation_matrimoniale", "Situation matrimoniale"),
+        ("client_kyc", "Statut KYC"),
+        ("client_kyc_valide_le", "Date de validation KYC"),
+        ("client_agence_nom", "Nom de l'agence du client (fiche client)"),
+        ("client_agence_code", "Code de l'agence du client (fiche client)"),
         ("client_matricule", "Matricule client / ID Core Banking"),
         ("client_matricule_cbs", "Matricule Core Banking (CBS)"),
         ("client_compte", "Numéro de compte CBS"),
         ("client_compte_cbs", "Numéro de compte Core Banking (CBS)"),
         ("compte_cbs", "Alias du numéro de compte CBS"),
     ]},
+    {"group": "Famille", "items": [
+        ("client_conjoint_nom", "Nom du conjoint"),
+        ("client_conjoint_prenom", "Prénom du conjoint"),
+        ("client_conjoint_nom_complet", "Nom complet du conjoint"),
+        ("client_conjoint_telephone", "Téléphone du conjoint"),
+        ("client_conjoint_profession", "Profession du conjoint"),
+        ("client_pere_nom", "Nom du père"),
+        ("client_pere_prenom", "Prénom du père"),
+        ("client_pere_nom_complet", "Nom complet du père"),
+        ("client_mere_nom", "Nom de la mère"),
+        ("client_mere_prenom", "Prénom de la mère"),
+        ("client_mere_nom_complet", "Nom complet de la mère"),
+    ]},
     {"group": "Entreprise", "items": [
         ("societe_nom", "Raison sociale"),
         ("societe_forme", "Forme juridique"),
         ("societe_rccm", "RCCM"),
-        ("societe_ninea", "NINEA"),
+        ("societe_ninea", "NINEA / IFU (alias de societe_ifu)"),
         ("societe_ifu", "IFU"),
         ("societe_siege", "Siège social"),
         ("societe_ville", "Ville"),
@@ -176,6 +212,12 @@ VARIABLE_CATALOG = [
         ("devise", "Devise"),
         ("total_interets", "Total des intérêts"),
         ("total_a_rembourser", "Total à rembourser"),
+    ]},
+    {"group": "Emploi / cession sur salaire", "items": [
+        ("employeur", "Nom de l'employeur (dossier)"),
+        ("type_contrat", "Type de contrat de travail"),
+        ("personnes_a_charge", "Nombre de personnes à charge"),
+        ("domiciliation_salaire", "Domiciliation du salaire (Oui/Non)"),
     ]},
     {"group": "Assurance", "items": [
         ("assurance_adi", "Assurance ADI (Oui/Non)"),
@@ -344,6 +386,7 @@ def build_context(
     """Assemble le dictionnaire de variables pour un dossier de crédit."""
     from apps.clients.models import (
         Civility,
+        Client,
         IdDocumentType,
         LegalForm,
         MaritalStatus,
@@ -351,6 +394,7 @@ def build_context(
     from apps.credits.amounts import reference_amount
     from apps.credits.models import (
         ActivitySector,
+        ContractType,
         Periodicity,
         PurposeType,
         RepaymentMechanism,
@@ -368,8 +412,6 @@ def build_context(
     rate = application.interest_rate
     if rate is None and product is not None:
         rate = product.interest_rate
-
-    is_corporate = getattr(client, "client_type", "") == "CORPORATE"
 
     ctx: dict = {}
 
@@ -442,7 +484,7 @@ def build_context(
     ctx["dossier_date_decision"] = fmt_date(application.decision_date)
 
     # --- Client ---------------------------------------------------------- #
-    ctx["client_type"] = "Entreprise" if is_corporate else "Particulier"
+    ctx["client_type"] = _client_type_label(client)
     ctx["client_civilite"] = _display(client.civility, Civility.choices)
     ctx["client_nom"] = client.last_name or ""
     ctx["client_prenom"] = client.first_name or ""
@@ -455,15 +497,32 @@ def build_context(
     ctx["client_cni_expiration"] = fmt_date(client.id_document_expiry_date)
     ctx["client_adresse"] = client.address or ""
     ctx["client_ville"] = client.city or ""
+    ctx["client_pays"] = client.country or ""
     ctx["client_telephone"] = client.phone or ""
+    extra_phones = list(client.phones.all())
+    all_numbers = [client.phone] if client.phone else []
+    all_numbers.extend(ph.number for ph in extra_phones if ph.number)
+    ctx["client_telephones"] = " ; ".join(all_numbers)
+    ctx["client_telephones_autres"] = " ; ".join(
+        " — ".join(p for p in [ph.label, ph.number] if p)
+        for ph in extra_phones
+    )
+    ctx["client_telephone2"] = extra_phones[0].number if len(extra_phones) > 0 else ""
+    ctx["client_telephone3"] = extra_phones[1].number if len(extra_phones) > 1 else ""
     ctx["client_email"] = client.email or ""
     ctx["client_profession"] = client.profession or ""
     ctx["client_date_naissance"] = fmt_date(client.birth_date)
     ctx["client_lieu_naissance"] = client.birth_country or ""
+    ctx["client_pays_naissance"] = client.birth_country or ""
     ctx["client_nationalite"] = client.nationality or ""
     ctx["client_situation_matrimoniale"] = _display(
         client.marital_status, MaritalStatus.choices
     )
+    ctx["client_kyc"] = _display(client.kyc_status, Client.KycStatus.choices)
+    ctx["client_kyc_valide_le"] = fmt_date(client.kyc_validated_at)
+    client_agency = getattr(client, "agency", None)
+    ctx["client_agence_nom"] = getattr(client_agency, "name", "") if client_agency else ""
+    ctx["client_agence_code"] = getattr(client_agency, "code", "") if client_agency else ""
     ctx["client_matricule"] = client.cbs_client_id or client.reference or ""
     ctx["client_matricule_cbs"] = client.cbs_client_id or ""
     compte_cbs = (
@@ -472,6 +531,24 @@ def build_context(
     ctx["client_compte"] = compte_cbs
     ctx["client_compte_cbs"] = compte_cbs
     ctx["compte_cbs"] = compte_cbs
+
+    ctx["client_conjoint_nom"] = client.spouse_last_name or ""
+    ctx["client_conjoint_prenom"] = client.spouse_first_name or ""
+    ctx["client_conjoint_nom_complet"] = _full_name(
+        client.spouse_first_name, client.spouse_last_name
+    )
+    ctx["client_conjoint_telephone"] = client.spouse_phone or ""
+    ctx["client_conjoint_profession"] = client.spouse_profession or ""
+    ctx["client_pere_nom"] = client.father_last_name or ""
+    ctx["client_pere_prenom"] = client.father_first_name or ""
+    ctx["client_pere_nom_complet"] = _full_name(
+        client.father_first_name, client.father_last_name
+    )
+    ctx["client_mere_nom"] = client.mother_last_name or ""
+    ctx["client_mere_prenom"] = client.mother_first_name or ""
+    ctx["client_mere_nom_complet"] = _full_name(
+        client.mother_first_name, client.mother_last_name
+    )
 
     # --- Entreprise ------------------------------------------------------ #
     ctx["societe_nom"] = client.company_name or ""
@@ -554,6 +631,17 @@ def build_context(
     ctx["apport_personnel"] = fmt_money(application.personal_contribution)
     ctx["quotite"] = fmt_money(application.financed_quota) if application.financed_quota else ""
     ctx["devise"] = currency
+
+    ctx["employeur"] = application.employer_name or ""
+    ctx["type_contrat"] = _display(application.contract_type, ContractType.choices)
+    ctx["personnes_a_charge"] = (
+        application.dependents_count
+        if application.dependents_count is not None
+        else ""
+    )
+    ctx["domiciliation_salaire"] = (
+        "Oui" if application.salary_domiciliation else "Non"
+    )
 
     # --- Assurance ------------------------------------------------------- #
     ctx["assurance_adi"] = "Oui" if application.has_credit_insurance else "Non"

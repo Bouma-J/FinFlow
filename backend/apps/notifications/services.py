@@ -665,3 +665,204 @@ def notify_sla_breach(task):
         workflow_instance_id=instance.id,
         approval_task_id=task.id,
     )
+
+
+def _collection_case_meta(case) -> dict:
+    from apps.collections.services import _loan_application
+
+    app = _loan_application(case)
+    client = getattr(app, "client", None) if app else None
+    client_display = ""
+    if client is not None:
+        client_display = getattr(client, "display_name", None) or str(client)
+    reference = (getattr(app, "reference", None) if app else None) or str(case.id)
+    currency = getattr(getattr(case, "tenant", None), "currency", None) or "XOF"
+    details = [
+        ("Retard", f"{case.days_overdue} j"),
+        ("Impayé", _format_money(case.overdue_amount, currency)),
+    ]
+    tranche = getattr(case, "tranche", None)
+    if tranche is not None:
+        details.append(("Tranche", tranche.name))
+    return {
+        "kind": "COLLECTION",
+        "process_label": "Recouvrement",
+        "reference": reference,
+        "client_display": client_display,
+        "client_nom_prenom": _client_nom_prenom(client) if client else "",
+        "detail_path": f"/recouvrement/{case.id}",
+        "detail_url": f"{_frontend_base()}/recouvrement/{case.id}",
+        "details": details,
+        "amount_label": "",
+    }
+
+
+def _collection_recipient_users(case, *, extra_users=(), exclude_ids=None):
+    from apps.collections.access import users_for_tranche_owner
+
+    exclude_ids = {pk for pk in (exclude_ids or set()) if pk}
+    seen = set()
+    users = []
+    for user in extra_users:
+        if user is None or not getattr(user, "id", None):
+            continue
+        if user.id in exclude_ids or user.id in seen:
+            continue
+        if not (getattr(user, "email", None) or "").strip():
+            continue
+        if not getattr(user, "is_active", True):
+            continue
+        seen.add(user.id)
+        users.append(user)
+    assigned = getattr(case, "assigned_to", None)
+    if assigned is not None and assigned.id not in seen and assigned.id not in exclude_ids:
+        if (assigned.email or "").strip() and assigned.is_active:
+            seen.add(assigned.id)
+            users.append(assigned)
+    for user in users_for_tranche_owner(
+        case.tenant_id, getattr(case.tranche, "owner_kind", None), case=case
+    ):
+        if user.id in seen or user.id in exclude_ids:
+            continue
+        seen.add(user.id)
+        users.append(user)
+    return users
+
+
+def notify_collection_tranche_transfer(case, *, from_tranche=None, to_tranche=None):
+    """Alerte les responsables de la tranche d'arrivée."""
+    from apps.collections.models import CollectionCase
+
+    case = (
+        CollectionCase.objects.select_related(
+            "tenant",
+            "tranche",
+            "assigned_to",
+            "loan__application__client",
+            "loan__application__submitted_by",
+            "loan__application__created_by",
+        )
+        .get(pk=case.pk)
+    )
+    tenant = getattr(case, "tenant", None)
+    prefs = _settings_for(tenant)
+    if not prefs or not prefs.enabled or not prefs.notify_collection_transfer:
+        return None
+    to_tranche = to_tranche or case.tranche
+    extra = []
+    assigned = getattr(case, "assigned_to", None)
+    if assigned is not None:
+        extra.append(assigned)
+    users = _collection_recipient_users(case, extra_users=extra)
+    recipients = _emails(users)
+    meta = _collection_case_meta(case)
+    from_label = getattr(from_tranche, "name", None) or "—"
+    to_label = getattr(to_tranche, "name", None) or "—"
+    subject = (
+        f"[FIN_FLOW] Dossier transmis — {to_label} — "
+        f"{_subject_tail(meta, meta['reference'])}"
+    )[:255]
+    intro = (
+        f"Un dossier de recouvrement a été transmis de « {from_label} » "
+        f"vers « {to_label} ». Connectez-vous à Fin Flow pour le prendre en charge."
+    )
+    text, html = _build_bodies(
+        title="Dossier transmis à votre tranche",
+        intro=intro,
+        meta=meta,
+        extra=f"Transfert : {from_label} → {to_label}",
+        cta_label="Ouvrir le dossier de recouvrement",
+    )
+    return _send_email(
+        tenant=tenant,
+        prefs=prefs,
+        kind=NotificationLog.Kind.COLLECTION_TRANSFER,
+        subject=subject,
+        recipients=recipients,
+        text_body=text,
+        html_body=html,
+    )
+
+
+def notify_collection_dialogue(message):
+    """Alerte l'équipe de la tranche (et l'agent affecté) d'un nouveau message."""
+    case = getattr(message, "case", None)
+    if case is None:
+        return None
+    from apps.collections.models import CollectionCase
+
+    case = (
+        CollectionCase.objects.select_related(
+            "tenant",
+            "tranche",
+            "assigned_to",
+            "loan__application__client",
+            "loan__application__submitted_by",
+            "loan__application__created_by",
+        )
+        .get(pk=case.pk)
+    )
+    tenant = getattr(case, "tenant", None)
+    prefs = _settings_for(tenant)
+    if not prefs or not prefs.enabled or not prefs.notify_collection_dialogue:
+        return None
+    author = getattr(message, "created_by", None)
+    extra = []
+    assigned = getattr(case, "assigned_to", None)
+    if assigned is not None:
+        extra.append(assigned)
+    app = getattr(getattr(case, "loan", None), "application", None)
+    if app is not None:
+        extra.append(getattr(app, "submitted_by", None))
+        extra.append(getattr(app, "created_by", None))
+    if assigned is None:
+        users = _collection_recipient_users(
+            case,
+            extra_users=extra,
+            exclude_ids={getattr(author, "id", None)},
+        )
+    else:
+        users = []
+        exclude_id = getattr(author, "id", None)
+        for user in extra:
+            if user is None or user.id == exclude_id:
+                continue
+            if not getattr(user, "is_active", True):
+                continue
+            if not (getattr(user, "email", None) or "").strip():
+                continue
+            if user.id in {u.id for u in users}:
+                continue
+            users.append(user)
+    recipients = _emails(users)
+    meta = _collection_case_meta(case)
+    kind_label = message.get_kind_display()
+    author_name = ""
+    if author is not None:
+        author_name = author.get_full_name() or author.username
+    subject = (
+        f"[FIN_FLOW] {kind_label} — {_subject_tail(meta, meta['reference'])}"
+    )[:255]
+    intro = (
+        f"{author_name or 'Un collègue'} a déposé une {kind_label.lower()} "
+        "sur un dossier de recouvrement."
+    )
+    preview = (message.body or "").strip()
+    if len(preview) > 400:
+        preview = preview[:397] + "…"
+    text, html = _build_bodies(
+        title=kind_label,
+        intro=intro,
+        meta=meta,
+        extra=preview,
+        cta_label="Ouvrir le dossier de recouvrement",
+    )
+    return _send_email(
+        tenant=tenant,
+        prefs=prefs,
+        kind=NotificationLog.Kind.COLLECTION_DIALOGUE,
+        subject=subject,
+        recipients=recipients,
+        text_body=text,
+        html_body=html,
+    )

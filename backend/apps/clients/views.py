@@ -200,7 +200,7 @@ class ClientViewSet(AgencyScopedViewSet):
         return self._serve_client_file(pk, field or "")
     @action(detail=False, methods=["post"], url_path="cbs-preview")
     def cbs_preview(self, request):
-        """Prévisualise un adhérent CBS avant création (données non éditables)."""
+        """Prévisualise un adhérent CBS (type physique / morale obligatoire)."""
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
             return Response(
@@ -221,7 +221,7 @@ class ClientViewSet(AgencyScopedViewSet):
 
     @action(detail=False, methods=["post"], url_path="cbs-import")
     def cbs_import(self, request):
-        """Crée un client à partir du CBS après choix du type (prévisualisation)."""
+        """Crée un client à partir du CBS (type physique / morale déjà choisi)."""
         tenant_id = get_current_tenant_id()
         if tenant_id is None:
             return Response(

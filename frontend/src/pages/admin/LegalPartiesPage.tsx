@@ -1,11 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, Scale, Save } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { Building2, MapPin, Scale, Save, UserRound } from "lucide-react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 
 import { api } from "@/api/client";
 import type { LegalParty, LegalPartyType, Paginated, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
+import {
+  FilterField,
+  FilterSelect,
+  FilterToggle,
+  ListFilters,
+  SearchInput,
+  countActive,
+} from "@/components/ListFilters";
 import {
   Badge,
   PageHeader,
@@ -46,6 +54,35 @@ const EMPTY_FORM: FormState = {
   is_active: true,
 };
 
+function FormBlock({
+  icon: Icon,
+  title,
+  description,
+  children,
+}: {
+  icon: typeof Scale;
+  title: string;
+  description?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="tenant-form-block">
+      <header className="tenant-form-block-head">
+        <span className="tenant-form-block-icon">
+          <Icon size={17} />
+        </span>
+        <div>
+          <h3 className="tenant-form-block-title">{title}</h3>
+          {description && (
+            <p className="tenant-form-block-desc">{description}</p>
+          )}
+        </div>
+      </header>
+      <div className="tenant-form-block-body">{children}</div>
+    </section>
+  );
+}
+
 export function LegalPartiesPage() {
   const { user, activeTenant, setActiveTenant } = useAuth();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
@@ -53,6 +90,7 @@ export function LegalPartiesPage() {
   const canChange = hasPerm(user, "collections.change_legalparty");
   const qc = useQueryClient();
 
+  const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [showInactive, setShowInactive] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -67,11 +105,12 @@ export function LegalPartiesPage() {
   });
 
   const list = useQuery({
-    queryKey: ["legal-parties", activeTenant, typeFilter, showInactive],
+    queryKey: ["legal-parties", activeTenant, search, typeFilter, showInactive],
     queryFn: async () =>
       (
         await api.get<Paginated<LegalParty>>("/legal-parties/", {
           params: {
+            ...(search.trim() ? { search: search.trim() } : {}),
             ...(typeFilter ? { party_type: typeFilter } : {}),
             ...(showInactive ? {} : { is_active: true }),
             ordering: "name",
@@ -218,94 +257,110 @@ export function LegalPartiesPage() {
             <h2>{editingId ? "Modifier l'intervenant" : "Nouvel intervenant"}</h2>
             <p>Coordonnées utilisées dans le contentieux et les saisies.</p>
           </div>
-          <div className="form-grid two-col">
-            <label className="field">
-              <span>Type</span>
-              <select
-                value={form.party_type}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    party_type: e.target.value as LegalPartyType,
-                  })
-                }
-              >
-                {TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Nom / raison sociale *</span>
-              <input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                required
-              />
-            </label>
-            <label className="field">
-              <span>Contact</span>
-              <input
-                value={form.contact_name}
-                onChange={(e) =>
-                  setForm({ ...form, contact_name: e.target.value })
-                }
-              />
-            </label>
-            <label className="field">
-              <span>N° barreau / agrément</span>
-              <input
-                value={form.registration_no}
-                onChange={(e) =>
-                  setForm({ ...form, registration_no: e.target.value })
-                }
-              />
-            </label>
-            <label className="field">
-              <span>Téléphone</span>
-              <input
-                value={form.phone}
-                onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              />
-            </label>
-            <label className="field">
-              <span>E-mail</span>
-              <input
-                type="email"
-                value={form.email}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-              />
-            </label>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              <span>Adresse</span>
-              <input
-                value={form.address}
-                onChange={(e) => setForm({ ...form, address: e.target.value })}
-              />
-            </label>
-            <label className="field" style={{ gridColumn: "1 / -1" }}>
-              <span>Notes</span>
-              <textarea
-                rows={2}
-                value={form.notes}
-                onChange={(e) => setForm({ ...form, notes: e.target.value })}
-              />
-            </label>
-            {editingId && (
-              <label className="checkbox">
-                <input
-                  type="checkbox"
-                  checked={form.is_active}
+          <FormBlock
+            icon={Scale}
+            title="Identité"
+            description="Type d’intervenant et identification professionnelle."
+          >
+            <div className="form-grid two-col">
+              <label className="field">
+                <span>Type</span>
+                <select
+                  value={form.party_type}
                   onChange={(e) =>
-                    setForm({ ...form, is_active: e.target.checked })
+                    setForm({
+                      ...form,
+                      party_type: e.target.value as LegalPartyType,
+                    })
+                  }
+                >
+                  {TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Nom / raison sociale *</span>
+                <input
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  required
+                />
+              </label>
+              <label className="field">
+                <span>N° barreau / agrément</span>
+                <input
+                  value={form.registration_no}
+                  onChange={(e) =>
+                    setForm({ ...form, registration_no: e.target.value })
                   }
                 />
-                <span>Actif</span>
               </label>
-            )}
-          </div>
+              {editingId && (
+                <label className="checkbox tenant-active-field">
+                  <input
+                    type="checkbox"
+                    checked={form.is_active}
+                    onChange={(e) =>
+                      setForm({ ...form, is_active: e.target.checked })
+                    }
+                  />
+                  <span>Actif</span>
+                </label>
+              )}
+            </div>
+          </FormBlock>
+          <FormBlock
+            icon={UserRound}
+            title="Coordonnées"
+            description="Contact utilisé dans le contentieux et les saisies."
+          >
+            <div className="form-grid two-col">
+              <label className="field">
+                <span>Contact</span>
+                <input
+                  value={form.contact_name}
+                  onChange={(e) =>
+                    setForm({ ...form, contact_name: e.target.value })
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Téléphone</span>
+                <input
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                />
+              </label>
+              <label className="field">
+                <span>E-mail</span>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                />
+              </label>
+              <label className="field full-span">
+                <span>
+                  <MapPin size={13} style={{ verticalAlign: "-2px" }} /> Adresse
+                </span>
+                <input
+                  value={form.address}
+                  onChange={(e) => setForm({ ...form, address: e.target.value })}
+                />
+              </label>
+              <label className="field full-span">
+                <span>Notes</span>
+                <textarea
+                  rows={2}
+                  value={form.notes}
+                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                />
+              </label>
+            </div>
+          </FormBlock>
           {error && <div className="form-error">{error}</div>}
           <div className="tenant-compose-actions">
             <button
@@ -332,27 +387,39 @@ export function LegalPartiesPage() {
         </form>
       )}
 
-      <div className="filters-bar" style={{ marginTop: 12, marginBottom: 12 }}>
-        <select
-          value={typeFilter}
-          onChange={(e) => setTypeFilter(e.target.value)}
-        >
-          <option value="">Tous les types</option>
-          {TYPES.map((t) => (
-            <option key={t.value} value={t.value}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={showInactive}
-            onChange={(e) => setShowInactive(e.target.checked)}
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Nom, contact, barreau, téléphone…"
           />
-          <span>Inclure les inactifs</span>
-        </label>
-      </div>
+        }
+        activeCount={countActive(search, typeFilter, showInactive)}
+        onReset={() => {
+          setSearch("");
+          setTypeFilter("");
+          setShowInactive(false);
+        }}
+        extra={
+          <FilterToggle
+            label="Inclure les inactifs"
+            checked={showInactive}
+            onChange={setShowInactive}
+          />
+        }
+      >
+        <FilterField label="Type" active={!!typeFilter}>
+          <FilterSelect value={typeFilter} onChange={setTypeFilter}>
+            <option value="">Tous les types</option>
+            {TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+      </ListFilters>
 
       <QueryStatus
         isLoading={list.isLoading}

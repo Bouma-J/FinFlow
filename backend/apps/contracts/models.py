@@ -75,7 +75,7 @@ class ContractTemplate(TenantScopedModel, AuthoredModel):
     class AppliesTo(models.TextChoices):
         ANY = "ANY", "Tous les clients"
         INDIVIDUAL = "INDIVIDUAL", "Particuliers uniquement"
-        CORPORATE = "CORPORATE", "Entreprises uniquement"
+        CORPORATE = "CORPORATE", "Entreprises et groupements"
 
     code = models.CharField("code", max_length=40, blank=True)
     name = models.CharField("intitulé du contrat", max_length=200)
@@ -146,10 +146,11 @@ class ContractTemplate(TenantScopedModel, AuthoredModel):
         """Indique si ce modèle est pertinent pour un dossier donné."""
         if not self.is_active:
             return False
-        client_type = getattr(application.client, "client_type", "")
-        if self.applies_to == self.AppliesTo.INDIVIDUAL and client_type == "CORPORATE":
+        client = getattr(application, "client", None)
+        is_legal_entity = bool(getattr(client, "is_legal_entity", False))
+        if self.applies_to == self.AppliesTo.INDIVIDUAL and is_legal_entity:
             return False
-        if self.applies_to == self.AppliesTo.CORPORATE and client_type != "CORPORATE":
+        if self.applies_to == self.AppliesTo.CORPORATE and not is_legal_entity:
             return False
         if self.product_id and self.product_id != application.product_id:
             return False

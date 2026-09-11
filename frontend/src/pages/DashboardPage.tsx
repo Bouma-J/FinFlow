@@ -4,40 +4,39 @@ import {
   AlertTriangle,
   ArrowUpRight,
   Banknote,
-  Boxes,
-  Calculator,
-  CheckCircle2,
+  Building2,
   ClipboardCheck,
   Clock,
   FilePlus2,
-  FileSignature,
   FileText,
-  Filter,
-  Layers,
+  LayoutDashboard,
   RotateCcw,
   ServerCrash,
-  ShieldCheck,
-  UserRound,
-  UsersRound,
   Wallet,
-  XCircle,
   type LucideIcon,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import { api } from "@/api/client";
-import type {
-  AdminUser,
-  Agency,
-  CreditProduct,
-  DashboardData,
-  Paginated,
-} from "@/api/types";
+import type { DashboardData } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { hasPerm } from "@/auth/permissions";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import { PERM_CREDITS, PERM_TASKS } from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
+import {
+  AgencyFilter,
+  CREDIT_STATUS_OPTIONS,
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  OfficerFilter,
+  ProductFilter,
+  countActive,
+} from "@/components/ListFilters";
 import {
   EmptyState,
   ErrorState,
+  PageHeader,
   Spinner,
   StatCard,
   formatMoney,
@@ -74,7 +73,7 @@ const STATUS_TONE: Record<string, string> = {
 
 const CLIENT_TYPE_LABELS: Record<string, string> = {
   INDIVIDUAL: "Particuliers",
-  PROFESSIONAL: "Professionnels",
+  PROFESSIONAL: "Groupements",
   CORPORATE: "Entreprises",
 };
 
@@ -86,18 +85,11 @@ const PAR_LABELS: Record<string, string> = {
   PAR180_PLUS: "PAR > 180 j",
 };
 
-const STAGE_LABELS: Record<string, string> = {
-  AMICABLE: "Amiable",
-  PRECONTENTIOUS: "Précontentieux",
-  LITIGATION: "Contentieux",
-  CLOSED: "Clôturé",
-};
-
 type DashFilters = {
   date_from: string;
   date_to: string;
   agency: string;
-  owner: string;
+  gestionnaire: string;
   status: string;
   product: string;
   client_type: string;
@@ -107,7 +99,7 @@ const EMPTY_FILTERS: DashFilters = {
   date_from: "",
   date_to: "",
   agency: "",
-  owner: "",
+  gestionnaire: "",
   status: "",
   product: "",
   client_type: "",
@@ -165,11 +157,21 @@ function presetRange(key: string): Pick<DashFilters, "date_from" | "date_to"> {
   return { date_from: "", date_to: "" };
 }
 
-function TrendChart({
-  data,
-}: {
-  data: DashboardData["credits"]["monthly"];
-}) {
+function isPresetActive(filters: DashFilters, key: string): boolean {
+  const range = presetRange(key);
+  return (
+    filters.date_from === range.date_from && filters.date_to === range.date_to
+  );
+}
+
+function greeting() {
+  const h = new Date().getHours();
+  if (h < 12) return "Bonjour";
+  if (h < 18) return "Bon après-midi";
+  return "Bonsoir";
+}
+
+function TrendChart({ data }: { data: DashboardData["credits"]["monthly"] }) {
   const max = Math.max(1, ...data.map((d) => num(d.amount)));
   const totalCount = data.reduce((s, d) => s + d.count, 0);
   if (totalCount === 0)
@@ -236,42 +238,6 @@ function DistBars({
   );
 }
 
-function ClientDonut({
-  rows,
-  total,
-}: {
-  rows: { client_type: string; count: number }[];
-  total: number;
-}) {
-  if (total === 0) return <EmptyState message="Aucun client." />;
-  const colors = [
-    "var(--brand)",
-    "var(--brand-dark)",
-    "var(--accent)",
-  ];
-  return (
-    <ul className="client-donut-list">
-      {rows.map((r, i) => {
-        const pct = total ? Math.round((r.count / total) * 100) : 0;
-        return (
-          <li key={r.client_type}>
-            <span
-              className="cd-dot"
-              style={{ background: colors[i % colors.length] }}
-            />
-            <span className="cd-label">
-              {CLIENT_TYPE_LABELS[r.client_type] ?? r.client_type}
-            </span>
-            <span className="cd-value">
-              {r.count} ({pct} %)
-            </span>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
-
 function QuickAction({
   to,
   icon: Icon,
@@ -307,16 +273,6 @@ function KpiSection({
   );
 }
 
-function isPresetActive(
-  filters: DashFilters,
-  key: string,
-): boolean {
-  const range = presetRange(key);
-  return (
-    filters.date_from === range.date_from && filters.date_to === range.date_to
-  );
-}
-
 export function DashboardPage() {
   const { activeTenant, user } = useAuth();
   const { tenantName, tenantCode } = useTenantBranding();
@@ -324,81 +280,16 @@ export function DashboardPage() {
 
   const scope = user?.data_scope ?? "AGENCY";
   const isGroup = !!user?.is_group_level;
-  const canPickAgency = scope !== "OWN" || isGroup;
-  const canPickOwner = scope === "TENANT" || isGroup || !!user?.is_superuser;
-  const showAgencyFilter = canPickAgency;
-  const showOwnerFilter = canPickOwner;
-
-  const agencyOptions = useMemo(() => {
-    if (scope === "AGENCY" && !isGroup) {
-      return user?.agencies_detail ?? [];
-    }
-    return null; // charger via API
-  }, [scope, isGroup, user?.agencies_detail]);
-
-  const { data: agenciesPage } = useQuery({
-    queryKey: ["dash-agencies", activeTenant],
-    queryFn: async () =>
-      (
-        await api.get<Paginated<Agency>>("/agencies/", {
-          params: {
-            page_size: 200,
-            is_active: true,
-            ...(activeTenant ? { tenant: activeTenant } : {}),
-          },
-        })
-      ).data,
-    enabled: showAgencyFilter && agencyOptions === null && (!!activeTenant || !isGroup),
-  });
-
-  const agencies =
-    agencyOptions ??
-    agenciesPage?.results ??
-    [];
-
-  const { data: ownersPage } = useQuery({
-    queryKey: ["dash-owners", activeTenant, filters.agency],
-    queryFn: async () =>
-      (
-        await api.get<Paginated<AdminUser>>("/users/", {
-          params: {
-            page_size: 200,
-            is_active: true,
-            is_group_level: false,
-            ...(activeTenant ? { tenant: activeTenant } : {}),
-            ...(filters.agency ? { agency: filters.agency } : {}),
-          },
-        })
-      ).data,
-    enabled: showOwnerFilter && (!!activeTenant || !isGroup),
-  });
-
-  const { data: productsPage } = useQuery({
-    queryKey: ["dash-products", activeTenant],
-    queryFn: async () =>
-      (
-        await api.get<Paginated<CreditProduct>>("/credit-products/", {
-          params: {
-            page_size: 200,
-            is_active: true,
-            ...(activeTenant ? { tenant: activeTenant } : {}),
-          },
-        })
-      ).data,
-    enabled: !!activeTenant || !isGroup,
-  });
+  const showOrgFilters = scope !== "OWN" || isGroup || !!user?.is_superuser;
 
   const queryParams = useMemo(() => {
     const p: Record<string, string> = { live: "1" };
     if (activeTenant) p.tenant = activeTenant;
     (Object.keys(filters) as (keyof DashFilters)[]).forEach((k) => {
-      if (filters[k]) p[k === "owner" ? "owner" : k] = filters[k];
+      if (filters[k]) p[k] = filters[k];
     });
-    if (scope === "OWN" && user?.id && !filters.owner) {
-      p.owner = user.id;
-    }
     return p;
-  }, [activeTenant, filters, scope, user?.id]);
+  }, [activeTenant, filters]);
 
   const { data, isLoading, isFetching, isError, refetch } = useQuery({
     queryKey: ["dashboard", queryParams],
@@ -415,8 +306,15 @@ export function DashboardPage() {
   };
 
   const resetFilters = () => setFilters(EMPTY_FILTERS);
-
-  const hasActiveFilters = Object.values(filters).some(Boolean);
+  const activeFilterCount = countActive(
+    filters.date_from,
+    filters.date_to,
+    filters.agency,
+    filters.gestionnaire,
+    filters.status,
+    filters.product,
+    filters.client_type,
+  );
 
   const outstanding = num(data?.portfolio.outstanding);
   const overdue = num(data?.risk.total_overdue);
@@ -425,186 +323,141 @@ export function DashboardPage() {
       ? (overdue / (outstanding + overdue)) * 100
       : null;
   const s = data?.credits.summary;
+  const scopeLabel = isGroup && !activeTenant
+    ? "Vue consolidée Groupe"
+    : tenantCode
+      ? `${tenantCode} · ${tenantName}`
+      : tenantName || "Fin Flow";
 
   return (
-    <div className="dashboard-page">
-      <header className="dash-hero">
-        <div className="dash-hero-glow" aria-hidden />
-        <div className="dash-hero-copy">
-          <p className="dash-hero-kicker">
-            {tenantCode
-              ? `${tenantCode} · ${tenantName}`
-              : tenantName || "Fin Flow"}
-          </p>
-          <h1 className="dash-hero-title">
-            {`${greeting()}, ${user?.first_name || user?.username || ""}`.trim()}
-          </h1>
-          <p className="dash-hero-sub">
-            {isGroup && !activeTenant
-              ? "Vue consolidée Groupe — synthèse multi-filiales"
-              : "Pilotage opérationnel filtré selon votre périmètre"}
-          </p>
-        </div>
-        <div className="dash-hero-actions">
-          {hasPerm(user, "credits.add_creditapplication") && (
-            <QuickAction
-              to="/dossiers/nouveau"
-              icon={FilePlus2}
-              label="Nouveau dossier"
-            />
-          )}
-          <QuickAction to="/clients" icon={UserRound} label="Clients" />
-          <QuickAction
-            to="/taches"
-            icon={ClipboardCheck}
-            label="Mes validations"
-          />
-          <QuickAction
-            to="/simulateur"
-            icon={Calculator}
-            label="Simulateur"
-          />
-        </div>
-      </header>
+    <div className="page-shell dashboard-page">
+      <PageHeader
+        icon={LayoutDashboard}
+        title={`${greeting()}, ${user?.first_name || user?.username || ""}`.trim()}
+        subtitle={
+          isGroup && !activeTenant
+            ? `${scopeLabel} — synthèse multi-filiales`
+            : `${scopeLabel} — pipeline, décaissements et risque de votre périmètre`
+        }
+        actions={
+          <div className="dash-header-actions">
+            {hasPerm(user, "credits.add_creditapplication") && (
+              <QuickAction
+                to="/dossiers/nouveau"
+                icon={FilePlus2}
+                label="Nouveau dossier"
+              />
+            )}
+            {hasAnyPerm(user, PERM_TASKS) && (
+              <QuickAction
+                to="/taches"
+                icon={ClipboardCheck}
+                label="Mes validations"
+              />
+            )}
+          </div>
+        }
+      />
 
-      <section className="dash-toolbar" aria-label="Filtres du tableau de bord">
-        <div className="dash-toolbar-top">
-          <div className="dash-toolbar-label">
-            <Filter size={16} />
-            <span>Filtres</span>
-            {isFetching && <span className="dash-live">Mise à jour…</span>}
-          </div>
-          <div className="dash-presets">
-            {[
-              ["7d", "7 jours"],
-              ["30d", "30 jours"],
-              ["month", "Mois en cours"],
-              ["year", "Année"],
-            ].map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                className={`dash-chip${isPresetActive(filters, key) ? " is-active" : ""}`}
-                onClick={() =>
-                  setFilters((prev) => ({ ...prev, ...presetRange(key) }))
-                }
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {hasActiveFilters && (
-            <button
-              type="button"
-              className="dash-reset"
-              onClick={resetFilters}
-            >
-              <RotateCcw size={14} />
-              Réinitialiser
-            </button>
-          )}
-        </div>
-        <div className="dash-filter-grid">
-            <label className="field">
-              <span>Du</span>
-              <input
-                type="date"
-                value={filters.date_from}
-                onChange={(e) => setFilter("date_from", e.target.value)}
-              />
-            </label>
-            <label className="field">
-              <span>Au</span>
-              <input
-                type="date"
-                value={filters.date_to}
-                onChange={(e) => setFilter("date_to", e.target.value)}
-              />
-            </label>
-            {showAgencyFilter && (
-              <label className="field">
-                <span>Agence</span>
-                <select
-                  value={filters.agency}
-                  onChange={(e) => setFilter("agency", e.target.value)}
-                >
-                  <option value="">Toutes</option>
-                  {agencies.map((a) => (
-                    <option key={a.id} value={a.id}>
-                      {a.code} — {a.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {showOwnerFilter && (
-              <label className="field">
-                <span>Propriétaire du dossier</span>
-                <select
-                  value={filters.owner}
-                  onChange={(e) => setFilter("owner", e.target.value)}
-                >
-                  <option value="">Tous</option>
-                  {(ownersPage?.results ?? []).map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.first_name || u.last_name
-                        ? `${u.first_name} ${u.last_name}`.trim()
-                        : u.username}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            <label className="field">
-              <span>Statut</span>
-              <select
-                value={filters.status}
-                onChange={(e) => setFilter("status", e.target.value)}
-              >
-                <option value="">Tous</option>
-                {Object.entries(STATUS_LABELS).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Produit</span>
-              <select
-                value={filters.product}
-                onChange={(e) => setFilter("product", e.target.value)}
-              >
-                <option value="">Tous</option>
-                {(productsPage?.results ?? []).map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Type de client</span>
-              <select
-                value={filters.client_type}
-                onChange={(e) => setFilter("client_type", e.target.value)}
-              >
-                <option value="">Tous</option>
-                {Object.entries(CLIENT_TYPE_LABELS).map(([k, v]) => (
-                  <option key={k} value={k}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-          {scope === "OWN" && (
+      <div className="dash-presets" aria-label="Périodes">
+        {(
+          [
+            ["7d", "7 jours"],
+            ["30d", "30 jours"],
+            ["month", "Mois en cours"],
+            ["year", "Année"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            className={`dash-chip${isPresetActive(filters, key) ? " is-active" : ""}`}
+            onClick={() =>
+              setFilters((prev) => ({ ...prev, ...presetRange(key) }))
+            }
+          >
+            {label}
+          </button>
+        ))}
+        {isFetching && <span className="dash-live">Mise à jour…</span>}
+      </div>
+
+      <ListFilters
+        extra={
+          scope === "OWN" && !isGroup ? (
             <p className="dash-scope-note">
-              Périmètre « mes dossiers » : les indicateurs portent sur vos
-              dossiers uniquement.
+              Périmètre « mes dossiers » : les indicateurs portent sur les
+              dossiers que vous avez créés. L’agence d’un dossier est celle du
+              gestionnaire au moment de la création.
             </p>
-          )}
-      </section>
+          ) : undefined
+        }
+        activeCount={activeFilterCount}
+        onReset={resetFilters}
+      >
+        <FilterField label="Du" active={!!filters.date_from}>
+          <input
+            type="date"
+            value={filters.date_from}
+            onChange={(e) => setFilter("date_from", e.target.value)}
+          />
+        </FilterField>
+        <FilterField label="Au" active={!!filters.date_to}>
+          <input
+            type="date"
+            value={filters.date_to}
+            onChange={(e) => setFilter("date_to", e.target.value)}
+          />
+        </FilterField>
+        {showOrgFilters && (
+          <AgencyFilter
+            value={filters.agency}
+            onChange={(v) => setFilter("agency", v)}
+          />
+        )}
+        {showOrgFilters && (
+          <OfficerFilter
+            value={filters.gestionnaire}
+            onChange={(v) => setFilter("gestionnaire", v)}
+          />
+        )}
+        <FilterField label="Statut" active={!!filters.status}>
+          <FilterSelect
+            value={filters.status}
+            onChange={(v) => setFilter("status", v)}
+          >
+            {CREDIT_STATUS_OPTIONS.map(([value, label]) => (
+              <option key={value || "all"} value={value}>
+                {label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <ProductFilter
+          value={filters.product}
+          onChange={(v) => setFilter("product", v)}
+        />
+        <FilterField label="Type de client" active={!!filters.client_type}>
+          <FilterSelect
+            value={filters.client_type}
+            onChange={(v) => setFilter("client_type", v)}
+          >
+            <option value="">Tous les types</option>
+            {Object.entries(CLIENT_TYPE_LABELS).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+      </ListFilters>
+
+      {showOrgFilters && (
+        <p className="dash-scope-note dash-agency-hint">
+          L’agence d’un dossier est celle du gestionnaire qui le crée — pas une
+          agence choisie à la main.
+        </p>
+      )}
 
       {isLoading ? (
         <Spinner />
@@ -615,7 +468,17 @@ export function DashboardPage() {
         />
       ) : (
         <>
-          <KpiSection title="Pipeline crédit">
+          {data.cbs && data.cbs.failed > 0 && (
+            <div className="dash-cbs-banner" role="status">
+              <ServerCrash size={16} />
+              {data.cbs.failed} échec{data.cbs.failed > 1 ? "s" : ""} CBS
+              <span className="muted">
+                {data.cbs.pending} en attente · {data.cbs.retry} à rejouer
+              </span>
+            </div>
+          )}
+
+          <KpiSection title="À traiter">
             <StatCard
               icon={FileText}
               label="Dossiers"
@@ -633,50 +496,20 @@ export function DashboardPage() {
               icon={RotateCcw}
               label="Retournés"
               value={s?.returned_count ?? 0}
-              tone="warning"
-            />
-            <StatCard
-              icon={CheckCircle2}
-              label="Approuvés"
-              value={s?.approved_count ?? 0}
-              tone="success"
-              hint={formatMoney(s?.amount_approved ?? null)}
-            />
-            <StatCard
-              icon={XCircle}
-              label="Rejetés"
-              value={s?.rejected_count ?? 0}
-              tone="danger"
+              tone={(s?.returned_count ?? 0) > 0 ? "warning" : "default"}
             />
             <StatCard
               icon={ClipboardCheck}
-              label="Tâches en attente"
-              value={data.workflow?.pending_tasks ?? 0}
-              hint={`${data.workflow?.conditions_pending ?? 0} réserve(s)`}
+              label="À décaisser"
+              value={s?.disbursement_pending_count ?? 0}
+              tone={
+                (s?.disbursement_pending_count ?? 0) > 0 ? "warning" : "default"
+              }
+              hint={formatMoney(s?.disbursement_pending_amount ?? null)}
             />
           </KpiSection>
 
-          <KpiSection title="Production & décaissement">
-            <StatCard
-              icon={FileSignature}
-              label="Contrats générés"
-              value={
-                (s?.contract_generated_count ?? 0) ||
-                (data.contracts?.generated ?? 0)
-              }
-              hint={
-                data.contracts
-                  ? `${data.contracts.signed} signé(s)`
-                  : undefined
-              }
-            />
-            <StatCard
-              icon={Clock}
-              label="Décaissement à valider"
-              value={s?.disbursement_pending_count ?? 0}
-              tone="warning"
-              hint={formatMoney(s?.disbursement_pending_amount ?? null)}
-            />
+          <KpiSection title="Portefeuille">
             <StatCard
               icon={Wallet}
               label="Décaissés"
@@ -685,15 +518,9 @@ export function DashboardPage() {
             />
             <StatCard
               icon={Banknote}
-              label="Encours portefeuille"
+              label="Encours"
               value={compactMoney(data.portfolio.outstanding)}
               hint={`${data.portfolio.active_loans} prêt(s) actif(s)`}
-            />
-            <StatCard
-              icon={Layers}
-              label="Prêts"
-              value={data.portfolio.total_loans}
-              hint={formatMoney(data.portfolio.disbursed_total ?? null)}
             />
             <StatCard
               icon={AlertTriangle}
@@ -702,72 +529,35 @@ export function DashboardPage() {
               tone={
                 data.portfolio.overdue_installments > 0 ? "danger" : "default"
               }
-            />
-          </KpiSection>
-
-          <KpiSection title="Risque, recouvrement & garanties">
-            <StatCard
-              icon={AlertTriangle}
-              label="Portefeuille à risque"
-              value={parRatio !== null ? `${parRatio.toFixed(1)} %` : "—"}
-              tone={parRatio !== null && parRatio > 5 ? "danger" : "warning"}
-              hint={formatMoney(overdue)}
+              hint={
+                parRatio !== null
+                  ? `PAR ${parRatio.toFixed(1)} % · ${formatMoney(overdue)}`
+                  : undefined
+              }
             />
             <StatCard
               icon={ClipboardCheck}
-              label="Dossiers recouvrement"
+              label="Recouvrement"
               value={data.risk.open_cases ?? 0}
-              hint="Hors clôturés"
+              hint="Dossiers ouverts"
             />
-            <StatCard
-              icon={ShieldCheck}
-              label="Garanties actives"
-              value={data.guarantees.active_count ?? data.guarantees.count}
-              hint={compactMoney(
-                data.guarantees.active_value ??
-                  data.guarantees.total_current_value,
-              )}
-            />
-            <StatCard
-              icon={UsersRound}
-              label="Clients"
-              value={data.clients.total}
-              hint={
-                data.clients.new_period_label === "period"
-                  ? `+${data.clients.new_this_month} sur la période`
-                  : `+${data.clients.new_this_month} ce mois-ci`
-              }
-            />
-            {data.cbs && (
-              <StatCard
-                icon={ServerCrash}
-                label="Échecs CBS"
-                value={data.cbs.failed}
-                tone={data.cbs.failed > 0 ? "danger" : "default"}
-                hint={`${data.cbs.pending} en attente · ${data.cbs.retry} à rejouer`}
-              />
-            )}
           </KpiSection>
 
           <div className="dash-grid">
             <div className="dash-main">
               <section className="card">
                 <div className="card-title">
-                  <Layers size={18} />
-                  Évolution des dossiers
-                </div>
-                <div className="card-body">
-                  <TrendChart data={data.credits.monthly} />
-                </div>
-              </section>
-
-              <section className="card">
-                <div className="card-title">
                   <Clock size={18} />
                   Activité récente
-                  <Link to="/dossiers" className="card-title-link">
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    to="/dossiers"
+                    className="card-title-link"
+                    fallback={null}
+                  >
                     Voir tout <ArrowUpRight size={14} />
-                  </Link>
+                  </PermLink>
                 </div>
                 <div className="card-body no-pad">
                   {data.credits.recent.length === 0 ? (
@@ -778,7 +568,9 @@ export function DashboardPage() {
                     <ul className="activity-list">
                       {data.credits.recent.map((r) => (
                         <li key={r.id}>
-                          <Link
+                          <PermLink
+                            user={user}
+                            anyOf={PERM_CREDITS}
                             to={`/dossiers/${r.id}`}
                             className="activity-row"
                           >
@@ -789,7 +581,12 @@ export function DashboardPage() {
                               <span className="activity-client">{r.client}</span>
                               <span className="activity-meta">
                                 {r.reference || "—"} · {r.product}
-                                {r.owner ? ` · ${r.owner}` : ""}
+                                {r.agency && r.agency !== "—"
+                                  ? ` · ${r.agency}`
+                                  : ""}
+                                {r.owner && r.owner !== "—"
+                                  ? ` · ${r.owner}`
+                                  : ""}
                               </span>
                             </span>
                             <span className="activity-amount">
@@ -802,7 +599,7 @@ export function DashboardPage() {
                             >
                               {STATUS_LABELS[r.status] ?? r.status}
                             </span>
-                          </Link>
+                          </PermLink>
                         </li>
                       ))}
                     </ul>
@@ -813,7 +610,36 @@ export function DashboardPage() {
               <section className="card">
                 <div className="card-title">
                   <FileText size={18} />
-                  Dossiers par statut
+                  Évolution des dossiers
+                </div>
+                <div className="card-body">
+                  <TrendChart data={data.credits.monthly} />
+                </div>
+              </section>
+            </div>
+
+            <aside className="dash-side">
+              <section className="card">
+                <div className="card-title">
+                  <Building2 size={18} />
+                  Par agence
+                </div>
+                <div className="card-body">
+                  <DistBars
+                    emptyMessage="Aucun dossier rattaché à une agence."
+                    rows={(data.credits.by_agency ?? []).map((a) => ({
+                      label: a.agency,
+                      count: a.count,
+                      amount: a.amount,
+                    }))}
+                  />
+                </div>
+              </section>
+
+              <section className="card">
+                <div className="card-title">
+                  <FileText size={18} />
+                  Par statut
                 </div>
                 <div className="card-body">
                   <DistBars
@@ -827,21 +653,6 @@ export function DashboardPage() {
                   />
                 </div>
               </section>
-            </div>
-
-            <aside className="dash-side">
-              <section className="card">
-                <div className="card-title">
-                  <UsersRound size={18} />
-                  Répartition clientèle
-                </div>
-                <div className="card-body">
-                  <ClientDonut
-                    rows={data.clients.by_type}
-                    total={data.clients.total}
-                  />
-                </div>
-              </section>
 
               <section className="card">
                 <div className="card-title">
@@ -849,20 +660,6 @@ export function DashboardPage() {
                   Portefeuille à risque
                 </div>
                 <div className="card-body">
-                  <div className="risk-summary">
-                    <div>
-                      <span className="rs-label">Encours en retard</span>
-                      <span className="rs-value danger">
-                        {formatMoney(overdue)}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="rs-label">Cas ouverts</span>
-                      <span className="rs-value">
-                        {data.risk.open_cases ?? 0}
-                      </span>
-                    </div>
-                  </div>
                   <DistBars
                     emptyMessage="Aucun encours à risque."
                     rows={data.risk.by_par_class.map((r) => ({
@@ -872,100 +669,6 @@ export function DashboardPage() {
                       tone: r.par_class === "PAR0" ? "success" : "danger",
                     }))}
                   />
-                  {(data.risk.by_stage?.length ?? 0) > 0 && (
-                    <>
-                      <p className="muted small" style={{ marginTop: 14 }}>
-                        Par stade de recouvrement
-                      </p>
-                      <DistBars
-                        emptyMessage=""
-                        rows={(data.risk.by_stage ?? []).map((r) => ({
-                          label: STAGE_LABELS[r.stage] ?? r.stage,
-                          count: r.count,
-                          amount: r.amount,
-                          tone: "warning",
-                        }))}
-                      />
-                    </>
-                  )}
-                </div>
-              </section>
-
-              <section className="card">
-                <div className="card-title">
-                  <Boxes size={18} />
-                  Top produits
-                </div>
-                <div className="card-body">
-                  <DistBars
-                    emptyMessage="Aucun produit utilisé."
-                    rows={data.credits.by_product.map((p) => ({
-                      label: p.product,
-                      count: p.count,
-                      amount: p.amount,
-                    }))}
-                  />
-                </div>
-              </section>
-
-              {(data.credits.by_agency?.length ?? 0) > 0 && (
-                <section className="card">
-                  <div className="card-title">
-                    <Layers size={18} />
-                    Par agence
-                  </div>
-                  <div className="card-body">
-                    <DistBars
-                      emptyMessage="Aucune agence."
-                      rows={(data.credits.by_agency ?? []).map((a) => ({
-                        label: a.agency,
-                        count: a.count,
-                        amount: a.amount,
-                      }))}
-                    />
-                  </div>
-                </section>
-              )}
-
-              <section className="card">
-                <div className="card-title">
-                  <ShieldCheck size={18} />
-                  Garanties & contrats
-                </div>
-                <div className="card-body">
-                  <div className="mini-kpis">
-                    <div className="mini-kpi">
-                      <span className="mk-value">
-                        {data.guarantees.active_count ?? data.guarantees.count}
-                      </span>
-                      <span className="mk-label">Garanties actives</span>
-                    </div>
-                    <div className="mini-kpi">
-                      <span className="mk-value">
-                        {compactMoney(
-                          data.guarantees.active_value ??
-                            data.guarantees.total_current_value,
-                        )}
-                      </span>
-                      <span className="mk-label">Valeur</span>
-                    </div>
-                    {data.contracts && (
-                      <>
-                        <div className="mini-kpi">
-                          <span className="mk-value">
-                            {data.contracts.generated}
-                          </span>
-                          <span className="mk-label">Contrats générés</span>
-                        </div>
-                        <div className="mini-kpi">
-                          <span className="mk-value">
-                            {data.contracts.signed}
-                          </span>
-                          <span className="mk-label">Signés</span>
-                        </div>
-                      </>
-                    )}
-                  </div>
                 </div>
               </section>
             </aside>
@@ -974,12 +677,4 @@ export function DashboardPage() {
       )}
     </div>
   );
-}
-
-
-function greeting() {
-  const h = new Date().getHours();
-  if (h < 12) return "Bonjour";
-  if (h < 18) return "Bon après-midi";
-  return "Bonsoir";
 }

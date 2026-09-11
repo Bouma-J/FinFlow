@@ -232,11 +232,16 @@ class Client(TenantScopedModel, AuthoredModel):
         return self.display_name
 
     @property
-    def display_name(self):
-        if self.client_type in (
+    def is_legal_entity(self) -> bool:
+        """Entreprise ou groupement : fiche morale, pas particulier."""
+        return self.client_type in (
             self.ClientType.CORPORATE,
             self.ClientType.PROFESSIONAL,
-        ):
+        )
+
+    @property
+    def display_name(self):
+        if self.is_legal_entity:
             return self.company_name or "(sans raison sociale)"
         return f"{self.first_name} {self.last_name}".strip() or "(client sans nom)"
 

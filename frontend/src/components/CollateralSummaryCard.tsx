@@ -1,8 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
 import { Landmark, Shield, TriangleAlert, Users } from "lucide-react";
-import { Link } from "react-router-dom";
 
 import { api } from "@/api/client";
+import { useAuth } from "@/auth/AuthContext";
+import { PERM_CREDITS } from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
 import { Card, formatMoney } from "@/components/ui";
 
 export type CollateralSummary = {
@@ -44,6 +46,7 @@ export function CollateralSummaryCard({
   /** Sans carte englobante (déjà dans une section dossier). */
   embedded?: boolean;
 }) {
+  const { user } = useAuth();
   const { data, isLoading, error } = useQuery({
     queryKey: ["collateral-summary", applicationId],
     queryFn: async () =>
@@ -221,7 +224,13 @@ export function CollateralSummaryCard({
       {!embedded && (
         <p className="muted small" style={{ marginTop: "1rem" }}>
           Gérer le collatéral sur le dossier :{" "}
-          <Link to={`/dossiers/${applicationId}`}>ouvrir la fiche</Link>
+          <PermLink
+            user={user}
+            anyOf={PERM_CREDITS}
+            to={`/dossiers/${applicationId}`}
+          >
+            ouvrir la fiche
+          </PermLink>
           {data.requires_guarantee
             ? " — ce produit exige une garantie ou caution."
             : ""}

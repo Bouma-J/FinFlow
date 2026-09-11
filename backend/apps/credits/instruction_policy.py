@@ -32,6 +32,9 @@ def _product_client_type_ok(application) -> bool:
     allowed = getattr(product, "client_type", "") or "ALL"
     if allowed == "ALL":
         return True
+    # Produit « entreprise » : entreprises et groupements (entité morale).
+    if allowed == "CORPORATE":
+        return bool(getattr(client, "is_legal_entity", False))
     return client.client_type == allowed
 
 

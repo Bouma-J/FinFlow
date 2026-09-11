@@ -199,6 +199,24 @@ def test_match_client_type_product(tenant_a, client_a, product_a):
             assert_policy_submit_gates(app)
 
 
+def test_corporate_product_accepts_groupement(tenant_a, product_a):
+    with tenant_context(tenant_a.id):
+        CreditInstructionPolicy.objects.create(
+            tenant=tenant_a, match_product_client_type=True
+        )
+        product_a.client_type = CreditProduct.ClientType.CORPORATE
+        product_a.save(update_fields=["client_type"])
+        group = Client.objects.create(
+            tenant=tenant_a,
+            reference="CLI-GIE-POL",
+            client_type=Client.ClientType.PROFESSIONAL,
+            company_name="GIE Politique",
+            kyc_status=Client.KycStatus.VALIDATED,
+        )
+        app = _ready_app(tenant_a, group, product_a, ref="POL-GIE")
+        assert_policy_submit_gates(app)
+
+
 def test_coverage_block_submit(tenant_a, client_a, product_a):
     with tenant_context(tenant_a.id):
         CreditInstructionPolicy.objects.create(

@@ -42,6 +42,7 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
     action_perms = {
         "me": [],
         "change_password": [],
+        "officers": [],
         "reset_password": ["accounts.change_user"],
         "provision_filiale_admin": [],  # IsGroupLevel vérifié dans l'action
     }
@@ -101,6 +102,20 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
                 "Utilisez « Mot de passe » pour le définir manuellement."
             )
         return Response(data, status=status.HTTP_201_CREATED, headers=headers)
+
+    @action(detail=False, methods=["get"])
+    def officers(self, request):
+        """Liste légère des utilisateurs de la filiale (filtre gestionnaire)."""
+        qs = (
+            self.get_queryset()
+            .filter(is_active=True)
+            .order_by("last_name", "first_name", "username")
+        )
+        results = []
+        for user in qs[:300]:
+            label = (user.get_full_name() or "").strip() or user.username
+            results.append({"id": str(user.pk), "display_name": label})
+        return Response({"results": results})
 
     @action(detail=False, methods=["get", "patch"])
     def me(self, request):
@@ -229,7 +244,11 @@ class UserViewSet(TenantContextMixin, viewsets.ModelViewSet):
         detail=False,
         methods=["post"],
         url_path="provision-filiale-admin",
-        permission_classes=[IsAuthenticated, IsGroupLevel],
+        permission_classes=[
+            IsAuthenticated,
+            MustChangePasswordGate,
+            IsGroupLevel,
+        ],
     )
     def provision_filiale_admin(self, request):
         """
@@ -335,10 +354,10 @@ class PermissionViewSet(viewsets.ReadOnlyModelViewSet):
         MustChangePasswordGate,
         HasModelPermission,
     ]
-    # Lecture réservée aux gestionnaires de rôles
+    # Lecture réservée aux gestionnaires de rôles filiale (TenantRole).
     action_perms = {
-        "list": ["auth.change_group"],
-        "retrieve": ["auth.change_group"],
+        "list": ["accounts.view_tenantrole"],
+        "retrieve": ["accounts.view_tenantrole"],
     }
     pagination_class = None
     search_fields = ["name", "codename", "content_type__app_label"]

@@ -17,7 +17,6 @@ from apps.collections.models import (
 from apps.collections.services import (
     apply_restructure,
     ensure_litigation_document_categories,
-    record_repayment,
     refresh_loan_overdue,
     write_off_case,
 )
@@ -81,7 +80,14 @@ def _loan_case(tenant, product, client_obj, *, days=40, principal="20000", ref="
         total_due=Decimal(principal),
         status=Installment.Status.OVERDUE,
     )
-    case = refresh_loan_overdue(loan)
+    case = refresh_loan_overdue(
+        loan,
+        cbs_status={
+            "settled": False,
+            "days_overdue": days,
+            "overdue_amount": Decimal(principal),
+        },
+    )
     return loan, case
 
 
@@ -142,8 +148,8 @@ def test_api_repayment_and_set_next_action(api, tenant_a, product_a, client_a):
         {"amount": "4000", "payment_date": str(date.today()), "reference": "ENC-T"},
         format="json",
     )
-    assert r.status_code == 201, r.content
-    assert Decimal(r.data["overdue_amount"]) == Decimal("6000")
+    assert r.status_code == 400, r.content
+    assert "CBS" in r.json()["errors"]["detail"]
 
     r = api.post(
         f"/api/v1/collection-cases/{case.id}/set-next-action/",
@@ -156,6 +162,24 @@ def test_api_repayment_and_set_next_action(api, tenant_a, product_a, client_a):
     )
     assert r.status_code == 200
     assert r.data["next_action_type"] == "CALL"
+
+
+def test_api_litigation_event_refuses_without_open_file(
+    api, tenant_a, product_a, client_a
+):
+    with tenant_context(tenant_a.id):
+        _, case = _loan_case(tenant_a, product_a, client_a, ref="REF-API-NO-LIT")
+
+    r = api.post(
+        f"/api/v1/collection-cases/{case.id}/litigation-events/",
+        {
+            "event_type": "HEARING",
+            "event_date": (timezone.localdate() + timedelta(days=5)).isoformat(),
+        },
+        format="json",
+    )
+    assert r.status_code == 400, r.content
+    assert case.litigations.count() == 0
 
 
 def test_api_legal_party_and_litigation_flow(api, tenant_a, product_a, client_a):
@@ -290,9 +314,10 @@ def test_service_restructure_then_second_litigation(tenant_a, product_a, client_
         apply_restructure(case, new_duration_months=4, reason="Test smoke")
         loan.refresh_from_db()
         assert loan.status == Loan.Status.ACTIVE
+        assert loan.duration_months == 6
         case.refresh_from_db()
-        # Plus d'impayé immédiat → clôturé
-        assert case.stage == CollectionCase.Stage.CLOSED
+        assert case.restructures.filter(status="PENDING").exists()
+        assert case.days_overdue >= 31
 
         # Réouverture contentieuse possible (2e procédure)
         lit1 = LitigationFile.objects.create(

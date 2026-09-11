@@ -9,17 +9,19 @@ import {
   Settings2,
   X,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
 import type { CbsConnector, IntegrationLog, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { isFinflowAdmin } from "@/auth/routePerms";
 import {
   Badge,
   PageHeader,
   QueryStatus,
   TenantScopeNotice,
 } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 
 /** Défauts Perfect alignés sur backend/apps/corebanking/perfect_defaults.py */
 const PERFECT = {
@@ -30,6 +32,7 @@ const PERFECT = {
     adh_situation: "gateway-perfect/adh/situation",
     crd_simple: "gateway-perfect/crd/simple",
     crd_situation: "gateway-perfect/crd/situation",
+    crd_impayes: "gateway-perfect/crd/impayes",
   },
   periodicity_map: {
     DAILY: "JOURNALIER",
@@ -71,6 +74,7 @@ type ConnectorForm = {
   adh_situation_path: string;
   crd_simple_path: string;
   crd_situation_path: string;
+  crd_impayes_path: string;
   disburse_mode: "LOCAL" | "CBS";
   id_point_service: string;
   id_gestionnaire: string;
@@ -94,6 +98,7 @@ const EMPTY_FORM: ConnectorForm = {
   adh_situation_path: PERFECT.endpoints.adh_situation,
   crd_simple_path: PERFECT.endpoints.crd_simple,
   crd_situation_path: PERFECT.endpoints.crd_situation,
+  crd_impayes_path: PERFECT.endpoints.crd_impayes,
   disburse_mode: "LOCAL",
   id_point_service: PERFECT.defaults.idPointService,
   id_gestionnaire: PERFECT.defaults.idGestionnaire,
@@ -143,6 +148,10 @@ function formFromConnector(c: CbsConnector): ConnectorForm {
       endpoints.crd_situation,
       PERFECT.endpoints.crd_situation,
     ),
+    crd_impayes_path: str(
+      endpoints.crd_impayes,
+      PERFECT.endpoints.crd_impayes,
+    ),
     disburse_mode: mode === "CBS" ? "CBS" : "LOCAL",
     id_point_service: str(
       defaults.idPointService,
@@ -175,6 +184,8 @@ function buildPayload(form: ConnectorForm, opts: { includeAuth: boolean }) {
       crd_simple: form.crd_simple_path.trim() || PERFECT.endpoints.crd_simple,
       crd_situation:
         form.crd_situation_path.trim() || PERFECT.endpoints.crd_situation,
+      crd_impayes:
+        form.crd_impayes_path.trim() || PERFECT.endpoints.crd_impayes,
     },
     disbursement: {
       mode: form.disburse_mode,
@@ -232,29 +243,19 @@ function connectorMode(c: CbsConnector): string {
   return c.base_url ? "CBS" : "LOCAL";
 }
 
-function apiErrorMessage(err: unknown, fallback: string): string {
-  const data = (err as { response?: { data?: Record<string, unknown> } })
-    ?.response?.data;
-  if (!data) return fallback;
-  if (typeof data.detail === "string") return data.detail;
-  const errors = data.errors as Record<string, string[]> | undefined;
-  if (errors) {
-    const first = Object.entries(errors)[0];
-    if (first) return `${first[0]} : ${first[1][0]}`;
-  }
-  return fallback;
-}
-
 export function AdminConnectorsPage() {
   const { user, activeTenant } = useAuth();
   const qc = useQueryClient();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
+  const canImportCbs = isFinflowAdmin(user);
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<CbsConnector | null>(null);
   const [form, setForm] = useState<ConnectorForm>({ ...EMPTY_FORM });
   const [error, setError] = useState<string | null>(null);
   const [testMsg, setTestMsg] = useState<string | null>(null);
+  const dossierFileRef = useRef<HTMLInputElement>(null);
+  const [dossierTargetId, setDossierTargetId] = useState<string | null>(null);
 
   const connectors = useQuery({
     queryKey: ["cbs-connectors", activeTenant],
@@ -378,6 +379,35 @@ export function AdminConnectorsPage() {
       setTestMsg(apiErrorMessage(err, "Échec du test PING.")),
   });
 
+  const importPortfolio = useMutation({
+    mutationFn: async (payload: { id: string; file?: File }) => {
+      if (payload.file) {
+        const fd = new FormData();
+        fd.append("file", payload.file);
+        return (
+          await api.post(`/cbs-connectors/${payload.id}/import-portfolio/`, fd, {
+            headers: { "Content-Type": "multipart/form-data" },
+          })
+        ).data as { detail?: string; status?: string };
+      }
+      return (
+        await api.post(`/cbs-connectors/${payload.id}/import-portfolio/`)
+      ).data as { detail?: string; status?: string };
+    },
+    onSuccess: (data) => {
+      setTestMsg(
+        data.detail ||
+          "Import des crédits CBS lancé. Les dossiers de recouvrement seront classés par tranche.",
+      );
+      invalidate();
+      qc.invalidateQueries({ queryKey: ["collection-cases"] });
+    },
+    onError: (err) =>
+      setTestMsg(
+        apiErrorMessage(err, "Impossible d'importer les crédits CBS."),
+      ),
+  });
+
   const formOpen = showForm || Boolean(editing);
   const pending = create.isPending || patch.isPending;
 
@@ -443,7 +473,7 @@ export function AdminConnectorsPage() {
       <PageHeader
         icon={Cable}
         title="Connecteurs Core Banking"
-        subtitle="API Perfect : authentification, situation adhérent, décaissement crédit"
+        subtitle="API Perfect : authentification, crédits existants, décaissement"
         actions={
           <button
             type="button"
@@ -476,7 +506,9 @@ export function AdminConnectorsPage() {
               </div>
               <div className="form-section-desc">
                 Prérempli avec les endpoints gateway-perfect. Renseignez l’URL
-                serveur et les identifiants API pour le mode CBS.
+                serveur et les identifiants API pour le mode CBS. À la première
+                connexion réelle, les crédits déjà ouverts dans le CBS sont
+                importés et classés en recouvrement.
               </div>
             </div>
           </div>
@@ -695,6 +727,20 @@ export function AdminConnectorsPage() {
                 }
               />
             </label>
+            <label className="field full-span">
+              <span>Liste des crédits / impayés (crd/impayes)</span>
+              <input
+                value={form.crd_impayes_path}
+                onChange={(e) =>
+                  setForm({ ...form, crd_impayes_path: e.target.value })
+                }
+              />
+              <span className="muted small">
+                S’il n’existe pas côté CBS, importez un Excel (un n° de dossier
+                par ligne) : FinFlow appellera ensuite crd/situation pour
+                chaque numéro.
+              </span>
+            </label>
           </div>
 
           <div className="form-section-head" style={{ marginTop: 12 }}>
@@ -798,6 +844,20 @@ export function AdminConnectorsPage() {
         </form>
       )}
 
+      <input
+        ref={dossierFileRef}
+        type="file"
+        accept=".xlsx,.csv,.txt"
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          e.target.value = "";
+          if (!file || !dossierTargetId) return;
+          setTestMsg(null);
+          importPortfolio.mutate({ id: dossierTargetId, file });
+        }}
+      />
+
       <QueryStatus
         isLoading={connectors.isLoading}
         isError={connectors.isError}
@@ -893,6 +953,32 @@ export function AdminConnectorsPage() {
                       >
                         Test PING
                       </button>
+                      {canImportCbs && (
+                        <>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => {
+                              setTestMsg(null);
+                              importPortfolio.mutate({ id: c.id });
+                            }}
+                            disabled={importPortfolio.isPending}
+                          >
+                            Importer les crédits
+                          </button>
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={() => {
+                              setDossierTargetId(c.id);
+                              dossierFileRef.current?.click();
+                            }}
+                            disabled={importPortfolio.isPending}
+                          >
+                            Fichier de dossiers
+                          </button>
+                        </>
+                      )}
                     </div>
                   </td>
                 </tr>

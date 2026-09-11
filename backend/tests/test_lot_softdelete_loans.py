@@ -85,6 +85,8 @@ def test_loans_list_lightweight(tenant_a, client_a, product_a):
         username="loan_list",
         codenames=[("credits", "view_loan"), ("credits", "view_creditapplication")],
     )
+    user.data_scope = "TENANT"
+    user.save(update_fields=["data_scope"])
     with tenant_context(tenant_a.id):
         app = CreditApplication.objects.create(
             tenant=tenant_a,

@@ -19,6 +19,7 @@ Plateforme SaaS multi-tenants de gestion du cycle de vie des dossiers de crédit
 | [10 — Exploitation](10-exploitation-supervision.md) | Health, métriques, Celery, sauvegardes |
 | [11 — Glossaire](11-glossaire.md) | Termes métier et techniques |
 | [12 — Connexion au CBS](12-connexion-cbs.md) | Connecteurs, opérations, simulation, adaptateur réel |
+| [14 — Backlog d’étude](14-backlog-etude.md) | 12 fiches (complet / ambitieux), hors code |
 
 ## Documents connexes
 

@@ -19,7 +19,7 @@ export function clientOptionLabel(c: Pick<
   const matricule = (c.cbs_client_id || "").trim() || (c.reference || "").trim() || "—";
   const name =
     (c.display_name || "").trim() ||
-    (c.client_type === "CORPORATE"
+    (c.client_type === "CORPORATE" || c.client_type === "PROFESSIONAL"
       ? (c.company_name || "").trim()
       : `${c.last_name || ""} ${c.first_name || ""}`.trim()) ||
     "Client";
@@ -29,7 +29,7 @@ export function clientOptionLabel(c: Pick<
 /**
  * Champ de saisie avec suggestions de clients.
  * Affiche « matricule CBS + nom » (particulier) ou
- * « matricule CBS + dénomination » (entreprise).
+ * « matricule CBS + dénomination » (entreprise / groupement).
  */
 export function ClientAutocomplete({
   value,
@@ -47,6 +47,13 @@ export function ClientAutocomplete({
   const [selected, setSelected] = useState<boolean>(Boolean(value));
   const [debounced, setDebounced] = useState("");
   const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (initialLabel) {
+      setQuery(initialLabel);
+      setSelected(Boolean(value));
+    }
+  }, [initialLabel, value]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebounced(query.trim()), 250);
@@ -133,14 +140,19 @@ export function ClientAutocomplete({
               </span>
               <span className="ac-name">
                 {(c.display_name || "").trim() ||
-                  (c.client_type === "CORPORATE"
+                  (c.client_type === "CORPORATE" ||
+                  c.client_type === "PROFESSIONAL"
                     ? c.company_name
                     : `${c.last_name || ""} ${c.first_name || ""}`.trim()) ||
                   c.reference ||
                   "—"}
               </span>
               <span className="ac-type">
-                {c.client_type === "CORPORATE" ? "Entreprise" : "Particulier"}
+                {c.client_type === "CORPORATE"
+                  ? "Entreprise"
+                  : c.client_type === "PROFESSIONAL"
+                    ? "Groupement"
+                    : "Particulier"}
                 {c.reference ? ` · ${c.reference}` : ""}
               </span>
             </button>

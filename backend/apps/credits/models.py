@@ -1539,9 +1539,11 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
             if current is not None:
                 self.tenant_id = current
 
-        # Type de client déduit du dossier.
-        if self.application_id and not self.client_type:
-            self.client_type = getattr(self.application.client, "client_type", "")
+        # Type de client : toujours celui de la fiche client du dossier.
+        if self.application_id:
+            live_type = getattr(self.application.client, "client_type", "") or ""
+            if live_type:
+                self.client_type = live_type
 
         # Période de référence : défaut selon le type de client.
         if not self.reference_period:
@@ -1568,6 +1570,18 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
             self.debt_ratio = (
                 (self.total_debts / assets * Decimal("100")) if assets else None
             )
+        elif self.is_groupement:
+            self.repayment_capacity = self.collective_capacity - existing
+            income = (
+                _dec(self.collective_contributions)
+                + _dec(self.collective_other_income)
+                + _dec(self.group_activity_turnover)
+            )
+            self.debt_ratio = (
+                ((existing + installment) / income * Decimal("100"))
+                if income else None
+            )
+            self.dscr = None
         else:
             self.repayment_capacity = self.disposable_income
             income = self.total_income

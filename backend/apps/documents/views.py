@@ -17,6 +17,7 @@ from apps.common.storage_urls import (
 from apps.common.tenancy import get_current_tenant_id
 from apps.common.viewsets import TenantScopedViewSet
 
+from .list_filters import apply_document_list_filters
 from .models import Document, DocumentCategory
 from .serializers import DocumentCategorySerializer, DocumentSerializer
 
@@ -40,9 +41,23 @@ class DocumentViewSet(TenantScopedViewSet):
         "restore": ["documents.change_document"],
     }
     filterset_fields = ["category", "content_type", "object_id", "category__code"]
-    search_fields = ["name", "category__label", "category__code"]
+    search_fields = [
+        "name",
+        "category__label",
+        "category__code",
+        "uploaded_by__first_name",
+        "uploaded_by__last_name",
+        "uploaded_by__username",
+        "origin_key",
+    ]
     ordering_fields = ["created_at", "name", "expiry_date", "size_bytes"]
     ordering = ["-created_at"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        if getattr(self, "action", None) in (None, "list", "expiring_soon"):
+            qs = apply_document_list_filters(qs, self.request)
+        return qs
 
     def perform_create(self, serializer):
         instance = serializer.save(uploaded_by=self.request.user)
@@ -104,10 +119,20 @@ class DocumentViewSet(TenantScopedViewSet):
         from apps.common.upload_validation import assert_upload_meta
 
         filename = assert_upload_meta(filename=filename, size=size_int)
+        tenant_id = get_current_tenant_id() or "group"
+        if size_int:
+            from apps.documents.quotas import assert_ged_quota
+            from apps.tenants.models import Tenant
+
+            tenant = (
+                Tenant.objects.filter(pk=tenant_id).first()
+                if tenant_id != "group"
+                else None
+            )
+            assert_ged_quota(tenant, size_int)
         content_type = (
             request.data.get("content_type") or "application/octet-stream"
         )
-        tenant_id = get_current_tenant_id() or "group"
         from apps.common.files import safe_filename
 
         raw_category = (request.data.get("category") or "misc").strip()

@@ -17,6 +17,7 @@ PERFECT_ENDPOINTS = {
     "adh_situation": "gateway-perfect/adh/situation",
     "crd_simple": "gateway-perfect/crd/simple",
     "crd_situation": "gateway-perfect/crd/situation",
+    "crd_impayes": "gateway-perfect/crd/impayes",
 }
 
 DEFAULT_AUTH_SCOPE = "perfect"

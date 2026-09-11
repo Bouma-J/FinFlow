@@ -14,13 +14,14 @@ import {
   Trash2,
   UserRound,
 } from "lucide-react";
-import { useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type {
   ApprovalTask,
   Client,
+  CreditApplication,
   DationFee,
   DationRequest,
   GedDocument,
@@ -29,8 +30,29 @@ import type {
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
-import { ClientAutocomplete } from "@/components/ClientAutocomplete";
+import {
+  PERM_CLIENTS,
+  PERM_COLLECTIONS,
+  PERM_CREDITS,
+  PERM_GUARANTEES,
+} from "@/auth/routePerms";
+import {
+  ClientAutocomplete,
+  clientOptionLabel,
+} from "@/components/ClientAutocomplete";
+import { PermLink } from "@/components/PermLink";
 import { DecisionPanel } from "@/components/DecisionPanel";
+import {
+  AgencyFilter,
+  ClientFilterBanner,
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  PROCESS_STATUS_OPTIONS,
+  SearchInput,
+  countActive,
+  useClientSearchParam,
+} from "@/components/ListFilters";
 import {
   Badge,
   Card,
@@ -95,15 +117,32 @@ const DOC_CATS = [
 
 export function DationsPage() {
   const { user } = useAuth();
+  const { clientFilter, clearClientFilter } = useClientSearchParam();
   const canInitiate = hasPerm(user, "guarantees.initiate_dationrequest");
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [agency, setAgency] = useState("");
+
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
 
   const list = useQuery({
-    queryKey: ["dation-requests", page],
+    queryKey: ["dation-requests", page, search, status, agency, clientFilter],
     queryFn: async () =>
       (
         await api.get<Paginated<DationRequest>>("/dation-requests/", {
-          params: { page },
+          params: {
+            page,
+            ...(search.trim() ? { search: search.trim() } : {}),
+            ...(status ? { status } : {}),
+            ...(agency ? { agency } : {}),
+            ...(clientFilter ? { client: clientFilter } : {}),
+          },
         })
       ).data,
   });
@@ -124,11 +163,47 @@ export function DationsPage() {
         }
       />
 
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={setFilter(setSearch)}
+            placeholder="Référence, client, description du bien…"
+          />
+        }
+        activeCount={countActive(search, status, agency, clientFilter)}
+        onReset={() => {
+          setSearch("");
+          setStatus("");
+          setAgency("");
+          setPage(1);
+          if (clientFilter) clearClientFilter();
+        }}
+      >
+        <FilterField label="Statut" active={!!status}>
+          <FilterSelect value={status} onChange={setFilter(setStatus)}>
+            {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
+              <option key={value || "all"} value={value}>
+                {label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+      </ListFilters>
+      <ClientFilterBanner
+        clientId={clientFilter}
+        onClear={() => {
+          clearClientFilter();
+          setPage(1);
+        }}
+      />
+
       <QueryStatus
         isLoading={list.isLoading}
         isError={list.isError}
         isEmpty={!list.data?.results.length}
-        emptyMessage="Aucune demande de dation en paiement."
+        emptyMessage="Aucune dation ne correspond à ces critères."
         onRetry={() => list.refetch()}
       >
         <>
@@ -197,7 +272,11 @@ export function DationNewPage() {
   const [searchParams] = useSearchParams();
   const { user } = useAuth();
   const applicationId = searchParams.get("application") || "";
+  const clientFromQuery = searchParams.get("client") || "";
+  const guaranteeFromQuery = searchParams.get("guarantee") || "";
   const [clientId, setClientId] = useState("");
+  const [clientLabel, setClientLabel] = useState("");
+  const [applicationRef, setApplicationRef] = useState("");
   const [cbsClientId, setCbsClientId] = useState("");
   const [selectedGuaranteeIds, setSelectedGuaranteeIds] = useState<string[]>(
     [],
@@ -322,14 +401,62 @@ export function DationNewPage() {
     },
   });
 
-  function onClientPicked(id: string, _label: string, client?: Client | null) {
+  function onClientPicked(id: string, label: string, client?: Client | null) {
     setClientId(id);
+    setClientLabel(label);
     setSelectedGuaranteeIds([]);
     setExtraAssets([]);
     setError(null);
-    // Matricule Core Banking saisi à la création du client.
     setCbsClientId((client?.cbs_client_id || "").trim());
   }
+
+  useEffect(() => {
+    if (!applicationId && !clientFromQuery) {
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        let nextClientId = clientFromQuery;
+        if (applicationId) {
+          const app = (
+            await api.get<CreditApplication>(
+              `/credit-applications/${applicationId}/`,
+            )
+          ).data;
+          if (cancelled) return;
+          setApplicationRef(app.reference || "");
+          if (!nextClientId) {
+            nextClientId = app.client;
+          }
+        }
+        if (!nextClientId) return;
+        const client = (await api.get<Client>(`/clients/${nextClientId}/`)).data;
+        if (cancelled) return;
+        onClientPicked(client.id, clientOptionLabel(client), client);
+      } catch {
+        if (!cancelled) {
+          setError("Impossible de préremplir le client depuis le dossier.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // Prefill once from the incoming deep-link.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [applicationId, clientFromQuery]);
+
+  useEffect(() => {
+    if (!guaranteeFromQuery) return;
+    const ids = (guarantees.data?.results ?? []).map((g) => g.id);
+    if (!ids.includes(guaranteeFromQuery)) return;
+    setSelectedGuaranteeIds((prev) =>
+      prev.includes(guaranteeFromQuery)
+        ? prev
+        : [...prev, guaranteeFromQuery],
+    );
+  }, [guaranteeFromQuery, guarantees.data]);
 
   function toggleGuarantee(id: string) {
     setSelectedGuaranteeIds((prev) =>
@@ -409,6 +536,7 @@ export function DationNewPage() {
                   <ClientAutocomplete
                     value={clientId}
                     onChange={onClientPicked}
+                    initialLabel={clientLabel}
                     required
                   />
                 </label>
@@ -480,6 +608,7 @@ export function DationNewPage() {
                     <div className="dation-guarantee-list" role="list">
                       {(guarantees.data?.results ?? []).map((g) => {
                         const checked = selectedGuaranteeIds.includes(g.id);
+                        const busy = Boolean(g.process_busy);
                         const val =
                           g.current_value ||
                           g.value_to_consider ||
@@ -488,11 +617,12 @@ export function DationNewPage() {
                           <label
                             key={g.id}
                             role="listitem"
-                            className={`dation-guarantee-row${checked ? " selected" : ""}`}
+                            className={`dation-guarantee-row${checked ? " selected" : ""}${busy ? " muted" : ""}`}
                           >
                             <input
                               type="checkbox"
                               checked={checked}
+                              disabled={busy}
                               onChange={() => toggleGuarantee(g.id)}
                             />
                             <span className="dation-guarantee-body">
@@ -505,6 +635,11 @@ export function DationNewPage() {
                               {g.description && (
                                 <span className="dation-guarantee-desc">
                                   {g.description.slice(0, 140)}
+                                </span>
+                              )}
+                              {busy && (
+                                <span className="muted small">
+                                  {g.process_busy?.label}
                                 </span>
                               )}
                             </span>
@@ -811,7 +946,14 @@ export function DationNewPage() {
                   </label>
                   {applicationId && (
                     <p className="muted small" style={{ marginTop: 8 }}>
-                      Dossier crédit lié : <code>{applicationId.slice(0, 8)}…</code>
+                      Dossier crédit lié :{" "}
+                      <PermLink
+                        user={user}
+                        anyOf={PERM_CREDITS}
+                        to={`/dossiers/${applicationId}`}
+                      >
+                        {applicationRef || applicationId.slice(0, 8)}
+                      </PermLink>
                     </p>
                   )}
                 </section>
@@ -1113,6 +1255,29 @@ export function DationDetailPage() {
               <ArrowLeft />
               Retour
             </Link>
+            {r.application && (
+              <PermLink
+                user={user}
+                anyOf={PERM_CREDITS}
+                className="btn btn-ghost"
+                to={`/dossiers/${r.application}`}
+                fallback={null}
+              >
+                Dossier crédit
+                {r.application_reference ? ` ${r.application_reference}` : ""}
+              </PermLink>
+            )}
+            {r.collection_case_id && (
+              <PermLink
+                user={user}
+                anyOf={PERM_COLLECTIONS}
+                className="btn btn-ghost"
+                to={`/recouvrement/${r.collection_case_id}`}
+                fallback={null}
+              >
+                Recouvrement
+              </PermLink>
+            )}
             {canInitiate && editable && (
               <button
                 className="btn btn-primary"
@@ -1171,6 +1336,13 @@ export function DationDetailPage() {
 
       {actionError && <div className="form-error">{actionError}</div>}
 
+      {!r.application && (
+        <div className="callout" style={{ marginBottom: 12 }}>
+          Cette dation n&apos;est pas rattachée à un dossier de crédit. Le
+          gel du recouvrement et les liens vers le prêt ne s&apos;appliquent
+          pas tant qu&apos;un dossier n&apos;est pas indiqué.
+        </div>
+      )}
       {r.status === "BLOCKED" && (
         <div className="form-error">
           Dossier bloqué côté CBS. Utilisez « Rafraîchir CBS » ou « Retenter
@@ -1195,9 +1367,43 @@ export function DationDetailPage() {
             <div>
               <dt>Client</dt>
               <dd>
-                <Link to={`/clients/${r.client}`}>{r.client_display}</Link>
+                <PermLink
+                  user={user}
+                  anyOf={PERM_CLIENTS}
+                  to={`/clients/${r.client}`}
+                >
+                  {r.client_display}
+                </PermLink>
               </dd>
             </div>
+            {r.application && (
+              <div>
+                <dt>Dossier crédit</dt>
+                <dd>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    to={`/dossiers/${r.application}`}
+                  >
+                    {r.application_reference || r.application.slice(0, 8)}
+                  </PermLink>
+                </dd>
+              </div>
+            )}
+            {r.collection_case_id && (
+              <div>
+                <dt>Recouvrement</dt>
+                <dd>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_COLLECTIONS}
+                    to={`/recouvrement/${r.collection_case_id}`}
+                  >
+                    Fiche dossier
+                  </PermLink>
+                </dd>
+              </div>
+            )}
             <div>
               <dt>Créance CBS</dt>
               <dd>{formatMoney(r.cbs_total_outstanding, cur)}</dd>
@@ -1244,9 +1450,13 @@ export function DationDetailPage() {
               <div>
                 <dt>Garantie créée</dt>
                 <dd>
-                  <Link to={`/garanties/${r.resulting_guarantee}`}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_GUARANTEES}
+                    to={`/garanties/${r.resulting_guarantee}`}
+                  >
                     Voir la garantie
-                  </Link>
+                  </PermLink>
                 </dd>
               </div>
             )}
@@ -1273,9 +1483,17 @@ export function DationDetailPage() {
                         · {a.asset_type_display}
                       </em>
                     )}
-                    {a.guarantee_reference && (
+                    {a.guarantee ? (
+                      <PermLink
+                        user={user}
+                        anyOf={PERM_GUARANTEES}
+                        to={`/garanties/${a.guarantee}`}
+                      >
+                        <code>{a.guarantee_reference || "Garantie"}</code>
+                      </PermLink>
+                    ) : a.guarantee_reference ? (
                       <code className="muted"> {a.guarantee_reference}</code>
-                    )}
+                    ) : null}
                     <em className="muted small"> — {a.description}</em>
                   </span>
                   <span className="row-actions">

@@ -286,6 +286,34 @@ def start_workflow(target, amount, risk_level=None, definition=None, target_type
     return instance
 
 
+def _run_process_completion(complete_fn, target):
+    """Clôture métier après approbation.
+
+    Un refus ProcessError laisse le dossier APPROVED (acte manquant, etc.).
+    Un échec CBS (statut BLOCKED) annule la finalisation du circuit : l'appelant
+    est dans une transaction, le rollback remet la tâche en attente.
+    """
+    from apps.guarantees.models import (
+        DationRequest,
+        GuaranteeReleaseRequest,
+    )
+    from apps.guarantees.process_services import ProcessError
+
+    try:
+        complete_fn(target)
+    except ProcessError:
+        return
+    target.refresh_from_db()
+    blocked = (
+        DationRequest.Status.BLOCKED,
+        GuaranteeReleaseRequest.Status.BLOCKED,
+    )
+    if target.status in blocked:
+        from apps.guarantees.process_services import cbs_block_message
+
+        raise WorkflowError(cbs_block_message(target))
+
+
 def _sync_target_status(instance):
     """Répercute l'état du circuit sur l'objet cible."""
     target = instance.target
@@ -341,12 +369,7 @@ def _sync_target_status(instance):
             target.save(update_fields=["status", "updated_at"])
             # Clôture uniquement si l'acte signé est déjà déposé (règle A).
             if target.has_signed_acte():
-                from apps.guarantees.process_services import ProcessError
-
-                try:
-                    complete_release_request(target)
-                except ProcessError:
-                    pass
+                _run_process_completion(complete_release_request, target)
             return
         new_status = mapping.get(instance.status)
         if new_status:
@@ -362,7 +385,7 @@ def _sync_target_status(instance):
         if instance.status == WorkflowInstance.Status.APPROVED:
             target.status = DationRequest.Status.APPROVED
             target.save(update_fields=["status", "updated_at"])
-            complete_dation_request(target)
+            _run_process_completion(complete_dation_request, target)
             return
         new_status = mapping.get(instance.status)
         if new_status:
@@ -382,7 +405,13 @@ def _sync_target_status(instance):
         if instance.status == WorkflowInstance.Status.APPROVED:
             target.status = GuaranteeFormalizationRequest.Status.APPROVED
             target.save(update_fields=["status", "updated_at"])
-            complete_formalization_request(target)
+            from apps.guarantees.process_services import ProcessError
+
+            try:
+                complete_formalization_request(target)
+            except ProcessError:
+                # Étape juridique incomplète : le dossier reste APPROVED.
+                pass
             return
         new_status = mapping.get(instance.status)
         if new_status:
@@ -399,6 +428,13 @@ def _apply_proposed_amount(instance, proposed_amount):
         if hasattr(target, "updated_at"):
             update_fields.append("updated_at")
         target.save(update_fields=update_fields)
+    # Les étapes suivantes (tranches de montant) suivent le montant proposé.
+    instance.amount = proposed_amount
+    instance.save(update_fields=["amount", "updated_at"])
+    if target is not None:
+        from apps.credits.analysis_validation import refresh_reference_analysis
+
+        refresh_reference_analysis(target)
 
 
 def user_can_act(user, step):
@@ -887,6 +923,10 @@ def process_decision(
     if proposed_amount is not None:
         task.proposed_amount = proposed_amount
         _apply_proposed_amount(instance, proposed_amount)
+    elif application is not None and getattr(
+        application, "amount_proposed", None
+    ) is not None:
+        _apply_proposed_amount(instance, application.amount_proposed)
     task.save()
 
     if (

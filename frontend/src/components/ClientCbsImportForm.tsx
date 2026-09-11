@@ -1,19 +1,63 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Building2, Search, TriangleAlert, Users } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import {
+  Building2,
+  Search,
+  TriangleAlert,
+  UserRound,
+  X,
+} from "lucide-react";
+import { useMemo, useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
 import type { Client } from "@/api/types";
-import { Card } from "@/components/ui";
 
-type ClientType = "INDIVIDUAL" | "PROFESSIONAL" | "CORPORATE";
+type ClientType = "INDIVIDUAL" | "CORPORATE";
+type Criterion =
+  | "code_adherent"
+  | "num_manuel"
+  | "num_piece_identite"
+  | "identification_nationale"
+  | "num_carte_operateur";
+
+type CbsIssue = {
+  key: string;
+  label: string;
+  reason?: "missing" | "invalid" | "expired";
+};
 
 export type CbsPreview = {
+  client_type?: ClientType;
+  missing_required?: CbsIssue[];
+  can_import?: boolean;
+  import_block_message?: string;
   full_name: string;
+  last_name?: string;
+  first_name?: string;
+  company_name?: string;
+  sigle?: string;
   code_adherent: string;
   num_manuel: string;
   num_piece_identite: string;
   identification_nationale: string;
+  num_carte_operateur?: string;
+  num_ordre?: string;
+  birth_date?: string;
+  birth_place?: string;
+  civility?: string;
+  marital_status?: string;
+  spouse_name?: string;
+  id_document_issue_date?: string;
+  id_document_expiry_date?: string;
+  profession?: string;
+  nationality?: string;
+  date_creation?: string;
+  head_office?: string;
+  id_secteur_activite?: string;
+  id_type_client?: string;
+  id_zone?: string;
+  id_produit_epg?: string;
+  nbre_signature?: number | string | null;
+  distance?: number | string | null;
   phone: string;
   email: string;
   boite_postale: string;
@@ -28,17 +72,41 @@ export type CbsPreview = {
   message?: string;
 };
 
-const TYPE_OPTIONS: { value: ClientType; label: string }[] = [
-  { value: "INDIVIDUAL", label: "Personne physique" },
-  { value: "CORPORATE", label: "Personne morale" },
-  { value: "PROFESSIONAL", label: "Groupement" },
-];
+const PHYSICAL_CRITERIA: { value: Criterion; label: string; placeholder: string }[] =
+  [
+    { value: "code_adherent", label: "Code adhérent", placeholder: "A0012345" },
+    { value: "num_manuel", label: "N° dossier manuel", placeholder: "M00987" },
+    {
+      value: "num_piece_identite",
+      label: "N° pièce d'identité",
+      placeholder: "CI1234567890",
+    },
+  ];
+
+const CORPORATE_CRITERIA: { value: Criterion; label: string; placeholder: string }[] =
+  [
+    { value: "code_adherent", label: "Code adhérent", placeholder: "E0012345" },
+    { value: "num_manuel", label: "N° dossier manuel", placeholder: "M00987" },
+    {
+      value: "identification_nationale",
+      label: "Identification nationale (IFU)",
+      placeholder: "IFU…",
+    },
+    {
+      value: "num_carte_operateur",
+      label: "N° carte / RCCM",
+      placeholder: "RCCM…",
+    },
+  ];
 
 function apiError(err: unknown): string {
   const data = (err as { response?: { data?: Record<string, unknown> } })
     ?.response?.data;
   if (!data) return "Échec de l'appel CBS.";
-  const detail = data.detail;
+  const nested = data.errors as
+    | { detail?: unknown; client_type?: unknown }
+    | undefined;
+  const detail = nested?.detail ?? data.detail ?? nested?.client_type;
   if (typeof detail === "string") return detail;
   if (Array.isArray(detail)) return detail.map(String).join(" ");
   for (const v of Object.values(data)) {
@@ -46,6 +114,43 @@ function apiError(err: unknown): string {
     if (Array.isArray(v)) return v.map(String).join(" ");
   }
   return "Échec de l'appel CBS.";
+}
+
+function isBlankPreview(value: string | number | null | undefined) {
+  if (value === 0) return false;
+  const text = String(value ?? "").trim();
+  if (!text) return true;
+  return ["N/A", "NA", "EMPTY", "—"].includes(text.toUpperCase());
+}
+
+function PreviewFields({
+  rows,
+  missingKeys,
+}: {
+  rows: ReadonlyArray<
+    readonly [string, string, string | number | null | undefined]
+  >;
+  missingKeys: Set<string>;
+}) {
+  return (
+    <div className="cbs-preview-grid">
+      {rows.map(([key, label, value]) => {
+        const missing = missingKeys.has(key);
+        const empty = isBlankPreview(value);
+        return (
+          <div
+            className={`cbs-preview-item${missing ? " is-missing" : ""}`}
+            key={key}
+          >
+            <span>{label}</span>
+            <strong>
+              {empty ? (missing ? "Manquant" : "—") : String(value)}
+            </strong>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function ClientCbsImportForm({
@@ -56,26 +161,38 @@ export function ClientCbsImportForm({
   onCancel: () => void;
 }) {
   const qc = useQueryClient();
-  const [codeAdherent, setCodeAdherent] = useState("");
-  const [numManuel, setNumManuel] = useState("");
-  const [numPiece, setNumPiece] = useState("");
+  const [clientType, setClientType] = useState<ClientType>("INDIVIDUAL");
+  const [criterion, setCriterion] = useState<Criterion>("code_adherent");
+  const [query, setQuery] = useState("");
   const [preview, setPreview] = useState<CbsPreview | null>(null);
-  const [clientType, setClientType] = useState<ClientType | "">("");
   const [error, setError] = useState<string | null>(null);
+
+  const isCorporate = clientType === "CORPORATE";
+  const criteria = isCorporate ? CORPORATE_CRITERIA : PHYSICAL_CRITERIA;
+  const current = useMemo(
+    () => criteria.find((c) => c.value === criterion) ?? criteria[0],
+    [criteria, criterion],
+  );
+
+  function payload() {
+    const value = query.trim();
+    return {
+      client_type: clientType,
+      [current.value]: value,
+    };
+  }
 
   const lookup = useMutation({
     mutationFn: async () => {
-      const { data } = await api.post<CbsPreview>("/clients/cbs-preview/", {
-        code_adherent: codeAdherent.trim(),
-        num_manuel: numManuel.trim(),
-        num_piece_identite: numPiece.trim(),
-      });
+      const { data } = await api.post<CbsPreview>(
+        "/clients/cbs-preview/",
+        payload(),
+      );
       return data;
     },
     onSuccess: (data) => {
       setPreview(data);
       setError(null);
-      setClientType("");
     },
     onError: (err) => {
       setPreview(null);
@@ -85,14 +202,13 @@ export function ClientCbsImportForm({
 
   const save = useMutation({
     mutationFn: async () => {
-      if (!clientType) throw new Error("Type requis");
       const { data } = await api.post<Client & { kyc_alert?: boolean }>(
         "/clients/cbs-import/",
         {
-          client_type: clientType,
-          code_adherent: codeAdherent.trim() || preview?.code_adherent,
-          num_manuel: numManuel.trim() || preview?.num_manuel,
-          num_piece_identite: numPiece.trim() || preview?.num_piece_identite,
+          ...payload(),
+          code_adherent:
+            (criterion === "code_adherent" ? query.trim() : "") ||
+            preview?.code_adherent,
         },
       );
       return data;
@@ -106,71 +222,208 @@ export function ClientCbsImportForm({
 
   function onLookup(e: FormEvent) {
     e.preventDefault();
-    if (!codeAdherent.trim() && !numManuel.trim() && !numPiece.trim()) {
-      setError(
-        "Indiquez au moins un identifiant : code adhérent, n° manuel ou n° de pièce.",
-      );
+    if (!query.trim()) {
+      setError(`Saisissez un ${current.label.toLowerCase()}.`);
       return;
     }
     lookup.mutate();
   }
 
-  return (
-    <Card
-      title={
-        <>
-          <Search size={17} /> Importer depuis le Core Banking
-        </>
-      }
-    >
-      <p className="muted" style={{ marginTop: 0 }}>
-        Recherchez l&apos;adhérent au CBS, vérifiez les données, choisissez le
-        type de client, puis enregistrez. Les informations issues du CBS ne
-        sont pas modifiables ici.
-      </p>
+  function resetSearch() {
+    setPreview(null);
+    setError(null);
+    setQuery("");
+  }
 
-      <form className="form-grid" onSubmit={onLookup}>
-        <label className="field">
-          <span>Code adhérent</span>
-          <input
-            value={codeAdherent}
-            onChange={(e) => setCodeAdherent(e.target.value)}
-            placeholder="A0012345"
+  function chooseType(value: ClientType) {
+    if (clientType === value) return;
+    setClientType(value);
+    setCriterion("code_adherent");
+    resetSearch();
+  }
+
+  const missingIssues = preview?.missing_required ?? [];
+  const missingKeys = new Set(missingIssues.map((issue) => issue.key));
+  const canImport = preview?.can_import !== false && missingIssues.length === 0;
+  const blockMessage =
+    preview?.import_block_message ||
+    (missingIssues.length
+      ? `Impossible d'enregistrer ce client dans FinFlow : des informations obligatoires sont absentes ou incorrectes dans le CBS (${missingIssues
+          .map((issue) => issue.label)
+          .join(", ")}). Mettez à jour ces données dans le core banking, puis relancez la recherche.`
+      : null);
+
+  const physicalRows = preview
+    ? ([
+        ["last_name", "Nom", preview.last_name || preview.full_name],
+        ["first_name", "Prénoms", preview.first_name],
+        ["civility", "Civilité", preview.civility],
+        ["birth_date", "Date de naissance", preview.birth_date],
+        ["birth_place", "Lieu de naissance", preview.birth_place],
+        ["marital_status", "Statut matrimonial", preview.marital_status],
+        ["spouse_name", "Conjoint", preview.spouse_name],
+        ["num_piece_identite", "Pièce d'identité", preview.num_piece_identite],
+        [
+          "id_document_issue_date",
+          "Établissement pièce",
+          preview.id_document_issue_date,
+        ],
+        [
+          "id_document_expiry_date",
+          "Expiration pièce",
+          preview.id_document_expiry_date,
+        ],
+        ["profession", "Profession", preview.profession],
+        ["nationality", "Nationalité", preview.nationality],
+        ["code_adherent", "Code adhérent", preview.code_adherent],
+        ["num_manuel", "N° manuel", preview.num_manuel],
+        ["phone", "Téléphone", preview.phone],
+        ["email", "E-mail", preview.email],
+        ["city", "Ville", preview.city],
+        ["address", "Adresse", preview.address],
+        ["boite_postale", "Boîte postale", preview.boite_postale],
+        ["date_inscription", "Date d'inscription", preview.date_inscription],
+        ["limit_credit", "Limite de crédit", preview.limit_credit],
+        ["est_valide", "Compte valide", preview.est_valide ? "Oui" : "Non"],
+        [
+          "id_point_service",
+          "Point de service",
+          preview.nom_point_service
+            ? `${preview.nom_point_service}${
+                preview.id_point_service
+                  ? ` (${preview.id_point_service})`
+                  : ""
+              }`
+            : preview.id_point_service,
+        ],
+      ] as const)
+    : [];
+
+  const corporateRows = preview
+    ? ([
+        [
+          "company_name",
+          "Raison sociale",
+          preview.company_name || preview.full_name,
+        ],
+        ["sigle", "Sigle", preview.sigle],
+        [
+          "identification_nationale",
+          "Identification nationale",
+          preview.identification_nationale,
+        ],
+        [
+          "num_carte_operateur",
+          "N° carte / RCCM",
+          preview.num_carte_operateur,
+        ],
+        ["num_ordre", "N° d'ordre", preview.num_ordre],
+        ["date_creation", "Date de création", preview.date_creation],
+        ["head_office", "Siège social", preview.head_office],
+        ["code_adherent", "Code adhérent", preview.code_adherent],
+        ["num_manuel", "N° manuel", preview.num_manuel],
+        ["phone", "Téléphone", preview.phone],
+        ["email", "E-mail", preview.email],
+        ["city", "Ville", preview.city],
+        ["address", "Adresse", preview.address],
+        ["boite_postale", "Boîte postale", preview.boite_postale],
+        ["id_secteur_activite", "Secteur d'activité", preview.id_secteur_activite],
+        ["id_type_client", "Type client CBS", preview.id_type_client],
+        ["id_zone", "Zone", preview.id_zone],
+        ["id_produit_epg", "Produit épargne", preview.id_produit_epg],
+        ["nbre_signature", "Nb. signatures", preview.nbre_signature],
+        ["distance", "Distance (km)", preview.distance],
+        ["date_inscription", "Date d'inscription", preview.date_inscription],
+        ["limit_credit", "Limite de crédit", preview.limit_credit],
+        ["est_valide", "Compte valide", preview.est_valide ? "Oui" : "Non"],
+        [
+          "id_point_service",
+          "Point de service",
+          preview.nom_point_service
+            ? `${preview.nom_point_service}${
+                preview.id_point_service
+                  ? ` (${preview.id_point_service})`
+                  : ""
+              }`
+            : preview.id_point_service,
+        ],
+      ] as const)
+    : [];
+
+  return (
+    <div className="cbs-import">
+      <form className="cbs-search" onSubmit={onLookup} aria-label="Recherche CBS">
+        <div
+          className="cbs-search-segment"
+          role="group"
+          aria-label="Type de client"
+        >
+          <button
+            type="button"
+            className={clientType === "INDIVIDUAL" ? "is-on" : undefined}
+            onClick={() => chooseType("INDIVIDUAL")}
+          >
+            <UserRound size={15} />
+            Physique
+          </button>
+          <button
+            type="button"
+            className={clientType === "CORPORATE" ? "is-on" : undefined}
+            onClick={() => chooseType("CORPORATE")}
+          >
+            <Building2 size={15} />
+            Morale
+          </button>
+        </div>
+
+        <label className="cbs-search-criterion">
+          <span className="visually-hidden">Rechercher par</span>
+          <select
+            value={current.value}
+            onChange={(e) => {
+              setCriterion(e.target.value as Criterion);
+              setPreview(null);
+              setError(null);
+            }}
             disabled={Boolean(preview)}
-          />
+          >
+            {criteria.map((c) => (
+              <option key={c.value} value={c.value}>
+                {c.label}
+              </option>
+            ))}
+          </select>
         </label>
-        <label className="field">
-          <span>N° dossier manuel</span>
+
+        <div className={`cbs-search-field${query ? " has-value" : ""}`}>
+          <Search size={16} />
           <input
-            value={numManuel}
-            onChange={(e) => setNumManuel(e.target.value)}
-            placeholder="M00987"
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={current.placeholder}
             disabled={Boolean(preview)}
+            autoFocus
           />
-        </label>
-        <label className="field">
-          <span>N° pièce d&apos;identité</span>
-          <input
-            value={numPiece}
-            onChange={(e) => setNumPiece(e.target.value)}
-            disabled={Boolean(preview)}
-          />
-        </label>
-        {!preview && (
-          <div className="credit-form-actions">
+          {query && !preview && (
             <button
-              type="submit"
-              className="btn btn-primary"
-              disabled={lookup.isPending}
+              type="button"
+              className="cbs-search-clear"
+              aria-label="Effacer"
+              onClick={() => setQuery("")}
             >
-              <Search size={16} />
-              {lookup.isPending ? "Recherche…" : "Rechercher au CBS"}
+              <X size={14} />
             </button>
-            <button type="button" className="btn btn-ghost" onClick={onCancel}>
-              Annuler
-            </button>
-          </div>
-        )}
+          )}
+        </div>
+
+        <button
+          type="submit"
+          className="btn btn-primary"
+          disabled={lookup.isPending || Boolean(preview)}
+        >
+          {lookup.isPending ? "Recherche…" : "Rechercher"}
+        </button>
       </form>
 
       {error && (
@@ -181,8 +434,14 @@ export function ClientCbsImportForm({
       )}
 
       {preview && (
-        <>
-          {preview.kyc_alert && (
+        <section className="cbs-preview-card" aria-label="Prévisualisation CBS">
+          {blockMessage && (
+            <div className="notice-error" role="alert">
+              <TriangleAlert size={18} />
+              <span>{blockMessage}</span>
+            </div>
+          )}
+          {preview.kyc_alert && canImport && (
             <div className="notice-warning">
               <TriangleAlert size={18} />
               <span>
@@ -191,91 +450,51 @@ export function ClientCbsImportForm({
               </span>
             </div>
           )}
-
-          <h4 className="form-section-title">
-            <Users size={16} /> Prévisualisation (lecture seule)
-          </h4>
-          <div className="form-grid">
-            {(
-              [
-                ["Nom complet", preview.full_name],
-                ["Code adhérent", preview.code_adherent],
-                ["N° manuel", preview.num_manuel],
-                ["Pièce d'identité", preview.num_piece_identite],
-                ["Identification nationale", preview.identification_nationale],
-                ["Téléphone", preview.phone],
-                ["E-mail", preview.email],
-                ["Ville", preview.city],
-                ["Adresse", preview.address],
-                ["Boîte postale", preview.boite_postale],
-                ["Date d'inscription", preview.date_inscription],
-                ["Limite de crédit", preview.limit_credit],
-                ["Compte valide", preview.est_valide ? "Oui" : "Non"],
-                [
-                  "Point de service",
-                  preview.nom_point_service
-                    ? `${preview.nom_point_service}${
-                        preview.id_point_service
-                          ? ` (${preview.id_point_service})`
-                          : ""
-                      }`
-                    : "",
-                ],
-              ] as const
-            ).map(([label, value]) => (
-              <label className="field" key={label}>
-                <span>{label}</span>
-                <input value={value || "—"} readOnly disabled />
-              </label>
-            ))}
-          </div>
-
-          <label className="field" style={{ marginTop: "1rem" }}>
-            <span>
-              <Building2 size={14} /> Type de client (obligatoire)
+          <header className="cbs-preview-head">
+            <h4>
+              {isCorporate ? <Building2 size={16} /> : <UserRound size={16} />}
+              {preview.company_name ||
+                preview.full_name ||
+                "Prévisualisation CBS"}
+            </h4>
+            <span className="filters-panel-badge">
+              {isCorporate ? "Personne morale" : "Personne physique"}
             </span>
-            <select
-              value={clientType}
-              onChange={(e) =>
-                setClientType(e.target.value as ClientType | "")
-              }
-              required
-            >
-              <option value="">— Choisir —</option>
-              {TYPE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </label>
-
+          </header>
+          <PreviewFields
+            rows={isCorporate ? corporateRows : physicalRows}
+            missingKeys={
+              missingKeys.has("address")
+                ? new Set([...missingKeys, "head_office"])
+                : missingKeys
+            }
+          />
           <div className="credit-form-actions">
             <button
               type="button"
               className="btn btn-primary"
-              disabled={!clientType || save.isPending}
+              disabled={save.isPending || !canImport}
               onClick={() => save.mutate()}
             >
               {save.isPending ? "Enregistrement…" : "Enregistrer le client"}
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={() => {
-                setPreview(null);
-                setClientType("");
-                setError(null);
-              }}
-            >
+            <button type="button" className="btn btn-ghost" onClick={resetSearch}>
               Nouvelle recherche
             </button>
             <button type="button" className="btn btn-ghost" onClick={onCancel}>
               Annuler
             </button>
           </div>
-        </>
+        </section>
       )}
-    </Card>
+
+      {!preview && (
+        <div className="credit-form-actions">
+          <button type="button" className="btn btn-ghost" onClick={onCancel}>
+            Annuler
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

@@ -217,6 +217,8 @@ export interface NotificationSettings {
   notify_on_return: boolean;
   notify_collection_email: boolean;
   notify_collection_sms: boolean;
+  notify_collection_transfer: boolean;
+  notify_collection_dialogue: boolean;
   from_email: string;
   reply_to: string;
   cc_tenant_email: boolean;
@@ -439,6 +441,8 @@ export interface DationRequest {
   client: string;
   client_display: string;
   application: string | null;
+  application_reference?: string | null;
+  collection_case_id?: string | null;
   agency: string | null;
   cbs_client_id: string;
   cbs_total_outstanding: string | null;
@@ -500,7 +504,10 @@ export interface FormalizationComposeContext {
   application_id: string | null;
   application_reference: string | null;
   credits: FormalizationComposeCredit[];
-  guarantees: (Guarantee & { formalization_busy?: boolean })[];
+  guarantees: (Guarantee & {
+    formalization_busy?: boolean;
+    process_busy?: GuaranteeProcessBusy | null;
+  })[];
 }
 
 export interface GuaranteeFormalizationRequest {
@@ -553,6 +560,7 @@ export interface GedDocument {
   content_type?: number | string | null;
   object_id: string;
   related_type?: string;
+  related_kind?: string;
   related_label?: string;
   /** Chemin SPA fourni par l'API (préféré aux heuristiques front). */
   related_path?: string | null;
@@ -756,12 +764,18 @@ export interface CreditProduct {
   id: string;
   code: string;
   label: string;
+  description?: string;
   category: string;
   category_label: string;
+  client_type?: "INDIVIDUAL" | "PROFESSIONAL" | "CORPORATE" | "ALL";
   currency: string;
   amount_min: string;
   amount_max: string;
+  duration_min_months?: number;
+  duration_max_months?: number;
   interest_rate: string;
+  processing_fee_rate?: string;
+  requires_guarantee?: boolean;
   cbs_product_code?: string;
   cbs_repayment_product_code?: string;
   is_active: boolean;
@@ -906,6 +920,10 @@ export interface CreditApplication {
   disbursement_requested_by?: string | null;
   created_by: string | null;
   created_by_display: string | null;
+  collection_case_id?: string | null;
+  collection_stage?: string;
+  collection_stage_display?: string;
+  loan_id?: string | null;
   created_at: string;
 }
 
@@ -932,6 +950,10 @@ export interface FinancialAnalysisFlags {
   interest_coverage_ok?: boolean | null;
   // Commun
   guarantee_ok?: boolean | null;
+  // Groupement
+  capacity_ok?: boolean | null;
+  members_ok?: boolean | null;
+  solidarity_ok?: boolean | null;
 }
 
 export interface AnalysisScoreComponent {
@@ -1102,6 +1124,7 @@ export interface FinancialAnalysis {
   // Indicateurs calculés
   new_installment: string | null;
   repayment_capacity: string | null;
+  collective_capacity?: string | null;
   debt_ratio: string | null;
   dscr: string | null;
   // Dérivées
@@ -1386,6 +1409,7 @@ export interface MyDossierRow {
   status: string;
   status_display: string;
   product_label: string;
+  created_by_id?: string | null;
   created_by_display: string;
   created_at: string | null;
   definition_name: string;
@@ -1484,6 +1508,13 @@ export interface GuaranteeMovement {
   comment: string;
 }
 
+export interface GuaranteeProcessBusy {
+  kind: "DATION" | "FORMALIZATION" | "RELEASE" | string;
+  id: string;
+  label: string;
+  message: string;
+}
+
 export interface Guarantee {
   id: string;
   reference: string;
@@ -1494,6 +1525,8 @@ export interface Guarantee {
   client_display?: string | null;
   application: string | null;
   application_reference?: string | null;
+  collection_case_id?: string | null;
+  collection_stage_display?: string;
   agency?: string | null;
   agency_name?: string | null;
   belongs_to_applicant?: boolean;
@@ -1514,10 +1547,12 @@ export interface Guarantee {
   document_type: string;
   document_number: string;
   document_issue_date: string | null;
+  document_validity_date?: string | null;
   address: string;
   expertise_date: string | null;
   expertise_firm: string;
   expert_name: string;
+  expertise_reference?: string;
   value_to_consider: string | null;
   ltv_ratio: string | null;
   occupancy_status: string;
@@ -1567,7 +1602,11 @@ export interface Guarantee {
   registration_authority?: string;
   formalized_at?: string | null;
   open_formalization_id?: string | null;
-  has_open_formalization?: boolean;
+  open_dation_id?: string | null;
+  open_release_id?: string | null;
+  completed_dation_id?: string | null;
+  origin_dation_id?: string | null;
+  process_busy?: GuaranteeProcessBusy | null;
   photos?: GuaranteePhoto[];
   documents?: GuaranteeDocument[];
   movements?: GuaranteeMovement[];
@@ -1596,6 +1635,23 @@ export const GUARANTEE_LABELS = {
   document_type: {
     LAND_TITLE: "Titre foncier",
     ATTRIBUTION_CERT: "Attestation d'attribution",
+    EXPLOITATION_PERMIT: "Permis d'exploiter",
+    BUILDING_PERMIT: "Permis de construire",
+    OCCUPANCY_PERMIT: "Permis d'habiter",
+    LEASEHOLD: "Bail emphytéotique",
+    SURFACE_RIGHT: "Droit de superficie",
+    SALES_DEED: "Acte de vente / compromis",
+    CADASTRAL_EXTRACT: "Extrait cadastral",
+    CUSTOMARY_TITLE: "Titre / certificat coutumier",
+    URBAN_CERT: "Certificat d'urbanisme",
+    OTHER_REAL_ESTATE: "Autre titre immobilier",
+    REGISTRATION_CARD: "Carte grise",
+    PURCHASE_INVOICE: "Facture d'achat",
+    CUSTOMS_CLEARANCE: "Déclaration en douane",
+    TRANSFER_CERT: "Certificat de cession",
+    INSURANCE_CERT: "Attestation d'assurance",
+    TECH_INSPECTION: "Visite technique",
+    OTHER_VEHICLE: "Autre document véhicule",
   } as Record<string, string>,
   matrimonial_regime: {
     COMMUNITY: "Communauté de biens",
@@ -1827,7 +1883,8 @@ export type CollectionActionType =
   | "EMAIL"
   | "LETTER"
   | "VISIT"
-  | "LEGAL";
+  | "LEGAL"
+  | "DATION";
 
 export type PromiseStatus = "PENDING" | "KEPT" | "BROKEN";
 
@@ -1842,6 +1899,15 @@ export interface CollectionAction {
   result: string;
   comment: string;
   next_follow_up_date?: string | null;
+  attachment?: string | null;
+  attachment_url?: string | null;
+  created_by?: string | null;
+  created_by_name?: string | null;
+  updated_by?: string | null;
+  updated_by_name?: string | null;
+  created_at?: string;
+  can_edit?: boolean;
+  dialogue?: CollectionDialogueMessage[];
 }
 
 export interface PaymentPromise {
@@ -1851,6 +1917,30 @@ export interface PaymentPromise {
   promised_date: string;
   status: PromiseStatus;
   status_display: string;
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_at?: string;
+  can_edit?: boolean;
+}
+
+export type CollectionDialogueKind =
+  | "QUESTION"
+  | "REQUEST"
+  | "RECOMMENDATION"
+  | "REPLY";
+
+export interface CollectionDialogueMessage {
+  id: string;
+  case: string;
+  action?: string | null;
+  kind: CollectionDialogueKind;
+  kind_display: string;
+  body: string;
+  created_by?: string | null;
+  created_by_name?: string | null;
+  created_at: string;
+  updated_at?: string;
+  can_edit?: boolean;
 }
 
 export interface CollectionStageHistory {
@@ -1864,6 +1954,25 @@ export interface CollectionStageHistory {
   changed_by: string | null;
   changed_by_name: string | null;
   created_at: string;
+}
+
+export type CollectionTrancheOwner =
+  | "GESTIONNAIRE"
+  | "COLLECTION"
+  | "LEGAL";
+
+export interface CollectionTranche {
+  id: string;
+  position: number;
+  name: string;
+  min_days_overdue: number;
+  max_days_overdue: number | null;
+  owner_kind: CollectionTrancheOwner;
+  owner_kind_display: string;
+  days_label: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface CollectionEscalationRule {
@@ -1889,8 +1998,11 @@ export interface CollectionGuaranteeLink {
 
 export interface CollectionDationLink {
   id: string;
+  reference?: string;
   status: string;
   status_display: string;
+  residual_balance?: string | null;
+  covers_claim?: boolean | null;
   created_at: string;
 }
 
@@ -1903,6 +2015,7 @@ export interface AgentCollectionDashboard {
   broken_promises_30d: number;
   repayments_this_month_count: number;
   repayments_this_month_amount: string;
+  settled_this_month?: number;
   by_par_class: Record<string, number>;
   by_stage: Record<string, number>;
   due_followups: Array<{
@@ -1927,6 +2040,8 @@ export interface LoanRepayment {
   amount: string;
   payment_date: string;
   reference: string;
+  created_by?: string | null;
+  created_by_name?: string | null;
   created_at: string;
 }
 
@@ -2063,6 +2178,8 @@ export interface LitigationDocument {
 export interface LitigationFile {
   id: string;
   case: string;
+  application_id?: string | null;
+  client_id?: string | null;
   title: string;
   action_type: LitigationActionType | "";
   action_type_display?: string;
@@ -2107,6 +2224,7 @@ export interface LitigationFile {
   events?: LitigationEvent[];
   seizures?: LitigationSeizure[];
   costs?: LitigationCost[];
+  can_operate?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -2126,16 +2244,54 @@ export interface HearingAgendaItem {
   law_firm_name: string;
 }
 
+export interface LoanRestructurePreviewRow {
+  number: number;
+  due_date: string;
+  principal: string;
+  interest: string;
+  savings: string;
+  total: string;
+  balance: string;
+}
+
+export interface LoanRestructurePreview {
+  outstanding_principal: string;
+  new_duration_months: number;
+  new_rate: string;
+  rows: LoanRestructurePreviewRow[];
+  count: number;
+  first_due_date: string | null;
+  last_due_date: string | null;
+  total_repayment: string;
+  cbs_note?: string;
+}
+
 export interface LoanRestructure {
   id: string;
+  loan?: string;
+  case?: string | null;
+  origin?: string;
+  origin_display?: string;
+  request_kind?: string;
+  request_kind_display?: string;
   effective_date: string;
+  first_due_date?: string | null;
   previous_duration_months: number;
   new_duration_months: number;
   previous_rate: string;
   new_rate: string;
   outstanding_principal: string;
+  proposed_schedule?: LoanRestructurePreview | Record<string, unknown>;
   reason: string;
   status: string;
+  status_display?: string;
+  requested_by?: string | null;
+  requested_by_name?: string | null;
+  applied_by?: string | null;
+  applied_by_name?: string | null;
+  decided_at?: string | null;
+  decision_comment?: string;
+  cbs_note?: string;
   created_at: string;
 }
 
@@ -2144,7 +2300,34 @@ export interface WriteOff {
   amount: string;
   write_off_date: string;
   reason: string;
+  status?: string;
+  status_display?: string;
+  requested_by?: string | null;
+  requested_by_name?: string | null;
+  approved_by?: string | null;
+  approved_by_name?: string | null;
+  decided_at?: string | null;
+  decision_comment?: string;
   created_at: string;
+}
+
+export interface LoanDetail {
+  id: string;
+  application: string;
+  application_reference: string;
+  currency: string;
+  principal: string;
+  interest_rate: string;
+  duration_months: number;
+  disbursed_at: string;
+  first_due_date: string;
+  status: string;
+  outstanding_principal?: string;
+  collection_case_id?: string | null;
+  financial_ops_frozen?: boolean;
+  financial_ops_frozen_reason?: string;
+  restructures?: LoanRestructure[];
+  write_offs?: WriteOff[];
 }
 
 export interface CollectionCase {
@@ -2160,6 +2343,10 @@ export interface CollectionCase {
   agency_name: string;
   stage: CollectionStage;
   stage_display: string;
+  tranche?: string | null;
+  tranche_name?: string;
+  tranche_owner_kind?: CollectionTrancheOwner | "";
+  tranche_owner_kind_display?: string;
   par_class: ParClass;
   par_class_display: string;
   days_overdue: number;
@@ -2171,13 +2358,22 @@ export interface CollectionCase {
   next_action_type_display?: string;
   next_action_note?: string;
   stage_changed_at?: string | null;
+  cbs_synced_at?: string | null;
+  cbs_sync_error?: string;
   next_due_date?: string | null;
   pending_promises_count?: number;
   guarantees_count?: number;
   outstanding_principal?: string;
+  can_operate?: boolean;
+  can_comment?: boolean;
+  financial_ops_frozen?: boolean;
+  financial_ops_frozen_reason?: string;
+  blocking_dation?: CollectionDationLink | null;
+  can_collect?: boolean;
   created_at: string;
   actions?: CollectionAction[];
   promises?: PaymentPromise[];
+  dialogue?: CollectionDialogueMessage[];
   stage_history?: CollectionStageHistory[];
   restructures?: LoanRestructure[];
   write_offs?: WriteOff[];
@@ -2187,5 +2383,6 @@ export interface CollectionCase {
   installments?: LoanInstallment[];
   guarantees?: CollectionGuaranteeLink[];
   dation_requests?: CollectionDationLink[];
+  surety_engagements?: SuretyEngagement[];
   core_banking_reference?: string;
 }

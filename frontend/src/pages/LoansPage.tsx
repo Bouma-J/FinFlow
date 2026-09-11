@@ -1,11 +1,22 @@
 import { useQuery } from "@tanstack/react-query";
 import { Banknote } from "lucide-react";
 import { useState } from "react";
-import { Link } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type { Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { PERM_COLLECTIONS, PERM_CREDITS } from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
+import {
+  AgencyFilter,
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  OfficerFilter,
+  ProductFilter,
+  SearchInput,
+  countActive,
+} from "@/components/ListFilters";
 import {
   Badge,
   PageHeader,
@@ -31,6 +42,8 @@ type LoanRow = {
   core_banking_reference: string;
   cbs_contract_number: string;
   cbs_disbursement_status: string;
+  collection_case_id?: string | null;
+  collection_stage_display?: string;
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -45,9 +58,32 @@ export function LoansPage() {
   const [page, setPage] = useState(1);
   const [status, setStatus] = useState("");
   const [search, setSearch] = useState("");
+  const [product, setProduct] = useState("");
+  const [agency, setAgency] = useState("");
+  const [gestionnaire, setGestionnaire] = useState("");
+  const [disbursedAfter, setDisbursedAfter] = useState("");
+  const [disbursedBefore, setDisbursedBefore] = useState("");
+
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
 
   const list = useQuery({
-    queryKey: ["loans", activeTenant, page, status, search],
+    queryKey: [
+      "loans",
+      activeTenant,
+      page,
+      status,
+      search,
+      product,
+      agency,
+      gestionnaire,
+      disbursedAfter,
+      disbursedBefore,
+    ],
     queryFn: async () =>
       (
         await api.get<Paginated<LoanRow>>("/loans/", {
@@ -55,6 +91,11 @@ export function LoansPage() {
             page,
             ...(status ? { status } : {}),
             ...(search.trim() ? { search: search.trim() } : {}),
+            ...(product ? { product } : {}),
+            ...(agency ? { agency } : {}),
+            ...(gestionnaire ? { gestionnaire } : {}),
+            ...(disbursedAfter ? { disbursed_after: disbursedAfter } : {}),
+            ...(disbursedBefore ? { disbursed_before: disbursedBefore } : {}),
           },
         })
       ).data,
@@ -70,20 +111,63 @@ export function LoansPage() {
       />
       {needsTenant && <TenantScopeNotice />}
 
-      <div className="filters-bar" style={{ marginBottom: 12 }}>
-        <select value={status} onChange={(e) => { setStatus(e.target.value); setPage(1); }}>
-          <option value="">Tous statuts</option>
-          <option value="ACTIVE">En cours</option>
-          <option value="CLOSED">Soldé</option>
-          <option value="DEFAULTED">Défaut</option>
-        </select>
-        <input
-          type="search"
-          placeholder="Réf. dossier, client, CBS…"
-          value={search}
-          onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={setFilter(setSearch)}
+            placeholder="Réf. dossier, client, CBS…"
+          />
+        }
+        activeCount={countActive(
+          search,
+          gestionnaire,
+          status,
+          product,
+          agency,
+          disbursedAfter,
+          disbursedBefore,
+        )}
+        onReset={() => {
+          setSearch("");
+          setGestionnaire("");
+          setStatus("");
+          setProduct("");
+          setAgency("");
+          setDisbursedAfter("");
+          setDisbursedBefore("");
+          setPage(1);
+        }}
+      >
+        <OfficerFilter
+          value={gestionnaire}
+          onChange={setFilter(setGestionnaire)}
         />
-      </div>
+        <FilterField label="Statut" active={!!status}>
+          <FilterSelect value={status} onChange={setFilter(setStatus)}>
+            <option value="">Tous statuts</option>
+            <option value="ACTIVE">En cours</option>
+            <option value="CLOSED">Soldé</option>
+            <option value="DEFAULTED">Défaut</option>
+          </FilterSelect>
+        </FilterField>
+        <ProductFilter value={product} onChange={setFilter(setProduct)} />
+        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+        <FilterField label="Décaissé du" active={!!disbursedAfter}>
+          <input
+            type="date"
+            value={disbursedAfter}
+            onChange={(e) => setFilter(setDisbursedAfter)(e.target.value)}
+          />
+        </FilterField>
+        <FilterField label="jusqu'au" active={!!disbursedBefore}>
+          <input
+            type="date"
+            value={disbursedBefore}
+            onChange={(e) => setFilter(setDisbursedBefore)(e.target.value)}
+          />
+        </FilterField>
+      </ListFilters>
 
       <QueryStatus
         isLoading={list.isLoading}
@@ -102,15 +186,20 @@ export function LoansPage() {
               <th>Décaissé</th>
               <th>Statut</th>
               <th>CBS</th>
+              <th>Recouvrement</th>
             </tr>
           </thead>
           <tbody>
             {(list.data?.results ?? []).map((loan) => (
               <tr key={loan.id}>
                 <td>
-                  <Link to={`/dossiers/${loan.application}`}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    to={`/dossiers/${loan.application}`}
+                  >
                     {loan.application_reference || loan.application.slice(0, 8)}
-                  </Link>
+                  </PermLink>
                 </td>
                 <td>{loan.client_display || "—"}</td>
                 <td className="num">
@@ -129,6 +218,19 @@ export function LoansPage() {
                     loan.core_banking_reference ||
                     loan.cbs_disbursement_status ||
                     "—"}
+                </td>
+                <td>
+                  {loan.collection_case_id ? (
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_COLLECTIONS}
+                      to={`/recouvrement/${loan.collection_case_id}`}
+                    >
+                      {loan.collection_stage_display || "Dossier"}
+                    </PermLink>
+                  ) : (
+                    <span className="muted">—</span>
+                  )}
                 </td>
               </tr>
             ))}

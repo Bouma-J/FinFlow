@@ -1,27 +1,42 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleDollarSign, Download } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type {
   AgentCollectionDashboard,
   CollectionCase,
-  CollectionEscalationRule,
-  CollectionStage,
+  CollectionTranche,
   HearingAgendaItem,
   Paginated,
   ParClass,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { hasPerm } from "@/auth/permissions";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import { isFinflowAdmin, PERM_LITIGATION } from "@/auth/routePerms";
+import {
+  AgencyFilter,
+  ClientFilterBanner,
+  FilterField,
+  FilterSelect,
+  FilterToggle,
+  ListFilters,
+  OfficerFilter,
+  ProductFilter,
+  SearchInput,
+  countActive,
+  useClientSearchParam,
+} from "@/components/ListFilters";
 import {
   Badge,
   PageHeader,
   PaginationBar,
   QueryStatus,
+  TenantScopeNotice,
   formatMoney,
 } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 
 const PAR_OPTIONS: { value: "" | ParClass; label: string }[] = [
   { value: "", label: "Toutes classes PAR" },
@@ -33,33 +48,72 @@ const PAR_OPTIONS: { value: "" | ParClass; label: string }[] = [
 ];
 
 const STAGE_OPTIONS = [
-  { value: "", label: "Tous stades" },
+  { value: "", label: "Tous les stades" },
   { value: "AMICABLE", label: "Amiable" },
   { value: "PRECONTENTIOUS", label: "Précontentieux" },
   { value: "LITIGATION", label: "Contentieux" },
   { value: "CLOSED", label: "Clôturé" },
-];
+] as const;
 
-const ESCALATION_STAGES: {
-  value: Exclude<CollectionStage, "CLOSED">;
-  label: string;
-}[] = [
-  { value: "AMICABLE", label: "Amiable" },
-  { value: "PRECONTENTIOUS", label: "Précontentieux" },
-  { value: "LITIGATION", label: "Contentieux" },
-];
+const OWNER_OPTIONS = [
+  { value: "", label: "Tous les responsables" },
+  { value: "GESTIONNAIRE", label: "Gestionnaire" },
+  { value: "COLLECTION", label: "Service recouvrement" },
+  { value: "LEGAL", label: "Juridique" },
+] as const;
 
 export function CollectionsPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { user } = useAuth();
+  const { clientFilter, clearClientFilter } = useClientSearchParam();
+  const { user, activeTenant } = useAuth();
+  const needsTenant = Boolean(user?.is_group_level && !activeTenant);
   const qc = useQueryClient();
   const canManageCase = hasPerm(user, "collections.change_collectioncase");
+  const canViewLitigation = hasAnyPerm(user, PERM_LITIGATION);
+  const canSeeTeamDash =
+    hasPerm(user, "collections.view_collectioncase") &&
+    (isFinflowAdmin(user) ||
+      canManageCase ||
+      Boolean(
+        user?.roles?.some((r) =>
+          [
+            "Responsable recouvrement",
+            "Assistant recouvrement",
+            "Responsable exploitation",
+            "Chef d'agence",
+            "Responsable juridique",
+            "Assistant juridique",
+            "Directeur général",
+            "RAF",
+            "Lecteur",
+            "Comptable",
+            "Analyste crédit",
+            "Responsable audit",
+            "Assistant audit",
+          ].includes(r),
+        ),
+      ));
+  const canRefreshCbs =
+    isFinflowAdmin(user) ||
+    Boolean(
+      user?.roles?.some(
+        (r) =>
+          r === "Responsable recouvrement" || r === "Assistant recouvrement",
+      ),
+    );
   const [page, setPage] = useState(1);
   const [parClass, setParClass] = useState("");
+  const [trancheId, setTrancheId] = useState("");
   const [stage, setStage] = useState("");
+  const [agency, setAgency] = useState("");
+  const [product, setProduct] = useState("");
+  const [gestionnaire, setGestionnaire] = useState("");
+  const [assignedTo, setAssignedTo] = useState("");
+  const [ownerKind, setOwnerKind] = useState("");
+  const [cbsError, setCbsError] = useState(false);
   const [openOnly, setOpenOnly] = useState(true);
-  const [mine, setMine] = useState(!canManageCase);
+  const [mine, setMine] = useState(false);
   const [unassigned, setUnassigned] = useState(false);
   const [followupDue, setFollowupDue] = useState(() =>
     Boolean(
@@ -69,14 +123,16 @@ export function CollectionsPage() {
   const [brokenPromises, setBrokenPromises] = useState(false);
   const [search, setSearch] = useState("");
   const [dashScope, setDashScope] = useState<"mine" | "team">(
-    canManageCase ? "team" : "mine",
+    canSeeTeamDash ? "team" : "mine",
   );
-  const [showRules, setShowRules] = useState(false);
-  const [ruleDays, setRuleDays] = useState("31");
-  const [ruleStage, setRuleStage] =
-    useState<Exclude<CollectionStage, "CLOSED">>("PRECONTENTIOUS");
-  const [ruleLabel, setRuleLabel] = useState("");
   const [refreshNotice, setRefreshNotice] = useState<string | null>(null);
+
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
 
   useEffect(() => {
     const fromHub = (location.state as { followupDue?: boolean } | null)
@@ -87,13 +143,19 @@ export function CollectionsPage() {
     }
   }, [location.state]);
 
-  const canManageRules = hasPerm(
-    user,
-    "collections.change_collectionescalationrule",
-  );
+  const tranches = useQuery({
+    queryKey: ["collection-tranches", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CollectionTranche>>("/collection-tranches/", {
+          params: { page_size: 50, ordering: "position" },
+        })
+      ).data,
+    enabled: !needsTenant,
+  });
 
   const dashboard = useQuery({
-    queryKey: ["collection-agent-dashboard", dashScope],
+    queryKey: ["collection-agent-dashboard", activeTenant, dashScope],
     queryFn: async () =>
       (
         await api.get<AgentCollectionDashboard>(
@@ -101,10 +163,11 @@ export function CollectionsPage() {
           { params: { scope: dashScope } },
         )
       ).data,
+    enabled: !needsTenant,
   });
 
   const hearings = useQuery({
-    queryKey: ["hearings-agenda"],
+    queryKey: ["hearings-agenda", activeTenant],
     queryFn: async () =>
       (
         await api.get<HearingAgendaItem[]>(
@@ -112,20 +175,30 @@ export function CollectionsPage() {
           { params: { within_days: 30 } },
         )
       ).data,
+    enabled: canViewLitigation && !needsTenant,
   });
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: [
       "collection-cases",
+      activeTenant,
       page,
       parClass,
+      trancheId,
       stage,
+      agency,
+      product,
+      gestionnaire,
+      assignedTo,
+      ownerKind,
+      cbsError,
       openOnly,
       mine,
       unassigned,
       followupDue,
       brokenPromises,
       search,
+      clientFilter,
     ],
     queryFn: async () =>
       (
@@ -133,17 +206,26 @@ export function CollectionsPage() {
           params: {
             page,
             ...(parClass ? { par_class: parClass } : {}),
+            ...(trancheId ? { tranche: trancheId } : {}),
             ...(stage ? { stage } : {}),
+            ...(agency ? { agency } : {}),
+            ...(product ? { product } : {}),
+            ...(gestionnaire ? { gestionnaire } : {}),
+            ...(assignedTo ? { assigned_to: assignedTo } : {}),
+            ...(ownerKind ? { owner_kind: ownerKind } : {}),
+            ...(cbsError ? { cbs_error: 1 } : {}),
             ...(openOnly ? { open: 1 } : {}),
             ...(mine ? { mine: 1 } : {}),
             ...(unassigned ? { unassigned: 1 } : {}),
             ...(followupDue ? { followup_due: 1 } : {}),
             ...(brokenPromises ? { broken_promises: 1 } : {}),
             ...(search.trim() ? { search: search.trim() } : {}),
+            ...(clientFilter ? { client: clientFilter } : {}),
             ordering: followupDue ? "next_action_date" : "-days_overdue",
           },
         })
       ).data,
+    enabled: !needsTenant,
   });
 
   const refreshOverdue = useMutation({
@@ -188,55 +270,12 @@ export function CollectionsPage() {
         setRefreshNotice("Retards recalculés.");
       }
     },
-    onError: () => {
-      setRefreshNotice("Impossible de lancer le recalcul des retards.");
+    onError: (err: unknown) => {
+      setRefreshNotice(
+        apiErrorMessage(err, "Impossible de lancer le recalcul des retards."),
+      );
     },
   });
-
-  const rules = useQuery({
-    queryKey: ["collection-escalation-rules"],
-    queryFn: async () =>
-      (
-        await api.get<Paginated<CollectionEscalationRule>>(
-          "/collection-escalation-rules/",
-        )
-      ).data,
-    enabled: showRules && canManageRules,
-  });
-
-  const addRule = useMutation({
-    mutationFn: async () =>
-      (
-        await api.post<CollectionEscalationRule>(
-          "/collection-escalation-rules/",
-          {
-            min_days_overdue: Number(ruleDays),
-            target_stage: ruleStage,
-            label: ruleLabel,
-            is_active: true,
-          },
-        )
-      ).data,
-    onSuccess: () => {
-      setRuleLabel("");
-      qc.invalidateQueries({ queryKey: ["collection-escalation-rules"] });
-    },
-  });
-
-  const toggleRule = useMutation({
-    mutationFn: async (rule: CollectionEscalationRule) =>
-      api.patch(`/collection-escalation-rules/${rule.id}/`, {
-        is_active: !rule.is_active,
-      }),
-    onSuccess: () =>
-      qc.invalidateQueries({ queryKey: ["collection-escalation-rules"] }),
-  });
-
-  function submitRule(e: FormEvent) {
-    e.preventDefault();
-    if (!ruleDays || Number(ruleDays) < 1) return;
-    addRule.mutate();
-  }
 
   function applyKpiFilter(
     kind: "mine" | "followups" | "broken" | "unassigned",
@@ -259,13 +298,21 @@ export function CollectionsPage() {
     const res = await api.get("/collection-cases/export/", {
       params: {
         ...(parClass ? { par_class: parClass } : {}),
+        ...(trancheId ? { tranche: trancheId } : {}),
         ...(stage ? { stage } : {}),
+        ...(agency ? { agency } : {}),
+        ...(product ? { product } : {}),
+        ...(gestionnaire ? { gestionnaire } : {}),
+        ...(assignedTo ? { assigned_to: assignedTo } : {}),
+        ...(ownerKind ? { owner_kind: ownerKind } : {}),
+        ...(cbsError ? { cbs_error: 1 } : {}),
         ...(openOnly ? { open: 1 } : {}),
         ...(mine ? { mine: 1 } : {}),
         ...(unassigned ? { unassigned: 1 } : {}),
         ...(followupDue ? { followup_due: 1 } : {}),
         ...(brokenPromises ? { broken_promises: 1 } : {}),
         ...(search.trim() ? { search: search.trim() } : {}),
+        ...(clientFilter ? { client: clientFilter } : {}),
         ordering: followupDue ? "next_action_date" : "-days_overdue",
       },
       responseType: "blob",
@@ -285,10 +332,10 @@ export function CollectionsPage() {
       <PageHeader
         icon={CircleDollarSign}
         title="Recouvrement"
-        subtitle="Dossiers en retard, encaissements et suivi terrain"
+        subtitle="Impayés lus depuis le CBS — suivi terrain, pas de saisie d'encaissement"
         actions={
           <div className="row-actions" style={{ gap: 8 }}>
-            {canManageCase && (
+            {canRefreshCbs && (
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
@@ -297,7 +344,7 @@ export function CollectionsPage() {
               >
                 {refreshOverdue.isPending
                   ? "Lancement…"
-                  : "Recalculer les retards"}
+                  : "Recalculer depuis le CBS"}
               </button>
             )}
             <button
@@ -310,6 +357,7 @@ export function CollectionsPage() {
           </div>
         }
       />
+      {needsTenant && <TenantScopeNotice />}
 
       {refreshNotice && (
         <p
@@ -326,7 +374,7 @@ export function CollectionsPage() {
         </p>
       )}
 
-      {canManageCase && (
+      {canSeeTeamDash && (
         <div className="row-actions" style={{ marginBottom: 10, gap: 8 }}>
           <button
             type="button"
@@ -395,17 +443,13 @@ export function CollectionsPage() {
             <span className="mk-label">Promesses rompues (30 j)</span>
           </button>
           <div className="mini-kpi">
-            <span className="mk-value">
-              {formatMoney(dash.repayments_this_month_amount)}
-            </span>
-            <span className="mk-label">
-              Encaissé ce mois ({dash.repayments_this_month_count})
-            </span>
+            <span className="mk-value">{dash.settled_this_month ?? 0}</span>
+            <span className="mk-label">Soldés CBS ce mois</span>
           </div>
         </div>
       )}
 
-      {!!hearings.data?.length && (
+      {canViewLitigation && !!hearings.data?.length && (
         <div className="card" style={{ marginBottom: 16, padding: 14 }}>
           <strong style={{ display: "block", marginBottom: 8 }}>
             Agenda audiences (30 j)
@@ -424,9 +468,10 @@ export function CollectionsPage() {
                 <tr
                   key={h.id}
                   className="row-clickable"
-                  onClick={() =>
-                    navigate(`/recouvrement/${h.case_id}/contentieux/${h.id}`)
-                  }
+                  onClick={() => {
+                    if (!canViewLitigation) return;
+                    navigate(`/recouvrement/${h.case_id}/contentieux/${h.id}`);
+                  }}
                 >
                   <td>
                     {h.hearing_date}
@@ -444,7 +489,171 @@ export function CollectionsPage() {
         </div>
       )}
 
-      {dash && dash.due_followups.length > 0 && (
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={(value) => {
+              setPage(1);
+              setSearch(value);
+            }}
+            placeholder="Référence, client, CBS…"
+          />
+        }
+        activeCount={
+          countActive(
+            search,
+            parClass,
+            trancheId,
+            stage,
+            agency,
+            product,
+            gestionnaire,
+            assignedTo,
+            ownerKind,
+            cbsError,
+            unassigned,
+            followupDue,
+            brokenPromises,
+            clientFilter,
+          ) +
+          (openOnly ? 0 : 1) +
+          (mine ? 1 : 0)
+        }
+        onReset={() => {
+          setSearch("");
+          setParClass("");
+          setTrancheId("");
+          setStage("");
+          setAgency("");
+          setProduct("");
+          setGestionnaire("");
+          setAssignedTo("");
+          setOwnerKind("");
+          setCbsError(false);
+          setOpenOnly(true);
+          setMine(false);
+          setUnassigned(false);
+          setFollowupDue(false);
+          setBrokenPromises(false);
+          setPage(1);
+          if (clientFilter) clearClientFilter();
+        }}
+        extra={
+          <>
+            <FilterToggle
+              label="Ouverts seulement"
+              checked={openOnly}
+              onChange={setFilter(setOpenOnly)}
+            />
+            <FilterToggle
+              label="Mon portefeuille"
+              checked={mine}
+              onChange={(checked) => {
+                setPage(1);
+                setMine(checked);
+                if (checked) {
+                  setUnassigned(false);
+                  setAssignedTo("");
+                }
+              }}
+            />
+            <FilterToggle
+              label="Non affectés"
+              checked={unassigned}
+              onChange={(checked) => {
+                setPage(1);
+                setUnassigned(checked);
+                if (checked) {
+                  setMine(false);
+                  setAssignedTo("");
+                }
+              }}
+            />
+            <FilterToggle
+              label="Actions dues"
+              checked={followupDue}
+              onChange={setFilter(setFollowupDue)}
+            />
+            <FilterToggle
+              label="Promesses rompues"
+              checked={brokenPromises}
+              onChange={setFilter(setBrokenPromises)}
+            />
+            <FilterToggle
+              label="Erreur synchro CBS"
+              checked={cbsError}
+              onChange={setFilter(setCbsError)}
+            />
+          </>
+        }
+      >
+        <FilterField label="Classe PAR" active={!!parClass}>
+          <FilterSelect value={parClass} onChange={setFilter(setParClass)}>
+            {PAR_OPTIONS.map((o) => (
+              <option key={o.value || "all"} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Tranche" active={!!trancheId}>
+          <FilterSelect value={trancheId} onChange={setFilter(setTrancheId)}>
+            <option value="">Toutes les tranches</option>
+            {(tranches.data?.results ?? []).map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name} ({t.days_label})
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Stade" active={!!stage}>
+          <FilterSelect value={stage} onChange={setFilter(setStage)}>
+            {STAGE_OPTIONS.map((o) => (
+              <option key={o.value || "all"} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Responsable" active={!!ownerKind}>
+          <FilterSelect value={ownerKind} onChange={setFilter(setOwnerKind)}>
+            {OWNER_OPTIONS.map((o) => (
+              <option key={o.value || "all"} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+        <ProductFilter value={product} onChange={setFilter(setProduct)} />
+        <OfficerFilter
+          value={gestionnaire}
+          onChange={setFilter(setGestionnaire)}
+        />
+        <OfficerFilter
+          value={assignedTo}
+          onChange={(value) => {
+            setPage(1);
+            setAssignedTo(value);
+            if (value) {
+              setMine(false);
+              setUnassigned(false);
+            }
+          }}
+          label="Agent"
+          emptyLabel="Tous les agents"
+        />
+      </ListFilters>
+      <ClientFilterBanner
+        clientId={clientFilter}
+        onClear={() => {
+          clearClientFilter();
+          setPage(1);
+        }}
+      />
+
+      {dash && !clientFilter && dash.due_followups.length > 0 && (
         <div className="card" style={{ marginBottom: 16, padding: 14 }}>
           <strong style={{ display: "block", marginBottom: 8 }}>
             Prochaines actions
@@ -481,203 +690,6 @@ export function CollectionsPage() {
         </div>
       )}
 
-      <div className="filters-bar card">
-        <input
-          type="search"
-          placeholder="Référence, client, CBS…"
-          value={search}
-          onChange={(e) => {
-            setPage(1);
-            setSearch(e.target.value);
-          }}
-        />
-        <select
-          value={parClass}
-          onChange={(e) => {
-            setPage(1);
-            setParClass(e.target.value);
-          }}
-        >
-          {PAR_OPTIONS.map((o) => (
-            <option key={o.value || "all"} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={stage}
-          onChange={(e) => {
-            setPage(1);
-            setStage(e.target.value);
-          }}
-        >
-          {STAGE_OPTIONS.map((o) => (
-            <option key={o.value || "all-stage"} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={openOnly}
-            onChange={(e) => {
-              setPage(1);
-              setOpenOnly(e.target.checked);
-            }}
-          />
-          <span>Ouverts seulement</span>
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={mine}
-            onChange={(e) => {
-              setPage(1);
-              setMine(e.target.checked);
-              if (e.target.checked) setUnassigned(false);
-            }}
-          />
-          <span>Mon portefeuille</span>
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={unassigned}
-            onChange={(e) => {
-              setPage(1);
-              setUnassigned(e.target.checked);
-              if (e.target.checked) setMine(false);
-            }}
-          />
-          <span>Non affectés</span>
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={followupDue}
-            onChange={(e) => {
-              setPage(1);
-              setFollowupDue(e.target.checked);
-            }}
-          />
-          <span>Actions dues</span>
-        </label>
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={brokenPromises}
-            onChange={(e) => {
-              setPage(1);
-              setBrokenPromises(e.target.checked);
-            }}
-          />
-          <span>Promesses rompues</span>
-        </label>
-        {canManageRules && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => setShowRules((v) => !v)}
-          >
-            {showRules ? "Masquer règles" : "Règles d'escalade"}
-          </button>
-        )}
-      </div>
-
-      {showRules && canManageRules && (
-        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
-          <strong style={{ display: "block", marginBottom: 8 }}>
-            Escalade automatique (PAR / DPD)
-          </strong>
-          <p className="muted small" style={{ marginBottom: 12 }}>
-            Dès que le retard atteint le seuil, le dossier passe au stade cible
-            (uniquement vers le haut).
-          </p>
-          <form
-            className="inline-form"
-            style={{ boxShadow: "none", border: 0, padding: 0, marginBottom: 12 }}
-            onSubmit={submitRule}
-          >
-            <div className="form-grid">
-              <label className="field">
-                <span>Seuil (jours)</span>
-                <input
-                  type="number"
-                  min={1}
-                  value={ruleDays}
-                  onChange={(e) => setRuleDays(e.target.value)}
-                  required
-                />
-              </label>
-              <label className="field">
-                <span>Stade cible</span>
-                <select
-                  value={ruleStage}
-                  onChange={(e) =>
-                    setRuleStage(
-                      e.target.value as Exclude<CollectionStage, "CLOSED">,
-                    )
-                  }
-                >
-                  {ESCALATION_STAGES.map((s) => (
-                    <option key={s.value} value={s.value}>
-                      {s.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Libellé</span>
-                <input
-                  value={ruleLabel}
-                  onChange={(e) => setRuleLabel(e.target.value)}
-                  placeholder="optionnel"
-                />
-              </label>
-            </div>
-            <button
-              className="btn btn-primary btn-sm"
-              disabled={addRule.isPending}
-            >
-              Ajouter la règle
-            </button>
-          </form>
-          {!rules.data?.results.length ? (
-            <p className="muted small">Aucune règle (les défauts seront créés).</p>
-          ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Seuil</th>
-                  <th>Stade</th>
-                  <th>Libellé</th>
-                  <th>Active</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rules.data.results.map((r) => (
-                  <tr key={r.id}>
-                    <td>≥ {r.min_days_overdue} j</td>
-                    <td>{r.target_stage_display}</td>
-                    <td className="small">{r.label || "—"}</td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => toggleRule.mutate(r)}
-                      >
-                        {r.is_active ? "Oui" : "Non"}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
-
       <QueryStatus
         isLoading={isLoading}
         isError={isError}
@@ -693,7 +705,7 @@ export function CollectionsPage() {
                 <th>Client</th>
                 <th>Produit</th>
                 <th>PAR</th>
-                <th>Stade</th>
+                <th>Tranche</th>
                 <th className="num">Jours</th>
                 <th className="num">Impayé</th>
                 <th>Prochaine action</th>
@@ -714,7 +726,7 @@ export function CollectionsPage() {
                     <Badge value={c.par_class_display} />
                   </td>
                   <td>
-                    <Badge value={c.stage_display} />
+                    <Badge value={c.tranche_name || c.stage_display} />
                   </td>
                   <td className="num">{c.days_overdue}</td>
                   <td className="num">{formatMoney(c.overdue_amount)}</td>

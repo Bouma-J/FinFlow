@@ -21,6 +21,13 @@ import { api } from "@/api/client";
 import type { Agency, Paginated, Tenant, TenantOfficer } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  SearchInput,
+  countActive,
+} from "@/components/ListFilters";
+import {
   Badge,
   Card,
   PageHeader,
@@ -128,15 +135,35 @@ export function AdminTenantsPage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [agencyForm, setAgencyForm] = useState({ ...EMPTY_AGENCY });
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [countryFilter, setCountryFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
 
   const tenants = useQuery({
     queryKey: ["tenants"],
     queryFn: async () =>
-      (await api.get<Paginated<Tenant>>("/tenants/")).data,
+      (await api.get<Paginated<Tenant>>("/tenants/", { params: { page_size: 200 } }))
+        .data,
     enabled: !!user?.is_group_level,
   });
 
-  const selected = tenants.data?.results.find((t) => t.id === selectedId);
+  const allTenants = tenants.data?.results ?? [];
+  const countries = [...new Set(allTenants.map((t) => t.country).filter(Boolean))].sort();
+  const filteredTenants = allTenants.filter((t) => {
+    const q = search.trim().toLowerCase();
+    if (
+      q &&
+      !`${t.code} ${t.name} ${t.country} ${t.zone}`.toLowerCase().includes(q)
+    ) {
+      return false;
+    }
+    if (countryFilter && t.country !== countryFilter) return false;
+    if (statusFilter === "active" && !t.is_active) return false;
+    if (statusFilter === "inactive" && t.is_active) return false;
+    return true;
+  });
+
+  const selected = allTenants.find((t) => t.id === selectedId);
 
   const agencies = useQuery({
     queryKey: ["agencies", selectedId],
@@ -332,59 +359,82 @@ export function AdminTenantsPage() {
         </form>
       )}
 
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Code, raison sociale, pays…"
+          />
+        }
+        activeCount={countActive(search, countryFilter, statusFilter)}
+        onReset={() => {
+          setSearch("");
+          setCountryFilter("");
+          setStatusFilter("");
+        }}
+      >
+        <FilterField label="Pays" active={!!countryFilter}>
+          <FilterSelect value={countryFilter} onChange={setCountryFilter}>
+            <option value="">Tous</option>
+            {countries.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Statut" active={!!statusFilter}>
+          <FilterSelect value={statusFilter} onChange={setStatusFilter}>
+            <option value="">Tous</option>
+            <option value="active">Actives</option>
+            <option value="inactive">Inactives</option>
+          </FilterSelect>
+        </FilterField>
+      </ListFilters>
+
       <div className="tenants-admin-layout">
         <Card title="Filiales">
           <QueryStatus
             isLoading={tenants.isLoading}
             isError={tenants.isError}
-            isEmpty={!tenants.data?.results.length}
-            emptyMessage="Aucune filiale."
+            isEmpty={!filteredTenants.length}
+            emptyMessage="Aucune filiale pour ce filtre."
             onRetry={() => tenants.refetch()}
           >
-            <div className="table-scroll">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Code</th>
-                    <th>Raison sociale</th>
-                    <th>Pays</th>
-                    <th>Devise</th>
-                    <th>Statut</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(tenants.data?.results ?? []).map((t) => (
-                    <tr
-                      key={t.id}
-                      className={selectedId === t.id ? "is-selected" : undefined}
+            <ul className="tenant-pick-list">
+              {filteredTenants.map((t) => (
+                <li key={t.id}>
+                  <button
+                    type="button"
+                    className={`tenant-pick${selectedId === t.id ? " is-selected" : ""}`}
+                    onClick={() => openEdit(t)}
+                  >
+                    <span
+                      className="tenant-pick-swatches"
+                      aria-hidden
                     >
-                      <td>
-                        <code>{t.code}</code>
-                      </td>
-                      <td>{t.name}</td>
-                      <td>{t.country}</td>
-                      <td>{t.currency}</td>
-                      <td>
-                        <Badge
-                          value={t.is_active ? "success" : "muted"}
-                          label={t.is_active ? "Active" : "Inactive"}
-                        />
-                      </td>
-                      <td>
-                        <button
-                          type="button"
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => openEdit(t)}
-                        >
-                          Configurer
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                      <i style={{ background: t.brand_primary }} />
+                      <i style={{ background: t.brand_secondary }} />
+                      <i style={{ background: t.brand_accent }} />
+                    </span>
+                    <span className="tenant-pick-body">
+                      <strong>
+                        {t.code} — {t.name}
+                      </strong>
+                      <span className="muted small">
+                        {t.country}
+                        {t.zone ? ` · ${t.zone}` : ""} · {t.currency}
+                      </span>
+                    </span>
+                    <Badge
+                      value={t.is_active ? "ACTIVE" : "DRAFT"}
+                      label={t.is_active ? "Active" : "Inactive"}
+                    />
+                  </button>
+                </li>
+              ))}
+            </ul>
           </QueryStatus>
         </Card>
 

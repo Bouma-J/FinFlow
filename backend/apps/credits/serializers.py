@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 
 from apps.common.storage_urls import presign_file_fields
@@ -161,6 +162,7 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
     dependents_count = serializers.ReadOnlyField()
     disposable_per_capita = serializers.ReadOnlyField()
     projected_monthly_surplus = serializers.ReadOnlyField()
+    collective_capacity = serializers.ReadOnlyField()
     # Drapeaux d'alerte
     flags = serializers.SerializerMethodField()
 
@@ -210,6 +212,7 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
             "gross_margin", "total_operating_expenses", "ebe", "net_result",
             "cash_flow", "total_assets", "total_debts", "equity", "bfr",
             "gross_margin_pct", "net_margin_pct",
+            "collective_capacity",
             # Analyse sectorielle
             "sector", "sub_sector", "value_chain_position", "market_dynamic",
             "seasonality_level", "competition_intensity", "supplier_dependency",
@@ -243,11 +246,26 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id", "author_role", "created_by", "created_by_display", "can_edit",
+            "is_reference",
             "client_type", "new_installment", "repayment_capacity",
             "debt_ratio", "dscr", "debt_ratio_stress", "dscr_stress",
             "guarantee_coverage", "internal_score", "score_breakdown",
             "metrics", "thresholds", "created_at", "updated_at",
         ]
+
+    def validate(self, attrs):
+        from apps.common.upload_validation import validate_attrs_uploads
+
+        attrs = validate_attrs_uploads(attrs, self.context, check_quota=True)
+        if (
+            self.instance is not None
+            and "application" in attrs
+            and attrs["application"] != self.instance.application
+        ):
+            raise serializers.ValidationError(
+                {"application": "Impossible de réaffecter l'analyse à un autre dossier."}
+            )
+        return attrs
 
     def get_flags(self, obj):
         """Indicateurs de conformité aux seuils de la filiale."""
@@ -262,7 +280,10 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request:
             return
+        from apps.common.upload_validation import validate_uploaded_file
+
         for f in request.FILES.getlist("documents"):
+            validate_uploaded_file(f, tenant=analysis.tenant, check_quota=True)
             FinancialDocument.objects.create(
                 analysis=analysis,
                 tenant_id=analysis.tenant_id,
@@ -334,6 +355,21 @@ class FieldVisitSerializer(serializers.ModelSerializer):
             validated_data["visitor_role"] = user_role_label(request.user)
         return super().create(validated_data)
 
+    def validate(self, attrs):
+        if (
+            self.instance is not None
+            and "application" in attrs
+            and attrs["application"] != self.instance.application
+        ):
+            raise serializers.ValidationError(
+                {
+                    "application": (
+                        "Impossible de réaffecter la visite à un autre dossier."
+                    )
+                }
+            )
+        return attrs
+
 
 class StockPhotoSerializer(serializers.ModelSerializer):
     class Meta:
@@ -362,6 +398,21 @@ class CreditDocumentSerializer(serializers.ModelSerializer):
             check_quota=True,
         )
 
+    def validate(self, attrs):
+        if (
+            self.instance is not None
+            and "application" in attrs
+            and attrs["application"] != self.instance.application
+        ):
+            raise serializers.ValidationError(
+                {
+                    "application": (
+                        "Impossible de réaffecter la pièce à un autre dossier."
+                    )
+                }
+            )
+        return attrs
+
     def to_representation(self, instance):
         return presign_file_fields(super().to_representation(instance), instance, "file")
 
@@ -382,6 +433,8 @@ class CreditApplicationListSerializer(serializers.ModelSerializer):
     client_reference = serializers.CharField(source="client.reference", read_only=True)
     product_label = serializers.CharField(source="product.label", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    collection_case_id = serializers.SerializerMethodField()
+    collection_stage_display = serializers.SerializerMethodField()
 
     class Meta:
         model = CreditApplication
@@ -390,9 +443,35 @@ class CreditApplicationListSerializer(serializers.ModelSerializer):
             "product", "product_label", "agency",
             "amount_requested", "amount_proposed", "amount_approved",
             "currency", "status", "status_display", "risk_level",
+            "collection_case_id", "collection_stage_display",
             "created_at", "updated_at", "submitted_at",
         ]
         read_only_fields = fields
+
+    def get_collection_case_id(self, obj):
+        return _collection_snapshot(_loan_of_application(obj))[0]
+
+    def get_collection_stage_display(self, obj):
+        return _collection_snapshot(_loan_of_application(obj))[2]
+
+
+def _loan_of_application(application):
+    try:
+        return application.loan
+    except (ObjectDoesNotExist, AttributeError):
+        return None
+
+
+def _collection_snapshot(loan):
+    if loan is None:
+        return None, "", ""
+    try:
+        case = loan.collection_case
+    except (ObjectDoesNotExist, AttributeError):
+        return None, "", ""
+    if case is None:
+        return None, "", ""
+    return str(case.id), case.stage, case.get_stage_display()
 
 
 class CreditApplicationSerializer(serializers.ModelSerializer):
@@ -411,6 +490,10 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
     periodicity_label = serializers.SerializerMethodField()
     repayment_mechanism_label = serializers.SerializerMethodField()
     currency_label = serializers.SerializerMethodField()
+    collection_case_id = serializers.SerializerMethodField()
+    collection_stage = serializers.SerializerMethodField()
+    collection_stage_display = serializers.SerializerMethodField()
+    loan_id = serializers.SerializerMethodField()
 
     def get_submitted_by_display(self, obj):
         return str(obj.submitted_by) if obj.submitted_by_id else ""
@@ -443,6 +526,19 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
     def get_currency_label(self, obj):
         refs = self.get_cbs_refs(obj)
         return (refs.get("currency") or {}).get("label") or obj.currency
+
+    def get_collection_case_id(self, obj):
+        return _collection_snapshot(_loan_of_application(obj))[0]
+
+    def get_collection_stage(self, obj):
+        return _collection_snapshot(_loan_of_application(obj))[1]
+
+    def get_collection_stage_display(self, obj):
+        return _collection_snapshot(_loan_of_application(obj))[2]
+
+    def get_loan_id(self, obj):
+        loan = _loan_of_application(obj)
+        return str(loan.id) if loan is not None else None
 
     def to_representation(self, instance):
         return presign_file_fields(
@@ -495,6 +591,8 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
             "disbursement_requested_at", "disbursement_requested_by",
             "submitted_by", "submitted_by_display",
             "created_by", "created_by_display",
+            "collection_case_id", "collection_stage", "collection_stage_display",
+            "loan_id",
             "created_at", "updated_at",
         ]
         read_only_fields = [
@@ -508,6 +606,8 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
             "extra_fees", "fees_breakdown",
             "cbs_refs", "periodicity_label", "repayment_mechanism_label",
             "currency_label",
+            "collection_case_id", "collection_stage", "collection_stage_display",
+            "loan_id",
         ]
 
     def validate(self, attrs):
@@ -596,6 +696,9 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
 
         tenant_id = getattr(merged, "tenant_id", None) or get_current_tenant_id()
         self._validate_catalog_refs(attrs, tenant_id)
+        from apps.common.upload_validation import validate_attrs_uploads
+
+        attrs = validate_attrs_uploads(attrs, self.context, check_quota=True)
         return attrs
 
     def _validate_catalog_refs(self, attrs, tenant_id):
@@ -628,7 +731,10 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request:
             return
+        from apps.common.upload_validation import validate_uploaded_file
+
         for image in request.FILES.getlist("stock_photos"):
+            validate_uploaded_file(image, tenant=application.tenant, check_quota=True)
             StockPhoto.objects.create(
                 application=application,
                 tenant_id=application.tenant_id,
@@ -682,6 +788,9 @@ class LoanListSerializer(serializers.ModelSerializer):
         source="application.currency", read_only=True
     )
     client_display = serializers.SerializerMethodField()
+    collection_case_id = serializers.SerializerMethodField()
+    collection_stage = serializers.SerializerMethodField()
+    collection_stage_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Loan
@@ -700,8 +809,20 @@ class LoanListSerializer(serializers.ModelSerializer):
             "core_banking_reference",
             "cbs_contract_number",
             "cbs_disbursement_status",
+            "collection_case_id",
+            "collection_stage",
+            "collection_stage_display",
         ]
         read_only_fields = fields
+
+    def get_collection_case_id(self, obj):
+        return _collection_snapshot(obj)[0]
+
+    def get_collection_stage(self, obj):
+        return _collection_snapshot(obj)[1]
+
+    def get_collection_stage_display(self, obj):
+        return _collection_snapshot(obj)[2]
 
     def get_client_display(self, obj):
         client = getattr(obj.application, "client", None)
@@ -719,6 +840,14 @@ class LoanSerializer(serializers.ModelSerializer):
     currency = serializers.CharField(
         source="application.currency", read_only=True
     )
+    collection_case_id = serializers.SerializerMethodField()
+    collection_stage = serializers.SerializerMethodField()
+    collection_stage_display = serializers.SerializerMethodField()
+    outstanding_principal = serializers.SerializerMethodField()
+    restructures = serializers.SerializerMethodField()
+    write_offs = serializers.SerializerMethodField()
+    financial_ops_frozen = serializers.SerializerMethodField()
+    financial_ops_frozen_reason = serializers.SerializerMethodField()
 
     class Meta:
         model = Loan
@@ -730,11 +859,52 @@ class LoanSerializer(serializers.ModelSerializer):
             "cbs_external_id", "cbs_demande_number", "cbs_demande_ref",
             "cbs_contract_number", "cbs_disbursement_status",
             "installments", "fees_breakdown",
+            "collection_case_id", "collection_stage", "collection_stage_display",
+            "outstanding_principal", "restructures", "write_offs",
+            "financial_ops_frozen", "financial_ops_frozen_reason",
         ]
         read_only_fields = fields
 
+    def get_collection_case_id(self, obj):
+        return _collection_snapshot(obj)[0]
+
+    def get_collection_stage(self, obj):
+        return _collection_snapshot(obj)[1]
+
+    def get_collection_stage_display(self, obj):
+        return _collection_snapshot(obj)[2]
+
     def get_fees_breakdown(self, obj):
         return build_fees_breakdown(obj.application)
+
+    def get_outstanding_principal(self, obj):
+        from apps.collections.services import outstanding_principal
+
+        return str(outstanding_principal(obj))
+
+    def get_restructures(self, obj):
+        from apps.collections.serializers import LoanRestructureSerializer
+
+        qs = obj.restructures.select_related("requested_by", "applied_by").all()
+        return LoanRestructureSerializer(qs, many=True, context=self.context).data
+
+    def get_write_offs(self, obj):
+        from apps.collections.serializers import WriteOffSerializer
+
+        qs = obj.write_offs.select_related("requested_by", "approved_by").all()
+        return WriteOffSerializer(qs, many=True, context=self.context).data
+
+    def get_financial_ops_frozen(self, obj):
+        from apps.collections.dation_bridge import financial_ops_block_for_loan
+
+        blocked, _, _ = financial_ops_block_for_loan(obj)
+        return blocked
+
+    def get_financial_ops_frozen_reason(self, obj):
+        from apps.collections.dation_bridge import financial_ops_block_for_loan
+
+        blocked, reason, _ = financial_ops_block_for_loan(obj)
+        return reason if blocked else ""
 
 
 class SimulationSerializer(serializers.Serializer):

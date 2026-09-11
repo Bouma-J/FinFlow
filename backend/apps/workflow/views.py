@@ -258,15 +258,21 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
             GuaranteeReleaseRequest,
         )
 
+        from apps.common.tenancy import get_current_tenant_id
+
         user = request.user
         group_ids = effective_group_ids(user)
         see_all = user.is_superuser or getattr(user, "is_group_level", False)
-
-        instances = (
-            WorkflowInstance.objects.select_related("definition")
-            .prefetch_related("definition__steps", "tasks", "tasks__step")
-            .order_by("-created_at")
-        )
+        tenant_id = get_current_tenant_id()
+        if not tenant_id:
+            instances = WorkflowInstance.objects.none()
+        else:
+            instances = (
+                WorkflowInstance.all_tenants.filter(tenant_id=tenant_id)
+                .select_related("definition")
+                .prefetch_related("definition__steps", "tasks", "tasks__step")
+                .order_by("-created_at")
+            )
 
         rows = []
         seen_keys = set()
@@ -402,8 +408,14 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
                     "status": status,
                     "status_display": status_display,
                     "product_label": product_label,
+                    "created_by_id": str(created_by.id) if created_by else None,
                     "created_by_display": (
-                        str(created_by) if created_by else ""
+                        (
+                            (created_by.get_full_name() or "").strip()
+                            or str(created_by)
+                        )
+                        if created_by
+                        else ""
                     ),
                     "created_at": created_at.isoformat() if created_at else None,
                     "definition_name": inst.definition.name,
@@ -431,7 +443,72 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
                 }
             )
 
-        return Response({"results": rows})
+        from apps.common.list_filters import query_param
+        from apps.common.pagination import DefaultPagination
+
+        search = query_param(request, "search").lower()
+        status_f = query_param(request, "status")
+        kind = query_param(request, "target_kind")
+        actionable = query_param(request, "actionable")
+        client_type = query_param(request, "client_type")
+        initiator = (
+            query_param(request, "gestionnaire")
+            or query_param(request, "initiator")
+        )
+        date_from = query_param(request, "created_after")
+        date_to = query_param(request, "created_before")
+
+        def _match(row):
+            if kind and row["target_kind"] != kind:
+                return False
+            if status_f and row["status"] != status_f:
+                return False
+            if actionable == "1" and not row["is_actionable"]:
+                return False
+            if client_type == "particulier" and row["client_type"] != "INDIVIDUAL":
+                return False
+            if client_type == "entreprise" and row["client_type"] != "CORPORATE":
+                return False
+            if client_type == "groupement" and row["client_type"] != "PROFESSIONAL":
+                return False
+            if client_type in {
+                "INDIVIDUAL",
+                "CORPORATE",
+                "PROFESSIONAL",
+            } and row["client_type"] != client_type:
+                return False
+            if initiator and row.get("created_by_id") != initiator:
+                if row.get("created_by_display") != initiator:
+                    return False
+            created = row.get("created_at") or ""
+            if date_from and created[:10] < date_from:
+                return False
+            if date_to and created[:10] > date_to:
+                return False
+            if search:
+                hay = " ".join(
+                    str(row.get(key) or "")
+                    for key in (
+                        "reference",
+                        "client_display",
+                        "product_label",
+                        "created_by_display",
+                        "definition_name",
+                        "current_step_name",
+                        "my_step_name",
+                    )
+                ).lower()
+                if search not in hay:
+                    return False
+            return True
+
+        actionable_count = sum(1 for row in rows if row["is_actionable"])
+        filtered = [row for row in rows if _match(row)]
+        paginator = DefaultPagination()
+        page = paginator.paginate_queryset(filtered, request)
+        response = paginator.get_paginated_response(page)
+        response.data["actionable_count"] = actionable_count
+        return response
 
     @action(detail=True, methods=["post"])
     def decide(self, request, pk=None):

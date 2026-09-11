@@ -4,6 +4,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 
 from apps.common.access import apply_related_data_scope
+from apps.common.list_filters import query_param
 from apps.common.viewsets import AgencyScopedViewSet
 from apps.contracts.serializers import (
     GeneratedContractSerializer,
@@ -74,6 +75,9 @@ class SuretyEngagementViewSet(AgencyScopedViewSet):
         user = self.request.user
         if user and user.is_authenticated:
             qs = apply_related_data_scope(qs, user, "application__agency")
+        client = query_param(self.request, "client")
+        if client:
+            qs = qs.filter(application__client_id=client)
         return qs
 
     def _assert_application_allows_collateral(self, application):

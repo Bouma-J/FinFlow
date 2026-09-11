@@ -30,6 +30,15 @@ def test_refresh_overdue_queues_by_default(tenant_a):
     )
     from django.contrib.auth.models import Permission
 
+    from apps.accounts.services import (
+        RESP_RECOUVREMENT_ROLE_NAME,
+        ensure_default_role_packs,
+        get_or_create_tenant_role,
+    )
+
+    ensure_default_role_packs(tenant_a)
+    role, _ = get_or_create_tenant_role(tenant_a, RESP_RECOUVREMENT_ROLE_NAME)
+    user.groups.add(role)
     for codename in (
         "view_collectioncase",
         "change_collectioncase",

@@ -1,11 +1,13 @@
 import json
 
+from django.core.exceptions import ObjectDoesNotExist
 from rest_framework import serializers
 
 from apps.common.storage_urls import file_download_url, presign_file_fields
 
 from .models import (
     Guarantee,
+    PledgeCategory,
     GuaranteeDocument,
     GuaranteeFormalizationRequest,
     GuaranteeJewelryItem,
@@ -18,6 +20,85 @@ from .models import (
     DationRequest,
     FormalizationFee,
 )
+
+_OPEN_DATION_STATUSES = (
+    DationRequest.Status.DRAFT,
+    DationRequest.Status.IN_APPROVAL,
+    DationRequest.Status.RETURNED,
+    DationRequest.Status.APPROVED,
+    DationRequest.Status.BLOCKED,
+)
+_OPEN_RELEASE_STATUSES = (
+    GuaranteeReleaseRequest.Status.DRAFT,
+    GuaranteeReleaseRequest.Status.IN_APPROVAL,
+    GuaranteeReleaseRequest.Status.RETURNED,
+    GuaranteeReleaseRequest.Status.APPROVED,
+    GuaranteeReleaseRequest.Status.BLOCKED,
+)
+_OPEN_FORMALIZATION_STATUSES = (
+    GuaranteeFormalizationRequest.Status.DRAFT,
+    GuaranteeFormalizationRequest.Status.IN_PROGRESS,
+    GuaranteeFormalizationRequest.Status.IN_APPROVAL,
+    GuaranteeFormalizationRequest.Status.RETURNED,
+    GuaranteeFormalizationRequest.Status.APPROVED,
+)
+
+
+def _open_dation_id(guarantee) -> str | None:
+    link = (
+        guarantee.dation_asset_links.filter(
+            dation__status__in=_OPEN_DATION_STATUSES
+        )
+        .order_by("-created_at")
+        .only("dation_id")
+        .first()
+    )
+    return str(link.dation_id) if link else None
+
+
+def _open_release_id(guarantee) -> str | None:
+    req = (
+        guarantee.release_requests.filter(status__in=_OPEN_RELEASE_STATUSES)
+        .order_by("-created_at")
+        .only("id")
+        .first()
+    )
+    return str(req.id) if req else None
+
+
+def _open_formalization_id(guarantee) -> str | None:
+    req = (
+        guarantee.formalization_requests.filter(
+            status__in=_OPEN_FORMALIZATION_STATUSES
+        )
+        .order_by("-created_at")
+        .only("id")
+        .first()
+    )
+    return str(req.id) if req else None
+
+
+def _completed_dation_id(guarantee) -> str | None:
+    """Dation qui a réalisé cette garantie (bien source)."""
+    link = (
+        guarantee.dation_asset_links.filter(
+            dation__status=DationRequest.Status.COMPLETED
+        )
+        .order_by("-dation__completed_at", "-created_at")
+        .only("dation_id")
+        .first()
+    )
+    return str(link.dation_id) if link else None
+
+
+def _origin_dation_id(guarantee) -> str | None:
+    """Dation dont cette garantie est le bien issu (type DATION)."""
+    origin = (
+        guarantee.dation_origins.order_by("-completed_at", "-created_at")
+        .only("id")
+        .first()
+    )
+    return str(origin.id) if origin else None
 
 
 class GuaranteeMovementSerializer(serializers.ModelSerializer):
@@ -32,6 +113,19 @@ class GuaranteeMovementSerializer(serializers.ModelSerializer):
             "movement_date", "value", "target_application", "comment",
         ]
         read_only_fields = ["id", "movement_type_display"]
+
+    def validate_movement_type(self, value):
+        locked = {
+            GuaranteeMovement.MovementType.RELEASE,
+            GuaranteeMovement.MovementType.REALIZATION,
+            GuaranteeMovement.MovementType.TRANSFER,
+        }
+        if value in locked:
+            raise serializers.ValidationError(
+                "Utilisez le processus métier (main levée, dation) "
+                "plutôt qu'un mouvement direct."
+            )
+        return value
 
 
 class GuaranteePhotoSerializer(serializers.ModelSerializer):
@@ -106,6 +200,20 @@ class JewelryItemsField(serializers.Field):
         return items
 
 
+def _collection_link_for_application(application):
+    """Pont dossier → prêt → recouvrement (None si pas encore décaissé)."""
+    if application is None:
+        return None, "", ""
+    try:
+        loan = application.loan
+    except (ObjectDoesNotExist, AttributeError):
+        return None, "", ""
+    case = getattr(loan, "collection_case", None)
+    if case is None:
+        return None, "", ""
+    return str(case.id), case.stage, case.get_stage_display()
+
+
 class GuaranteeListSerializer(serializers.ModelSerializer):
     """Liste allégée — sans mouvements, photos ni scans."""
 
@@ -116,18 +224,30 @@ class GuaranteeListSerializer(serializers.ModelSerializer):
         source="renewed_from.reference", read_only=True, default=None
     )
     surety_display = serializers.SerializerMethodField()
+    client_display = serializers.SerializerMethodField()
+    application_reference = serializers.SerializerMethodField()
+    collection_case_id = serializers.SerializerMethodField()
+    collection_stage_display = serializers.SerializerMethodField()
     open_formalization_id = serializers.SerializerMethodField()
+    open_dation_id = serializers.SerializerMethodField()
+    open_release_id = serializers.SerializerMethodField()
+    completed_dation_id = serializers.SerializerMethodField()
+    origin_dation_id = serializers.SerializerMethodField()
+    process_busy = serializers.SerializerMethodField()
 
     class Meta:
         model = Guarantee
         fields = [
             "id", "reference", "guarantee_type", "type_display", "agency",
-            "pledge_category", "client", "application",
+            "pledge_category", "client", "client_display",
+            "application", "application_reference",
             "belongs_to_applicant", "surety", "surety_display",
             "current_value", "ltv_ratio", "status",
             "registration_number", "registration_date",
             "registration_authority", "formalized_at",
-            "open_formalization_id",
+            "open_formalization_id", "open_dation_id", "open_release_id",
+            "completed_dation_id", "origin_dation_id", "process_busy",
+            "collection_case_id", "collection_stage_display",
             "renewed_from_reference", "created_at",
         ]
         read_only_fields = fields
@@ -137,21 +257,41 @@ class GuaranteeListSerializer(serializers.ModelSerializer):
             return None
         return getattr(obj.surety, "display_name", None) or str(obj.surety)
 
+    def get_client_display(self, obj) -> str | None:
+        if not obj.client_id:
+            return None
+        return getattr(obj.client, "display_name", None) or str(obj.client)
+
+    def get_application_reference(self, obj) -> str | None:
+        if not obj.application_id:
+            return None
+        return obj.application.reference or str(obj.application_id)
+
+    def get_collection_case_id(self, obj):
+        return _collection_link_for_application(obj.application)[0]
+
+    def get_collection_stage_display(self, obj):
+        return _collection_link_for_application(obj.application)[2]
+
     def get_open_formalization_id(self, obj):
-        open_statuses = (
-            GuaranteeFormalizationRequest.Status.DRAFT,
-            GuaranteeFormalizationRequest.Status.IN_PROGRESS,
-            GuaranteeFormalizationRequest.Status.IN_APPROVAL,
-            GuaranteeFormalizationRequest.Status.RETURNED,
-            GuaranteeFormalizationRequest.Status.APPROVED,
-        )
-        req = (
-            obj.formalization_requests.filter(status__in=open_statuses)
-            .order_by("-created_at")
-            .only("id")
-            .first()
-        )
-        return str(req.id) if req else None
+        return _open_formalization_id(obj)
+
+    def get_open_dation_id(self, obj):
+        return _open_dation_id(obj)
+
+    def get_open_release_id(self, obj):
+        return _open_release_id(obj)
+
+    def get_completed_dation_id(self, obj):
+        return _completed_dation_id(obj)
+
+    def get_origin_dation_id(self, obj):
+        return _origin_dation_id(obj)
+
+    def get_process_busy(self, obj):
+        from .busy import guarantee_busy
+
+        return guarantee_busy(obj)
 
 
 class GuaranteeSerializer(serializers.ModelSerializer):
@@ -171,8 +311,18 @@ class GuaranteeSerializer(serializers.ModelSerializer):
     surety_display = serializers.SerializerMethodField()
     client_display = serializers.SerializerMethodField()
     application_reference = serializers.SerializerMethodField()
+    collection_case_id = serializers.SerializerMethodField()
+    collection_stage_display = serializers.SerializerMethodField()
     agency_name = serializers.SerializerMethodField()
     open_formalization_id = serializers.SerializerMethodField()
+    open_dation_id = serializers.SerializerMethodField()
+    open_release_id = serializers.SerializerMethodField()
+    completed_dation_id = serializers.SerializerMethodField()
+    origin_dation_id = serializers.SerializerMethodField()
+    process_busy = serializers.SerializerMethodField()
+    accept_existing = serializers.BooleanField(
+        write_only=True, required=False, default=False
+    )
 
     class Meta:
         model = Guarantee
@@ -181,6 +331,7 @@ class GuaranteeSerializer(serializers.ModelSerializer):
             "agency_name",
             "pledge_category", "client", "client_display",
             "application", "application_reference",
+            "collection_case_id", "collection_stage_display",
             "belongs_to_applicant", "surety", "surety_display",
             "description", "owners", "expertise_value", "current_value",
             "is_insured", "insurance_reference",
@@ -189,7 +340,9 @@ class GuaranteeSerializer(serializers.ModelSerializer):
             "matrimonial_regime",
             # Hypothèque
             "document_type", "document_number", "document_issue_date",
+            "document_validity_date",
             "address", "expertise_date", "expertise_firm", "expert_name",
+            "expertise_reference",
             "value_to_consider",
             "ltv_ratio", "occupancy_status", "document_scan",
             "expertise_report_scan", "lease_contract_scan",
@@ -215,16 +368,20 @@ class GuaranteeSerializer(serializers.ModelSerializer):
             "jewelry_items", "renewed_from", "renewed_from_reference",
             "registration_number", "registration_date",
             "registration_authority", "formalized_at",
-            "open_formalization_id",
+            "open_formalization_id", "open_dation_id", "open_release_id",
+            "completed_dation_id", "origin_dation_id", "process_busy",
+            "accept_existing",
             "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "status", "status_display", "current_value", "ltv_ratio",
             "renewed_from", "renewed_from_reference", "surety_display",
             "client_display", "application_reference", "agency_name",
+            "collection_case_id", "collection_stage_display",
             "registration_number", "registration_date",
             "registration_authority", "formalized_at",
-            "open_formalization_id",
+            "open_formalization_id", "open_dation_id", "open_release_id",
+            "completed_dation_id", "origin_dation_id", "process_busy",
             "created_at", "updated_at",
         ]
 
@@ -243,26 +400,36 @@ class GuaranteeSerializer(serializers.ModelSerializer):
             return None
         return obj.application.reference or str(obj.application_id)
 
+    def get_collection_case_id(self, obj):
+        return _collection_link_for_application(obj.application)[0]
+
+    def get_collection_stage_display(self, obj):
+        return _collection_link_for_application(obj.application)[2]
+
     def get_agency_name(self, obj) -> str | None:
         if not obj.agency_id:
             return None
         return obj.agency.name
 
     def get_open_formalization_id(self, obj):
-        open_statuses = (
-            GuaranteeFormalizationRequest.Status.DRAFT,
-            GuaranteeFormalizationRequest.Status.IN_PROGRESS,
-            GuaranteeFormalizationRequest.Status.IN_APPROVAL,
-            GuaranteeFormalizationRequest.Status.RETURNED,
-            GuaranteeFormalizationRequest.Status.APPROVED,
-        )
-        req = (
-            obj.formalization_requests.filter(status__in=open_statuses)
-            .order_by("-created_at")
-            .only("id")
-            .first()
-        )
-        return str(req.id) if req else None
+        return _open_formalization_id(obj)
+
+    def get_open_dation_id(self, obj):
+        return _open_dation_id(obj)
+
+    def get_open_release_id(self, obj):
+        return _open_release_id(obj)
+
+    def get_completed_dation_id(self, obj):
+        return _completed_dation_id(obj)
+
+    def get_origin_dation_id(self, obj):
+        return _origin_dation_id(obj)
+
+    def get_process_busy(self, obj):
+        from .busy import guarantee_busy
+
+        return guarantee_busy(obj)
 
     def to_representation(self, instance):
         return presign_file_fields(
@@ -312,13 +479,98 @@ class GuaranteeSerializer(serializers.ModelSerializer):
                     "client demandeur."
                 ),
             })
+
+        client = attrs.get(
+            "client",
+            getattr(self.instance, "client", None) if self.instance else None,
+        )
+        application = attrs.get(
+            "application",
+            getattr(self.instance, "application", None) if self.instance else None,
+        )
+        if client and application and application.client_id != client.pk:
+            raise serializers.ValidationError({
+                "application": "Ce dossier n'appartient pas au client indiqué.",
+            })
+
+        def merged(name, default=None):
+            if name in attrs:
+                return attrs[name]
+            if self.instance is not None:
+                return getattr(self.instance, name, default)
+            return default
+
+        g_type = merged("guarantee_type")
+        pledge_cat = merged("pledge_category") or ""
+        errors = {}
+        is_create = self.instance is None
+        is_mortgage = g_type == Guarantee.GuaranteeType.MORTGAGE
+        is_vehicle = (
+            g_type == Guarantee.GuaranteeType.PLEDGE
+            and pledge_cat == PledgeCategory.VEHICLE
+        )
+
+        if is_mortgage or is_vehicle:
+            if not (merged("document_type") or "").strip():
+                errors["document_type"] = (
+                    "Indiquez le type de document pris en garantie."
+                )
+            if not (merged("document_number") or "").strip():
+                errors["document_number"] = "Indiquez le numéro du document."
+            if is_create and not merged("document_issue_date"):
+                errors["document_issue_date"] = (
+                    "Indiquez la date d'établissement du document."
+                )
+        if is_vehicle and not (merged("chassis_number") or "").strip():
+            errors["chassis_number"] = (
+                "Le numéro de châssis est obligatoire pour un gage véhicule."
+            )
+        if is_create and (is_mortgage or is_vehicle):
+            expertise_value = merged("expertise_value")
+            if expertise_value in (None, ""):
+                errors["expertise_value"] = "Indiquez la valeur d'expertise."
+            if not merged("expertise_date"):
+                errors["expertise_date"] = "Indiquez la date de l'expertise."
+            if not (
+                (merged("expert_name") or "").strip()
+                or (merged("expertise_firm") or "").strip()
+            ):
+                errors["expert_name"] = (
+                    "Indiquez l'expert ou le cabinet d'expertise."
+                )
+
+        accept_existing = attrs.pop("accept_existing", False)
+        if isinstance(accept_existing, str):
+            accept_existing = accept_existing.strip().lower() in (
+                "1", "true", "yes", "oui",
+            )
+
+        from .uniqueness import uniqueness_error
+
+        if not accept_existing:
+            conflict = uniqueness_error(
+                guarantee_type=g_type,
+                pledge_category=pledge_cat,
+                document_type=merged("document_type") or "",
+                document_number=merged("document_number") or "",
+                chassis_number=merged("chassis_number") or "",
+                exclude_id=getattr(self.instance, "pk", None),
+                tenant_id=getattr(self.instance, "tenant_id", None),
+            )
+            if conflict:
+                errors.update(conflict)
+        if errors:
+            raise serializers.ValidationError(errors)
         return attrs
 
     def _save_photos(self, guarantee):
         request = self.context.get("request")
         if not request:
             return
+        from apps.common.upload_validation import validate_uploaded_file
+
         for image in request.FILES.getlist("photos"):
+            validate_uploaded_file(image, tenant=guarantee.tenant, check_quota=True)
             GuaranteePhoto.objects.create(
                 guarantee=guarantee,
                 tenant_id=guarantee.tenant_id,
@@ -350,6 +602,8 @@ class GuaranteeSerializer(serializers.ModelSerializer):
                 titles = json.loads(titles or "[]")
             except json.JSONDecodeError:
                 titles = [titles] if titles.strip() else []
+        from apps.common.upload_validation import validate_uploaded_file
+
         files = request.FILES.getlist("documents")
         for idx, uploaded in enumerate(files):
             title = ""
@@ -357,6 +611,7 @@ class GuaranteeSerializer(serializers.ModelSerializer):
                 title = str(titles[idx] or "").strip()
             if not title:
                 title = getattr(uploaded, "name", None) or f"Document {idx + 1}"
+            validate_uploaded_file(uploaded, tenant=guarantee.tenant, check_quota=True)
             GuaranteeDocument.objects.create(
                 guarantee=guarantee,
                 tenant_id=guarantee.tenant_id,
@@ -652,6 +907,8 @@ class DationRequestSerializer(serializers.ModelSerializer):
         source="get_status_display", read_only=True
     )
     client_display = serializers.SerializerMethodField()
+    application_reference = serializers.SerializerMethodField()
+    collection_case_id = serializers.SerializerMethodField()
     assets = DationAssetSerializer(many=True, read_only=True)
     fees = DationFeeSerializer(many=True, read_only=True)
     assets_total_value = serializers.SerializerMethodField()
@@ -667,6 +924,8 @@ class DationRequestSerializer(serializers.ModelSerializer):
             "client",
             "client_display",
             "application",
+            "application_reference",
+            "collection_case_id",
             "agency",
             "cbs_client_id",
             "cbs_total_outstanding",
@@ -719,7 +978,26 @@ class DationRequestSerializer(serializers.ModelSerializer):
             "covers_claim",
             "coverage_gap",
             "settlement",
+            "application_reference",
+            "collection_case_id",
         ]
+
+    def get_application_reference(self, obj):
+        app = obj.application
+        if app is None:
+            return ""
+        return app.reference or str(app.id)
+
+    def get_collection_case_id(self, obj):
+        app = obj.application
+        if app is None:
+            return None
+        try:
+            loan = app.loan
+        except Exception:  # noqa: BLE001
+            return None
+        case = getattr(loan, "collection_case", None)
+        return str(case.id) if case is not None else None
 
     def get_client_display(self, obj):
         client = obj.client
@@ -895,6 +1173,11 @@ class GuaranteeFormalizationRequestSerializer(serializers.ModelSerializer):
             if obj.registration_proof
             else None
         )
+
+    def validate(self, attrs):
+        from apps.common.upload_validation import validate_attrs_uploads
+
+        return validate_attrs_uploads(attrs, self.context, check_quota=True)
 
     def to_representation(self, instance):
         return presign_file_fields(

@@ -6,7 +6,10 @@ import pytest
 from apps.catalog.models import CreditProduct
 from apps.clients.models import Client
 from apps.common.tenancy import tenant_context
-from apps.credits.analysis_validation import assert_analysis_ready_for_submission
+from apps.credits.analysis_validation import (
+    assert_analysis_ready_for_submission,
+    refresh_reference_analysis,
+)
 from apps.credits.models import CreditApplication, FinancialAnalysis
 from apps.guarantees.models import Guarantee
 from apps.workflow.services import WorkflowError
@@ -161,3 +164,57 @@ def test_conditional_requires_conditions_text(tenant_a, product_a, client_a):
         )
         with pytest.raises(WorkflowError, match="conditions"):
             assert_analysis_ready_for_submission(application)
+
+
+def test_groupement_uses_collective_capacity_and_live_client_type(
+    tenant_a, product_a,
+):
+    with tenant_context(tenant_a.id):
+        group = Client.objects.create(
+            tenant=tenant_a,
+            reference="CLI-G-CAP",
+            client_type=Client.ClientType.PROFESSIONAL,
+            company_name="GIE Capacite",
+            kyc_status=Client.KycStatus.VALIDATED,
+        )
+        application = _app(tenant_a, group, product_a, ref="D-GRP-CAP")
+        analysis = FinancialAnalysis.objects.create(
+            tenant=tenant_a,
+            application=application,
+            is_reference=True,
+            client_type="INDIVIDUAL",
+            salary_income=Decimal("200000"),
+            collective_contributions=Decimal("80000"),
+            collective_operating_expenses=Decimal("10000"),
+            existing_debt_monthly=Decimal("5000"),
+        )
+        analysis.refresh_from_db()
+        assert analysis.client_type == Client.ClientType.PROFESSIONAL
+        assert analysis.is_groupement
+        assert analysis.collective_capacity == Decimal("70000")
+        assert analysis.repayment_capacity == Decimal("65000")
+
+
+def test_refresh_reference_analysis_after_amount_change(
+    tenant_a, product_a, client_a
+):
+    with tenant_context(tenant_a.id):
+        application = _app(tenant_a, client_a, product_a, ref="D-C3")
+        analysis = FinancialAnalysis.objects.create(
+            tenant=tenant_a,
+            application=application,
+            is_reference=True,
+            recommendation=FinancialAnalysis.Recommendation.FAVORABLE,
+            salary_income=Decimal("300000"),
+            client_type="INDIVIDUAL",
+        )
+        before = analysis.new_installment
+        assert before is not None
+        application.amount_requested = Decimal("2000000")
+        application.amount_proposed = Decimal("2000000")
+        application.save(update_fields=["amount_requested", "amount_proposed", "updated_at"])
+        refreshed = refresh_reference_analysis(application)
+        assert refreshed is not None
+        assert refreshed.new_installment is not None
+        assert refreshed.new_installment != before
+        assert refreshed.new_installment > before

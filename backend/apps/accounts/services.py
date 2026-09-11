@@ -129,6 +129,7 @@ _VIEW_COLLECTIONS = (
     ("collections", "view_paymentpromise"),
     ("collections", "view_collectionstagehistory"),
     ("collections", "view_collectionescalationrule"),
+    ("collections", "view_collectiontranche"),
     ("collections", "view_litigationfile"),
     ("collections", "view_litigationevent"),
     ("collections", "view_legalparty"),
@@ -136,6 +137,22 @@ _VIEW_COLLECTIONS = (
     ("collections", "view_litigationcost"),
     ("collections", "view_loanrestructure"),
     ("collections", "view_writeoff"),
+    ("collections", "view_collectiondialoguemessage"),
+)
+
+# Écriture opérationnelle (le droit fin par tranche est appliqué dans collections.access).
+_WRITE_COLLECTION_OPERATE = (
+    ("collections", "add_repayment"),
+    ("collections", "change_repayment"),
+    ("collections", "change_collectioncase"),
+    ("collections", "add_collectionaction"),
+    ("collections", "change_collectionaction"),
+    ("collections", "add_paymentpromise"),
+    ("collections", "change_paymentpromise"),
+    ("collections", "add_loanrestructure"),
+    ("collections", "add_writeoff"),
+    ("guarantees", "initiate_dationrequest"),
+    ("sureties", "change_suretyengagement"),
 )
 
 _VIEW_TRANSVERSE = (
@@ -204,6 +221,7 @@ _WRITE_OPERATIONS = (
     ("sureties", "change_suretyengagement"),
     ("credits", "disburse_creditapplication"),
     ("credits", "initiate_disburse_creditapplication"),
+    ("collections", "change_loanrestructure"),
 )
 
 _WRITE_OPS_ASSISTANT = (
@@ -238,6 +256,9 @@ _WRITE_LEGAL = (
 _WRITE_LEGAL_ASSIST = (
     ("guarantees", "add_guarantee"),
     ("guarantees", "change_guarantee"),
+    # Pilotage quotidien : les actions formalisation / ML exigent initiate_*.
+    ("guarantees", "initiate_guaranteeformalizationrequest"),
+    ("guarantees", "initiate_guaranteereleaserequest"),
     ("sureties", "add_surety"),
     ("sureties", "change_surety"),
     ("sureties", "add_suretyengagement"),
@@ -283,9 +304,6 @@ _WRITE_COLLECTIONS_MGR = (
     ("collections", "add_paymentpromise"),
     ("collections", "change_paymentpromise"),
     ("collections", "delete_paymentpromise"),
-    ("collections", "add_collectionescalationrule"),
-    ("collections", "change_collectionescalationrule"),
-    ("collections", "delete_collectionescalationrule"),
     ("collections", "add_litigationfile"),
     ("collections", "change_litigationfile"),
     ("collections", "add_litigationevent"),
@@ -303,6 +321,7 @@ _WRITE_COLLECTIONS_MGR = (
     # Issue fréquente d'un dossier de recouvrement ; suivi possible par juridique / exploitation.
     ("guarantees", "initiate_dationrequest"),
     ("guarantees", "initiate_guaranteeformalizationrequest"),
+    ("sureties", "change_suretyengagement"),
 )
 
 _WRITE_COLLECTIONS_ASSIST = (
@@ -323,6 +342,7 @@ _WRITE_COLLECTIONS_ASSIST = (
     ("collections", "change_litigationcost"),
     ("guarantees", "initiate_dationrequest"),
     ("guarantees", "initiate_guaranteeformalizationrequest"),
+    ("sureties", "change_suretyengagement"),
 )
 
 _READ_METIER = (
@@ -346,8 +366,12 @@ _CHARGE_AFFAIRE_PERMS = (
     *_VIEW_DOCS,
     *_VIEW_CONTRACTS,
     *_VIEW_WORKFLOW,
+    *_VIEW_COLLECTIONS,
     *_VIEW_TRANSVERSE,
     *_WRITE_INSTRUCTION,
+    *_WRITE_COLLECTION_OPERATE,
+    # Formalisation : consultation seule. Main levée : introduction possible.
+    ("guarantees", "initiate_guaranteereleaserequest"),
 )
 
 _ANALYSTE_PERMS = (
@@ -358,22 +382,27 @@ _ANALYSTE_PERMS = (
     *_VIEW_DOCS,
     *_VIEW_CONTRACTS,
     *_VIEW_WORKFLOW,
+    *_VIEW_COLLECTIONS,
     *_VIEW_TRANSVERSE,
     *_WRITE_ANALYSIS,
 )
 
-# Chef d'agence : même instruction que le CA + vision recouvrement agence.
 _CHEF_AGENCE_PERMS = (
     *_CHARGE_AFFAIRE_PERMS,
-    *_VIEW_COLLECTIONS,
+    ("collections", "change_loanrestructure"),
+    ("collections", "change_writeoff"),
 )
 
 _RESP_CREDIT_PERMS = (
     *_READ_METIER,
     *_WRITE_ANALYSIS,
+    ("collections", "change_loanrestructure"),
 )
 
-_RESP_EXPLOITATION_PERMS = _READ_METIER
+_RESP_EXPLOITATION_PERMS = (
+    *_READ_METIER,
+    *_WRITE_COLLECTION_OPERATE,
+)
 
 _RESP_RETAILS_PERMS = (
     *_VIEW_CLIENTS,
@@ -397,6 +426,7 @@ _COMMITTEE_PERMS = (
     *_VIEW_DOCS,
     *_VIEW_CONTRACTS,
     *_VIEW_WORKFLOW,
+    *_VIEW_COLLECTIONS,
     *_VIEW_TRANSVERSE,
     *_WRITE_ANALYSIS,
 )
@@ -416,6 +446,7 @@ _RESP_OPERATIONS_PERMS = (
     *_WRITE_OPERATIONS,
 )
 
+# Dations / mains levées : consultation seule (initiate_* uniquement au responsable).
 _ASSISTANT_OPERATIONS_PERMS = (
     *_VIEW_CLIENTS,
     *_VIEW_CREDIT,
@@ -434,12 +465,14 @@ _RESP_JURIDIQUE_PERMS = (
     *_READ_METIER,
     *_WRITE_LEGAL,
     *_WRITE_LEGAL_CONTENTIEUX,
+    *_WRITE_COLLECTION_OPERATE,
 )
 
 _ASSISTANT_JURIDIQUE_PERMS = (
     *_READ_METIER,
     *_WRITE_LEGAL_ASSIST,
     *_WRITE_LEGAL_CONTENTIEUX_ASSIST,
+    *_WRITE_COLLECTION_OPERATE,
 )
 
 _RESP_RECOUVREMENT_PERMS = (
@@ -464,39 +497,23 @@ _ASSISTANT_RECOUVREMENT_PERMS = (
     *_WRITE_COLLECTIONS_ASSIST,
 )
 
-_RESP_CONTROLE_PERMS = _READ_METIER
+# Contrôle permanent : lecture métier complète + sortie terrain uniquement.
+_WRITE_CONTROLE_VISIT = (
+    ("credits", "add_fieldvisit"),
+)
+
+_RESP_CONTROLE_PERMS = (
+    *_READ_METIER,
+    *_WRITE_CONTROLE_VISIT,
+)
 _ASSISTANT_CONTROLE_PERMS = (
-    *_VIEW_CLIENTS,
-    *_VIEW_CREDIT,
-    *_VIEW_GUARANTEES,
-    *_VIEW_CONTRACTS,
-    *_VIEW_COLLECTIONS,
-    *_VIEW_WORKFLOW,
-    ("tenants", "view_agency"),
-    ("audit", "view_auditlog"),
+    *_READ_METIER,
+    *_WRITE_CONTROLE_VISIT,
 )
 
-_RESP_AUDIT_PERMS = (
-    *_VIEW_CLIENTS,
-    *_VIEW_CREDIT,
-    *_VIEW_GUARANTEES,
-    *_VIEW_CONTRACTS,
-    *_VIEW_COLLECTIONS,
-    *_VIEW_CBS,
-    *_VIEW_WORKFLOW,
-    ("tenants", "view_agency"),
-    ("audit", "view_auditlog"),
-    ("notifications", "view_notificationlog"),
-)
-
-_ASSISTANT_AUDIT_PERMS = (
-    *_VIEW_CLIENTS,
-    *_VIEW_CREDIT,
-    *_VIEW_GUARANTEES,
-    *_VIEW_CONTRACTS,
-    ("audit", "view_auditlog"),
-    ("tenants", "view_agency"),
-)
+# Audit : lecture métier complète, aucune écriture.
+_RESP_AUDIT_PERMS = _READ_METIER
+_ASSISTANT_AUDIT_PERMS = _READ_METIER
 
 # Consultation seule : lecture métier, aucune écriture / décision / admin.
 _LECTEUR_PERMS = (
@@ -509,6 +526,7 @@ _LECTEUR_PERMS = (
     *_VIEW_WORKFLOW,
     *_VIEW_COLLECTIONS,
     ("tenants", "view_agency"),
+    ("reporting", "view_dashboard"),
 )
 
 # Finance / comptabilité : encaissements, lecture prêts & clients.
@@ -529,9 +547,11 @@ _COMPTABLE_PERMS = (
     *_VIEW_CLIENTS,
     *_VIEW_CREDIT,
     *_VIEW_COLLECTIONS,
+    *_VIEW_GUARANTEES,
     *_VIEW_DOCS,
     *_VIEW_CONTRACTS,
     ("tenants", "view_agency"),
+    ("reporting", "view_dashboard"),
     *_WRITE_COMPTA,
 )
 
@@ -547,11 +567,12 @@ _CHEF_COMPTABLE_PERMS = (
     *_WRITE_COMPTA_CHEF,
 )
 
-# RAF / DAF : vision transverse + pilotage encaissements / recouvrement financier.
+# RAF / DAF : consultation recouvrement + dialogue (pas d'écriture opérationnelle).
 _RESP_ADMIN_FINANCIER_PERMS = (
     *_READ_METIER,
-    *_WRITE_COLLECTIONS_MGR,
     ("audit", "view_auditlog"),
+    ("collections", "change_loanrestructure"),
+    ("collections", "change_writeoff"),
 )
 
 # Packs appliqués aux rôles métier bootstrap (hors admin filiale).
@@ -714,9 +735,17 @@ def ensure_filiale_admin_role(tenant):
 
 
 def ensure_role_pack(tenant, role_name, spec):
-    """Crée le rôle filiale si besoin et synchronise son pack de permissions."""
+    """Crée le rôle filiale si besoin et ajoute les permissions du pack.
+
+    Les droits ajoutés manuellement (hors pack) sont conservés : on n'écrase
+    pas le jeu avec ``set()``.
+    """
     group, _ = get_or_create_tenant_role(tenant, role_name)
-    group.permissions.set(permissions_from_spec(spec))
+    desired = permissions_from_spec(spec)
+    current = set(group.permissions.all())
+    missing = [perm for perm in desired if perm not in current]
+    if missing:
+        group.permissions.add(*missing)
     return group
 
 
@@ -754,10 +783,12 @@ def ensure_default_role_packs(tenant):
     retire_legacy_bootstrap_roles(tenant)
     from apps.collections.services import (
         ensure_default_escalation_rules,
+        ensure_default_tranches,
         ensure_litigation_document_categories,
     )
 
     ensure_default_escalation_rules(tenant)
+    ensure_default_tranches(tenant)
     ensure_litigation_document_categories(tenant)
 
 

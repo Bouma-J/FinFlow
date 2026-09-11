@@ -18,6 +18,7 @@ import {
   Spinner,
   TenantScopeNotice,
 } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -93,17 +94,7 @@ export function AdminDelegationsPage() {
       qc.invalidateQueries({ queryKey: ["admin-delegations"] });
     },
     onError: (err: unknown) => {
-      const data = (err as { response?: { data?: unknown } })?.response?.data;
-      setError(
-        typeof data === "string"
-          ? data
-          : data && typeof data === "object"
-            ? Object.values(data as Record<string, unknown>)
-                .flat()
-                .map(String)
-                .join(" · ")
-            : "Création impossible.",
-      );
+      setError(apiErrorMessage(err, "Création impossible."));
     },
   });
 

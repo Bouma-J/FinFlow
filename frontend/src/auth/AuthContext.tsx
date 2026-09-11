@@ -36,7 +36,7 @@ interface AuthContextValue {
     username: string,
     password: string,
     otp?: string,
-  ) => Promise<{ mustChangePassword: boolean }>;
+  ) => Promise<{ mustChangePassword: boolean; user: CurrentUser | null }>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   markPasswordChanged: () => void;
@@ -78,6 +78,18 @@ function raiseAuthError(err: unknown): never {
       }
     }
     if (code === "mfa_invalid") throw new MfaInvalidError();
+    const status = err.response?.status;
+    if (status && status >= 500) {
+      throw new Error(
+        "Le serveur d'authentification a échoué. Réessayez dans un instant.",
+      );
+    }
+    if (status === 429) {
+      throw new Error("Trop de tentatives. Patientez une minute puis réessayez.");
+    }
+    if (status === 401) {
+      throw new Error("Identifiants invalides.");
+    }
   }
   throw err instanceof Error ? err : new Error("Identifiants invalides.");
 }
@@ -155,6 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           mustChangePassword: Boolean(
             data.must_change_password ?? profile?.must_change_password,
           ),
+          user: profile,
         };
       } catch (err) {
         return raiseAuthError(err);

@@ -34,8 +34,25 @@ import type {
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
+import {
+  PERM_CLIENTS,
+  PERM_CREDITS,
+  PERM_GUARANTEES,
+} from "@/auth/routePerms";
 import { ClientAutocomplete } from "@/components/ClientAutocomplete";
+import { PermLink } from "@/components/PermLink";
 import { DecisionPanel } from "@/components/DecisionPanel";
+import {
+  AgencyFilter,
+  ClientFilterBanner,
+  FilterField,
+  FilterSelect,
+  ListFilters,
+  PROCESS_STATUS_OPTIONS,
+  SearchInput,
+  countActive,
+  useClientSearchParam,
+} from "@/components/ListFilters";
 import {
   Badge,
   Card,
@@ -124,20 +141,50 @@ function errMsg(err: unknown, fallback: string) {
 }
 
 export function FormalizationsPage() {
-  const { user } = useAuth();
+  const { user, activeTenant } = useAuth();
+  const { clientFilter, clearClientFilter } = useClientSearchParam();
   const canInitiate = hasPerm(
     user,
     "guarantees.initiate_guaranteeformalizationrequest",
   );
   const [page, setPage] = useState(1);
+  const [search, setSearch] = useState("");
+  const [status, setStatus] = useState("");
+  const [legalStage, setLegalStage] = useState("");
+  const [agency, setAgency] = useState("");
+
+  function setFilter<T>(setter: (v: T) => void) {
+    return (value: T) => {
+      setter(value);
+      setPage(1);
+    };
+  }
 
   const list = useQuery({
-    queryKey: ["guarantee-formalizations", page],
+    queryKey: [
+      "guarantee-formalizations",
+      activeTenant,
+      page,
+      search,
+      status,
+      legalStage,
+      agency,
+      clientFilter,
+    ],
     queryFn: async () =>
       (
         await api.get<Paginated<GuaranteeFormalizationRequest>>(
           "/guarantee-formalizations/",
-          { params: { page } },
+          {
+            params: {
+              page,
+              ...(search.trim() ? { search: search.trim() } : {}),
+              ...(status ? { status } : {}),
+              ...(legalStage ? { legal_stage: legalStage } : {}),
+              ...(agency ? { agency } : {}),
+              ...(clientFilter ? { client: clientFilter } : {}),
+            },
+          },
         )
       ).data,
   });
@@ -163,11 +210,60 @@ export function FormalizationsPage() {
         décaissement.
       </div>
 
+      <ListFilters
+        search={
+          <SearchInput
+            value={search}
+            onChange={setFilter(setSearch)}
+            placeholder="Réf., notaire, n° enregistrement, client…"
+          />
+        }
+        activeCount={countActive(search, status, legalStage, agency, clientFilter)}
+        onReset={() => {
+          setSearch("");
+          setStatus("");
+          setLegalStage("");
+          setAgency("");
+          setPage(1);
+          if (clientFilter) clearClientFilter();
+        }}
+      >
+        <FilterField label="Statut" active={!!status}>
+          <FilterSelect value={status} onChange={setFilter(setStatus)}>
+            {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
+              <option key={value || "all"} value={value}>
+                {label}
+              </option>
+            ))}
+          </FilterSelect>
+        </FilterField>
+        <FilterField label="Stade juridique" active={!!legalStage}>
+          <FilterSelect value={legalStage} onChange={setFilter(setLegalStage)}>
+            <option value="">Tous stades juridiques</option>
+            <option value="NOT_SENT">Non soumis chez le notaire</option>
+            <option value="AT_NOTARY">Chez le notaire</option>
+            <option value="AWAITING_SIGNATURE">En attente de signature</option>
+            <option value="SIGNED">Acte signé</option>
+            <option value="PENDING_REGISTRATION">Enregistrement en cours</option>
+            <option value="REGISTERED">Enregistré</option>
+            <option value="DONE">Formalisation terminée</option>
+          </FilterSelect>
+        </FilterField>
+        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+      </ListFilters>
+      <ClientFilterBanner
+        clientId={clientFilter}
+        onClear={() => {
+          clearClientFilter();
+          setPage(1);
+        }}
+      />
+
       <QueryStatus
         isLoading={list.isLoading}
         isError={list.isError}
         isEmpty={!list.data?.results.length}
-        emptyMessage="Aucune formalisation de garantie."
+        emptyMessage="Aucune formalisation ne correspond à ces critères."
         onRetry={() => list.refetch()}
       >
         <>
@@ -188,7 +284,15 @@ export function FormalizationsPage() {
                   <td>
                     <code>{r.reference || "—"}</code>
                   </td>
-                  <td>{r.guarantee_reference || r.guarantee.slice(0, 8)}</td>
+                  <td>
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_GUARANTEES}
+                      to={`/garanties/${r.guarantee}`}
+                    >
+                      {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                    </PermLink>
+                  </td>
                   <td>{r.client_display}</td>
                   <td>
                     <Badge
@@ -645,7 +749,9 @@ export function FormalizationNewPage() {
                   ) : (
                     <div className="dation-guarantee-list" role="list">
                       {visibleGuarantees.map((g) => {
-                        const busy = Boolean(g.formalization_busy);
+                        const busy = Boolean(
+                          g.process_busy || g.formalization_busy,
+                        );
                         const checked = guaranteeId === g.id;
                         return (
                           <label
@@ -683,7 +789,8 @@ export function FormalizationNewPage() {
                               )}
                               {busy && (
                                 <span className="muted small">
-                                  Formalisation déjà ouverte
+                                  {g.process_busy?.label ||
+                                    "Formalisation déjà ouverte"}
                                 </span>
                               )}
                             </span>
@@ -1066,7 +1173,7 @@ export function FormalizationDetailPage() {
     ["DRAFT", "IN_PROGRESS", "RETURNED"].includes(r.status);
   const canComplete =
     canInitiate &&
-    !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) &&
+    r.status === "APPROVED" &&
     COMPLETABLE_STAGES.includes(r.legal_stage);
   const canUploadDocs =
     canInitiate &&
@@ -1257,16 +1364,26 @@ export function FormalizationDetailPage() {
               <div>
                 <dt>Garantie</dt>
                 <dd>
-                  <Link to={`/garanties/${r.guarantee}`}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_GUARANTEES}
+                    to={`/garanties/${r.guarantee}`}
+                  >
                     {r.guarantee_reference || r.guarantee.slice(0, 8)}
-                  </Link>
+                  </PermLink>
                 </dd>
               </div>
               <div>
                 <dt>Client</dt>
                 <dd>
                   {r.client ? (
-                    <Link to={`/clients/${r.client}`}>{r.client_display}</Link>
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_CLIENTS}
+                      to={`/clients/${r.client}`}
+                    >
+                      {r.client_display}
+                    </PermLink>
                   ) : (
                     r.client_display || "—"
                   )}
@@ -1276,9 +1393,13 @@ export function FormalizationDetailPage() {
                 <dt>Dossier crédit</dt>
                 <dd>
                   {r.application ? (
-                    <Link to={`/dossiers/${r.application}`}>
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_CREDITS}
+                      to={`/dossiers/${r.application}`}
+                    >
                       {r.application_reference || r.application.slice(0, 8)}
-                    </Link>
+                    </PermLink>
                   ) : (
                     "—"
                   )}

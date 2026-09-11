@@ -28,6 +28,7 @@ from dateutil.relativedelta import relativedelta
 from apps.clients.models import Client
 from apps.collections.models import CollectionCase
 from apps.common.access import apply_data_scope, apply_related_data_scope
+from apps.common.list_filters import apply_or_lookups
 from apps.contracts.models import GeneratedContract
 from apps.corebanking.models import IntegrationLog
 from apps.credits.models import CreditApplication, Installment, Loan
@@ -90,6 +91,11 @@ def _apply_filters(qs, params):
         value = _param(params, key)
         if value:
             qs = qs.filter(**{field: value})
+    gestionnaire = _param(params, "gestionnaire")
+    if gestionnaire:
+        qs = apply_or_lookups(
+            qs, gestionnaire, "created_by_id", "submitted_by_id"
+        )
     date_from = _param(params, "date_from")
     date_to = _param(params, "date_to")
     if date_from:
@@ -220,6 +226,13 @@ def monthly_trend(application_qs):
     return series
 
 
+def _user_display(user):
+    if not user:
+        return "—"
+    name = (user.get_full_name() or "").strip()
+    return name or user.get_username()
+
+
 def recent_applications(application_qs):
     """Derniers dossiers créés (fil d'activité)."""
     rows = application_qs.select_related(
@@ -235,8 +248,12 @@ def recent_applications(application_qs):
             "amount": app.amount_requested,
             "status": app.status,
             "created_at": app.created_at,
-            "owner": str(app.created_by) if app.created_by_id else "—",
-            "agency": app.agency.name if app.agency_id else "—",
+            "owner": _user_display(app.created_by),
+            "agency": (
+                f"{app.agency.code} — {app.agency.name}"
+                if app.agency_id
+                else "—"
+            ),
         })
     return result
 
@@ -469,6 +486,7 @@ def build_dashboard(tenant_id=None, params=None, user=None):
                 "date_from",
                 "date_to",
                 "agency",
+                "gestionnaire",
                 "owner",
                 "created_by",
                 "status",
@@ -644,9 +662,12 @@ def build_after_sales_hub(*, tenant_id=None, user=None) -> dict:
         )
 
     if access["collection"]:
-        cases = _scope(CollectionCase.all_tenants.all()).exclude(
-            stage=CollectionCase.Stage.CLOSED
-        )
+        cases = _scope(CollectionCase.all_tenants.all())
+        if user is not None and getattr(user, "is_authenticated", False) is True:
+            from apps.collections.access import scoped_collection_cases
+
+            cases = scoped_collection_cases(cases, user)
+        cases = cases.exclude(stage=CollectionCase.Stage.CLOSED)
         followups = cases.filter(
             next_action_date__isnull=False,
             next_action_date__lte=today,

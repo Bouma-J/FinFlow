@@ -64,6 +64,32 @@ def can_contribute(application, user):
     return has_pending_task(application, user)
 
 
+def is_controle_permanent(user):
+    """Responsable / assistant contrôle interne (lecture + sortie terrain)."""
+    from apps.accounts.models import TenantRole
+    from apps.accounts.services import (
+        ASSISTANT_CONTROLE_INTERNE_ROLE_NAME,
+        RESP_CONTROLE_INTERNE_ROLE_NAME,
+    )
+
+    if not user or not user.is_authenticated:
+        return False
+    return TenantRole.objects.filter(
+        group__in=user.groups.all(),
+        name__in=(
+            RESP_CONTROLE_INTERNE_ROLE_NAME,
+            ASSISTANT_CONTROLE_INTERNE_ROLE_NAME,
+        ),
+    ).exists()
+
+
+def can_add_field_visit(application, user):
+    """Visite terrain : contributeur habituel, ou contrôle permanent."""
+    if can_contribute(application, user):
+        return True
+    return is_controle_permanent(user)
+
+
 def can_mutate_contribution(application, user):
     """Droit de modifier / supprimer une contribution (fenêtre encore ouverte)."""
     return can_contribute(application, user)

@@ -23,11 +23,15 @@ User = get_user_model()
 
 
 class ThrottledTokenObtainPairView(TokenObtainPairView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [LoginRateThrottle]
     serializer_class = FinFlowTokenObtainPairSerializer
 
 
 class ThrottledTokenRefreshView(TokenRefreshView):
+    permission_classes = [AllowAny]
+    authentication_classes = []
     throttle_classes = [LoginRateThrottle]
 
 

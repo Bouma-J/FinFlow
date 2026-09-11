@@ -8,6 +8,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from apps.audit.models import AuditLog
+from apps.common.list_filters import apply_gestionnaire, query_param
 from apps.common.permissions import HasModelPermission, MustChangePasswordGate
 from apps.common.scoped import get_for_tenant
 from apps.common.tenancy import get_current_tenant_id
@@ -53,10 +54,10 @@ from .services import (
 
 class CreditApplicationViewSet(AgencyScopedViewSet):
     queryset = CreditApplication.objects.select_related(
-        "client", "product", "agency"
+        "client", "product", "agency", "loan", "loan__collection_case"
     ).all()
     serializer_class = CreditApplicationSerializer
-    permission_classes = [IsAuthenticated, HasModelPermission]
+    permission_classes = [IsAuthenticated, MustChangePasswordGate, HasModelPermission]
     enforce_model_permissions = True
     action_perms = {
         "submit": ["credits.change_creditapplication"],
@@ -87,6 +88,7 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        qs = apply_gestionnaire(qs, self.request, "created_by_id", "submitted_by_id")
         if self.action == "list":
             return qs.select_related(
                 "client", "product", "agency", "created_by", "submitted_by"
@@ -183,6 +185,12 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
             application, request.user, "modifier ce dossier"
         )
         return super().partial_update(request, *args, **kwargs)
+
+    def perform_update(self, serializer):
+        super().perform_update(serializer)
+        from .analysis_validation import refresh_reference_analysis
+
+        refresh_reference_analysis(serializer.instance)
 
     @action(detail=True, methods=["post"])
     def submit(self, request, pk=None):
@@ -440,7 +448,7 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
 class CreditDocumentViewSet(TenantScopedViewSet):
     queryset = CreditDocument.objects.select_related("application").all()
     serializer_class = CreditDocumentSerializer
-    permission_classes = [IsAuthenticated, HasModelPermission]
+    permission_classes = [IsAuthenticated, MustChangePasswordGate, HasModelPermission]
     enforce_model_permissions = True
     filterset_fields = ["application"]
 
@@ -454,6 +462,27 @@ class CreditDocumentViewSet(TenantScopedViewSet):
         return qs
 
     def perform_create(self, serializer):
+        from rest_framework.exceptions import PermissionDenied, ValidationError
+
+        from apps.common.access import apply_related_data_scope
+
+        from .access import can_contribute
+        from .models import CreditApplication
+
+        application = serializer.validated_data.get("application")
+        if application is None:
+            raise ValidationError({"application": "Obligatoire."})
+        scoped = apply_related_data_scope(
+            CreditApplication.objects.filter(pk=application.pk),
+            self.request.user,
+            "agency",
+        )
+        if not scoped.exists():
+            raise PermissionDenied("Dossier hors de votre périmètre.")
+        if not can_contribute(application, self.request.user):
+            raise PermissionDenied(
+                "Ce dossier n'accepte plus de pièces (hors fenêtre de contribution)."
+            )
         instance = serializer.save()
         from apps.documents.ged_bridge import mirror_credit_document_to_ged
 
@@ -468,6 +497,14 @@ class CreditDocumentViewSet(TenantScopedViewSet):
             )
 
     def perform_destroy(self, instance):
+        from rest_framework.exceptions import PermissionDenied
+
+        from .access import can_contribute
+
+        if not can_contribute(instance.application, self.request.user):
+            raise PermissionDenied(
+                "Ce dossier n'accepte plus de suppression de pièces."
+            )
         from apps.documents.ged_bridge import unmirror_credit_document_from_ged
 
         try:
@@ -494,6 +531,18 @@ class CreditDocumentViewSet(TenantScopedViewSet):
                     "Échec suppression CreditDocument key=%s", file_name
                 )
 
+    def perform_update(self, serializer):
+        from rest_framework.exceptions import PermissionDenied
+
+        from .access import can_contribute
+
+        instance = serializer.instance
+        if not can_contribute(instance.application, self.request.user):
+            raise PermissionDenied(
+                "Ce dossier n'accepte plus de modification de pièces."
+            )
+        super().perform_update(serializer)
+
 
 class FinancialAnalysisViewSet(TenantScopedViewSet):
     queryset = (
@@ -504,7 +553,7 @@ class FinancialAnalysisViewSet(TenantScopedViewSet):
         .all()
     )
     serializer_class = FinancialAnalysisSerializer
-    permission_classes = [IsAuthenticated, HasModelPermission]
+    permission_classes = [IsAuthenticated, MustChangePasswordGate, HasModelPermission]
     enforce_model_permissions = True
     filterset_fields = ["application", "client_type", "recommendation"]
 
@@ -694,7 +743,7 @@ class CreditInstructionPolicyViewSet(TenantContextMixin, viewsets.ViewSet):
 class FieldVisitViewSet(TenantScopedViewSet):
     queryset = FieldVisit.objects.select_related("application", "visited_by").all()
     serializer_class = FieldVisitSerializer
-    permission_classes = [IsAuthenticated, HasModelPermission]
+    permission_classes = [IsAuthenticated, MustChangePasswordGate, HasModelPermission]
     enforce_model_permissions = True
     filterset_fields = ["application", "visited_by"]
 
@@ -708,10 +757,10 @@ class FieldVisitViewSet(TenantScopedViewSet):
         return qs
 
     def perform_create(self, serializer):
-        from .access import can_contribute
+        from .access import can_add_field_visit
 
         application = serializer.validated_data.get("application")
-        if application is not None and not can_contribute(
+        if application is not None and not can_add_field_visit(
             application, self.request.user
         ):
             raise PermissionDenied(
@@ -747,15 +796,20 @@ class FieldVisitViewSet(TenantScopedViewSet):
 
 class LoanViewSet(TenantScopedReadOnlyViewSet):
     queryset = Loan.objects.select_related(
-        "application", "application__client"
+        "application", "application__client", "collection_case"
     ).prefetch_related("installments").all()
     serializer_class = LoanSerializer
+    action_perms = {
+        "preview_restructure": ["collections.add_loanrestructure"],
+        "restructure": ["collections.add_loanrestructure"],
+    }
     filterset_fields = ["status", "application"]
     search_fields = [
         "application__reference",
         "core_banking_reference",
         "cbs_contract_number",
         "application__client__last_name",
+        "application__client__first_name",
         "application__client__company_name",
     ]
     ordering_fields = ["disbursed_at", "principal", "status", "created_at"]
@@ -769,9 +823,89 @@ class LoanViewSet(TenantScopedReadOnlyViewSet):
         return LoanSerializer
 
     def get_queryset(self):
+        from apps.common.access import apply_related_data_scope
+
         qs = super().get_queryset()
+        user = self.request.user
+        if user and user.is_authenticated:
+            qs = apply_related_data_scope(qs, user, "application__agency")
+        qs = apply_gestionnaire(
+            qs,
+            self.request,
+            "application__created_by_id",
+            "application__submitted_by_id",
+        )
+        product = query_param(self.request, "product")
+        if product:
+            qs = qs.filter(application__product_id=product)
+        agency = query_param(self.request, "agency")
+        if agency:
+            qs = qs.filter(application__agency_id=agency)
+        after = query_param(self.request, "disbursed_after")
+        if after:
+            qs = qs.filter(disbursed_at__gte=after)
+        before = query_param(self.request, "disbursed_before")
+        if before:
+            qs = qs.filter(disbursed_at__lte=before)
         if self.action == "list":
             return qs.select_related(
                 "application", "application__client"
             ).prefetch_related(None)
-        return qs
+        return qs.prefetch_related(
+            "installments",
+            "restructures",
+            "restructures__requested_by",
+            "restructures__applied_by",
+            "write_offs",
+            "write_offs__requested_by",
+            "write_offs__approved_by",
+            "application__dation_requests",
+        )
+
+    @action(detail=True, methods=["post"], url_path="preview-restructure")
+    def preview_restructure(self, request, pk=None):
+        from apps.collections.serializers import CaseRestructureSerializer
+        from apps.collections.services import build_restructure_preview
+
+        loan = self.get_object()
+        from apps.collections.dation_bridge import require_loan_financial_ops
+
+        require_loan_financial_ops(loan, user=request.user)
+        serializer = CaseRestructureSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        data.pop("request_kind", None)
+        data.pop("reason", None)
+        try:
+            preview = build_restructure_preview(loan, **data)
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        return Response(preview)
+
+    @action(detail=True, methods=["post"], url_path="restructure")
+    def restructure(self, request, pk=None):
+        from apps.collections.dation_bridge import require_loan_financial_ops
+        from apps.collections.models import LoanRestructure
+        from apps.collections.serializers import CaseRestructureSerializer
+        from apps.collections.services import propose_restructure
+
+        loan = self.get_object()
+        require_loan_financial_ops(loan, user=request.user)
+        serializer = CaseRestructureSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        request_kind = data.pop(
+            "request_kind", LoanRestructure.RequestKind.CLIENT
+        )
+        try:
+            propose_restructure(
+                loan,
+                user=request.user,
+                origin=LoanRestructure.Origin.LOAN,
+                request_kind=request_kind,
+                **data,
+            )
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        loan.refresh_from_db()
+        return Response(LoanSerializer(loan, context={"request": request}).data)

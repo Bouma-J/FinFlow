@@ -284,6 +284,8 @@ class SuretySerializer(serializers.ModelSerializer):
                 titles = json.loads(titles or "[]")
             except json.JSONDecodeError:
                 titles = [titles] if titles.strip() else []
+        from apps.common.upload_validation import validate_uploaded_file
+
         files = request.FILES.getlist("documents")
         for idx, uploaded in enumerate(files):
             title = ""
@@ -291,6 +293,7 @@ class SuretySerializer(serializers.ModelSerializer):
                 title = str(titles[idx] or "").strip()
             if not title:
                 title = getattr(uploaded, "name", None) or f"Document {idx + 1}"
+            validate_uploaded_file(uploaded, tenant=surety.tenant, check_quota=True)
             SuretyDocument.objects.create(
                 surety=surety,
                 tenant_id=surety.tenant_id,

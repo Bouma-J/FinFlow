@@ -164,3 +164,76 @@ def test_policy_endpoint_exposes_surety_flag(tenant_a):
     )
     assert res.status_code == 200
     assert res.json()["require_surety_signed_contracts"] is True
+
+
+def test_assert_surety_generation_requires_engagement(tenant_a):
+    from apps.contracts.models import ContractCategory, ContractTemplate
+    from apps.contracts.services import assert_surety_generation
+    from rest_framework.exceptions import ValidationError
+
+    with tenant_context(tenant_a.id):
+        template = ContractTemplate(
+            tenant=tenant_a,
+            name="Cautionnement",
+            category=ContractCategory.SURETY,
+        )
+        template.file.save("caution.docx", ContentFile(b"PK fake docx"), save=False)
+        template.save()
+        with pytest.raises(ValidationError) as exc:
+            assert_surety_generation(template, None)
+        assert "surety_engagement" in exc.value.detail
+
+
+def test_generate_surety_without_engagement_is_400(
+    tenant_a, client_a, product_a,
+):
+    from apps.accounts.models import User
+    from apps.contracts.models import ContractCategory, ContractTemplate
+    from rest_framework.test import APIClient
+
+    with tenant_context(tenant_a.id):
+        app = _app(tenant_a, client_a, product_a, ref="CR-SURETY-GEN")
+        template = ContractTemplate(
+            tenant=tenant_a,
+            name="Cautionnement dossier",
+            category=ContractCategory.SURETY,
+        )
+        template.file.save("caution.docx", ContentFile(b"PK fake docx"), save=False)
+        template.save()
+
+    admin = User.objects.create_user(
+        username="surety_gen_admin",
+        password="FinFlow2026!",
+        is_staff=True,
+        is_superuser=True,
+        is_group_level=True,
+    )
+    api = APIClient()
+    api.force_authenticate(admin)
+    api.credentials(HTTP_X_TENANT_ID=str(tenant_a.id))
+    res = api.post(
+        "/api/v1/generated-contracts/generate/",
+        {"application": str(app.id), "template": str(template.id)},
+        format="json",
+    )
+    assert res.status_code == 400
+    errors = res.json().get("errors", res.json())
+    assert "surety_engagement" in errors
+
+
+def test_required_templates_exclude_surety(tenant_a, client_a, product_a):
+    from apps.contracts.models import ContractCategory, ContractTemplate
+    from apps.contracts.services import required_templates_for
+
+    with tenant_context(tenant_a.id):
+        app = _app(tenant_a, client_a, product_a, ref="CR-SURETY-REQ")
+        template = ContractTemplate(
+            tenant=tenant_a,
+            name="Caution obligatoire",
+            category=ContractCategory.SURETY,
+            is_required=True,
+            is_active=True,
+        )
+        template.file.save("caution.docx", ContentFile(b"PK fake docx"), save=False)
+        template.save()
+        assert required_templates_for(app) == []

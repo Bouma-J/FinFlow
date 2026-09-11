@@ -6,6 +6,7 @@ import {
   Cable,
   Calculator,
   ChevronDown,
+  CircleDollarSign,
   ClipboardCheck,
   ArrowLeftRight,
   Bell,
@@ -29,17 +30,21 @@ import {
   Scale,
   ScrollText,
   ShieldCheck,
+  ShieldOff,
+  Stamp,
   SlidersHorizontal,
+  Timer,
+  Unlock,
   UserRound,
   UsersRound,
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
-import type { Paginated, Tenant } from "@/api/types";
+import type { CurrentUser, Paginated, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasAnyPerm } from "@/auth/permissions";
 import {
@@ -56,19 +61,22 @@ import {
   PERM_ADMIN_REFERENTIALS,
   PERM_ADMIN_ROLES,
   PERM_ADMIN_USERS,
-  PERM_AFTER_SALES,
+  isFinflowAdmin,
   PERM_CLIENTS,
+  PERM_COLLECTIONS,
   PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_FORMALIZATIONS,
   PERM_DASHBOARD,
   PERM_DOCUMENTS,
   PERM_GUARANTEES,
-  PERM_LEGAL_PARTIES,
+  PERM_LEGAL_PARTIES_MANAGE,
   PERM_PRODUCTS,
+  PERM_RELEASES,
   PERM_SIMULATOR,
   PERM_SURETIES,
   PERM_TASKS,
 } from "@/auth/routePerms";
-import { isAdmin } from "@/components/AdminRoute";
 import { useTenantBranding } from "@/hooks/useTenantBranding";
 
 interface NavItem {
@@ -79,6 +87,17 @@ interface NavItem {
   anyOf?: readonly string[];
   /** Réservé aux comptes niveau Groupe. */
   groupOnly?: boolean;
+  /** Administrateur filiale ou groupe. */
+  finflowAdmin?: boolean;
+  /** Cible alternative selon les droits (ex. catalogue vs paramétrage). */
+  resolveTo?: (user: CurrentUser | null) => string;
+}
+
+interface AdminGroup {
+  id: string;
+  label: string;
+  icon: LucideIcon;
+  items: NavItem[];
 }
 
 const NAV_ITEMS: NavItem[] = [
@@ -101,6 +120,12 @@ const NAV_ITEMS: NavItem[] = [
     anyOf: PERM_CREDITS,
   },
   {
+    to: "/recouvrement",
+    label: "Recouvrement",
+    icon: CircleDollarSign,
+    anyOf: PERM_COLLECTIONS,
+  },
+  {
     to: "/taches",
     label: "Mes validations",
     icon: ClipboardCheck,
@@ -113,7 +138,6 @@ const NAV_ITEMS: NavItem[] = [
     icon: HandCoins,
     anyOf: PERM_SURETIES,
   },
-  { to: "/produits", label: "Produits", icon: Boxes, anyOf: PERM_PRODUCTS },
   {
     to: "/garanties",
     label: "Garanties",
@@ -121,10 +145,22 @@ const NAV_ITEMS: NavItem[] = [
     anyOf: PERM_GUARANTEES,
   },
   {
-    to: "/apres-vente",
-    label: "Après-vente",
-    icon: Layers,
-    anyOf: PERM_AFTER_SALES,
+    to: "/formalisations",
+    label: "Formalisations",
+    icon: Stamp,
+    anyOf: PERM_FORMALIZATIONS,
+  },
+  {
+    to: "/dations",
+    label: "Dations",
+    icon: Unlock,
+    anyOf: PERM_DATIONS,
+  },
+  {
+    to: "/mains-levees",
+    label: "Mains levées",
+    icon: ShieldOff,
+    anyOf: PERM_RELEASES,
   },
   {
     to: "/documents",
@@ -140,100 +176,177 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-const ADMIN_ITEMS: NavItem[] = [
-  { to: "/admin/filiales", label: "Filiales", icon: Building2 },
+const ADMIN_GROUPS: AdminGroup[] = [
   {
-    to: "/admin/consolidation",
-    label: "Consolidation Groupe",
-    icon: Layers,
-    groupOnly: true,
-    anyOf: PERM_DASHBOARD,
+    id: "org",
+    label: "Organisation",
+    icon: Building2,
+    items: [
+      { to: "/admin/filiales", label: "Filiales", icon: Building2 },
+      {
+        to: "/admin/consolidation",
+        label: "Consolidation Groupe",
+        icon: Layers,
+        groupOnly: true,
+        anyOf: PERM_DASHBOARD,
+      },
+      {
+        to: "/admin/agences",
+        label: "Agences",
+        icon: MapPin,
+        anyOf: PERM_ADMIN_AGENCIES,
+      },
+    ],
   },
   {
-    to: "/admin/agences",
-    label: "Agences",
-    icon: MapPin,
-    anyOf: PERM_ADMIN_AGENCIES,
-  },
-  {
-    to: "/admin/utilisateurs",
-    label: "Utilisateurs",
-    icon: UsersRound,
-    anyOf: PERM_ADMIN_USERS,
-  },
-  {
-    to: "/admin/roles",
-    label: "Rôles & droits",
+    id: "access",
+    label: "Accès",
     icon: KeyRound,
-    anyOf: PERM_ADMIN_ROLES,
+    items: [
+      {
+        to: "/admin/utilisateurs",
+        label: "Utilisateurs",
+        icon: UsersRound,
+        anyOf: PERM_ADMIN_USERS,
+      },
+      {
+        to: "/admin/roles",
+        label: "Rôles & droits",
+        icon: KeyRound,
+        anyOf: PERM_ADMIN_ROLES,
+      },
+      {
+        to: "/admin/delegations",
+        label: "Délégations",
+        icon: ArrowLeftRight,
+        anyOf: PERM_ADMIN_DELEGATIONS,
+      },
+    ],
   },
   {
-    to: "/admin/produits",
-    label: "Produits",
+    id: "catalog",
+    label: "Catalogue",
     icon: Package,
-    anyOf: PERM_ADMIN_PRODUCTS,
+    items: [
+      {
+        to: "/produits",
+        label: "Produits",
+        icon: Boxes,
+        anyOf: [...PERM_PRODUCTS, ...PERM_ADMIN_PRODUCTS],
+        resolveTo: (user) =>
+          hasAnyPerm(user, PERM_ADMIN_PRODUCTS)
+            ? "/admin/produits"
+            : "/produits",
+      },
+      {
+        to: "/admin/referentiels-cbs",
+        label: "Référentiels CBS",
+        icon: BookMarked,
+        anyOf: PERM_ADMIN_CBS_REF,
+      },
+      {
+        to: "/admin/referentiels-metier",
+        label: "Référentiels métier",
+        icon: Library,
+        anyOf: PERM_ADMIN_REFERENTIALS,
+      },
+      {
+        to: "/admin/contrats",
+        label: "Modèles de contrats",
+        icon: FileSignature,
+        anyOf: PERM_ADMIN_CONTRACTS,
+      },
+      {
+        to: "/admin/politique-credit",
+        label: "Politique crédit",
+        icon: SlidersHorizontal,
+        anyOf: PERM_ADMIN_POLICY,
+      },
+    ],
   },
   {
-    to: "/admin/referentiels-cbs",
-    label: "Référentiels CBS",
-    icon: BookMarked,
-    anyOf: PERM_ADMIN_CBS_REF,
-  },
-  {
-    to: "/admin/referentiels-metier",
-    label: "Référentiels métier",
-    icon: Library,
-    anyOf: PERM_ADMIN_REFERENTIALS,
-  },
-  {
-    to: "/admin/intervenants-juridiques",
-    label: "Intervenants juridiques",
-    icon: Scale,
-    anyOf: PERM_LEGAL_PARTIES,
-  },
-  {
-    to: "/admin/circuits",
-    label: "Circuits d'approbation",
+    id: "process",
+    label: "Processus",
     icon: GitBranch,
-    anyOf: PERM_ADMIN_CIRCUITS,
+    items: [
+      {
+        to: "/admin/circuits",
+        label: "Circuits d'approbation",
+        icon: GitBranch,
+        anyOf: PERM_ADMIN_CIRCUITS,
+      },
+      {
+        to: "/admin/tranches-recouvrement",
+        label: "Tranches recouvrement",
+        icon: CircleDollarSign,
+        finflowAdmin: true,
+      },
+      {
+        to: "/admin/regles-escalade",
+        label: "Règles d'escalade",
+        icon: Timer,
+        finflowAdmin: true,
+      },
+      {
+        to: "/admin/intervenants-juridiques",
+        label: "Intervenants juridiques",
+        icon: Scale,
+        anyOf: PERM_LEGAL_PARTIES_MANAGE,
+      },
+    ],
   },
   {
-    to: "/admin/delegations",
-    label: "Délégations",
-    icon: ArrowLeftRight,
-    anyOf: PERM_ADMIN_DELEGATIONS,
-  },
-  {
-    to: "/admin/contrats",
-    label: "Modèles de contrats",
-    icon: FileSignature,
-    anyOf: PERM_ADMIN_CONTRACTS,
-  },
-  {
-    to: "/admin/connecteurs",
-    label: "Connecteurs CBS",
+    id: "integrations",
+    label: "Intégrations",
     icon: Cable,
-    anyOf: PERM_ADMIN_CONNECTORS,
+    items: [
+      {
+        to: "/admin/connecteurs",
+        label: "Connecteurs CBS",
+        icon: Cable,
+        anyOf: PERM_ADMIN_CONNECTORS,
+      },
+      {
+        to: "/admin/alertes",
+        label: "Alertes e-mail",
+        icon: Bell,
+        anyOf: PERM_ADMIN_ALERTS,
+      },
+    ],
   },
   {
-    to: "/admin/alertes",
-    label: "Alertes e-mail",
-    icon: Bell,
-    anyOf: PERM_ADMIN_ALERTS,
-  },
-  {
-    to: "/admin/politique-credit",
-    label: "Politique crédit",
-    icon: SlidersHorizontal,
-    anyOf: PERM_ADMIN_POLICY,
-  },
-  {
-    to: "/admin/audit",
-    label: "Audit",
+    id: "supervision",
+    label: "Supervision",
     icon: ScrollText,
-    anyOf: PERM_ADMIN_AUDIT,
+    items: [
+      {
+        to: "/admin/audit",
+        label: "Audit",
+        icon: ScrollText,
+        anyOf: PERM_ADMIN_AUDIT,
+      },
+    ],
   },
 ];
+
+function itemMatchesPath(item: NavItem, pathname: string, resolvedTo: string) {
+  const targets = new Set([item.to, resolvedTo]);
+  if (item.to === "/produits" || resolvedTo === "/admin/produits") {
+    targets.add("/produits");
+    targets.add("/admin/produits");
+  }
+  return [...targets].some(
+    (t) => pathname === t || (t !== "/" && pathname.startsWith(`${t}/`)),
+  );
+}
+
+function canSeeNavItem(item: NavItem, user: CurrentUser | null) {
+  if (item.to === "/admin/filiales" && !user?.is_group_level) return false;
+  if (item.groupOnly && !user?.is_group_level) return false;
+  if (item.finflowAdmin && !isFinflowAdmin(user)) return false;
+  if (item.anyOf && !hasAnyPerm(user, item.anyOf)) return false;
+  return true;
+}
 
 function NavItems({
   items,
@@ -244,21 +357,130 @@ function NavItems({
 }) {
   return (
     <>
-      {items.map(({ to, label, icon: Icon }) => (
+      {items.map((item) => (
         <NavLink
-          key={to}
-          to={to}
-          end={to === "/"}
-          title={label}
+          key={item.to}
+          to={item.to}
+          end={item.to === "/"}
+          title={item.label}
           className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
           onClick={onNavigate}
         >
           <span className="nav-icon">
-            <Icon />
+            <item.icon />
           </span>
-          <span className="nav-label">{label}</span>
+          <span className="nav-label">{item.label}</span>
         </NavLink>
       ))}
+    </>
+  );
+}
+
+function AdminGroupsNav({
+  groups,
+  user,
+  onNavigate,
+}: {
+  groups: AdminGroup[];
+  user: CurrentUser | null;
+  onNavigate?: () => void;
+}) {
+  const location = useLocation();
+  const [openIds, setOpenIds] = useState<string[]>(() =>
+    groups
+      .filter((g) =>
+        g.items.some((item) =>
+          itemMatchesPath(
+            item,
+            location.pathname,
+            item.resolveTo?.(user) ?? item.to,
+          ),
+        ),
+      )
+      .map((g) => g.id),
+  );
+
+  useEffect(() => {
+    setOpenIds((prev) => {
+      const extra = groups
+        .filter((g) =>
+          g.items.some((item) =>
+            itemMatchesPath(
+              item,
+              location.pathname,
+              item.resolveTo?.(user) ?? item.to,
+            ),
+          ),
+        )
+        .map((g) => g.id);
+      if (extra.every((id) => prev.includes(id))) return prev;
+      return [...new Set([...prev, ...extra])];
+    });
+  }, [groups, location.pathname, user]);
+
+  function toggle(id: string) {
+    setOpenIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  }
+
+  return (
+    <>
+      {groups.map((group) => {
+        const GroupIcon = group.icon;
+        const open = openIds.includes(group.id);
+        const groupActive = group.items.some((item) =>
+          itemMatchesPath(
+            item,
+            location.pathname,
+            item.resolveTo?.(user) ?? item.to,
+          ),
+        );
+        return (
+          <div
+            key={group.id}
+            className={`nav-group${open ? " open" : ""}${
+              groupActive ? " has-active" : ""
+            }`}
+          >
+            <button
+              type="button"
+              className="nav-group-toggle"
+              onClick={() => toggle(group.id)}
+              aria-expanded={open}
+              title={group.label}
+            >
+              <span className="nav-icon">
+                <GroupIcon />
+              </span>
+              <span className="nav-label">{group.label}</span>
+              <ChevronDown className="nav-group-chevron" size={14} />
+            </button>
+            <div className="nav-group-items">
+              {group.items.map((item) => {
+                const to = item.resolveTo?.(user) ?? item.to;
+                const Icon = item.icon;
+                return (
+                  <NavLink
+                    key={`${item.to}:${to}`}
+                    to={to}
+                    title={item.label}
+                    className={({ isActive }) =>
+                      `nav-link nav-sublink${isActive ? " active" : ""}`
+                    }
+                    onClick={onNavigate}
+                  >
+                    <span className="nav-icon">
+                      <Icon />
+                    </span>
+                    <span className="nav-label">{item.label}</span>
+                  </NavLink>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </>
   );
 }
@@ -447,16 +669,14 @@ export function Layout() {
     };
   }, [mobileNavOpen]);
 
-  const adminItems = ADMIN_ITEMS.filter(
-    (item) =>
-      (item.to !== "/admin/filiales" || user?.is_group_level) &&
-      (!item.groupOnly || user?.is_group_level) &&
-      (!item.anyOf || hasAnyPerm(user, item.anyOf)),
-  );
-  const navItems = NAV_ITEMS.filter(
-    (item) =>
-      (!item.groupOnly || user?.is_group_level) &&
-      (!item.anyOf || hasAnyPerm(user, item.anyOf)),
+  const navItems = NAV_ITEMS.filter((item) => canSeeNavItem(item, user));
+  const adminGroups = useMemo(
+    () =>
+      ADMIN_GROUPS.map((group) => ({
+        ...group,
+        items: group.items.filter((item) => canSeeNavItem(item, user)),
+      })).filter((group) => group.items.length > 0),
+    [user],
   );
 
   const closeMobileNav = () => setMobileNavOpen(false);
@@ -496,10 +716,14 @@ export function Layout() {
         </div>
         <nav className="nav">
           <NavItems items={navItems} onNavigate={closeMobileNav} />
-          {isAdmin(user) && (
+          {adminGroups.length > 0 && (
             <>
               <div className="nav-section">Administration</div>
-              <NavItems items={adminItems} onNavigate={closeMobileNav} />
+              <AdminGroupsNav
+                groups={adminGroups}
+                user={user}
+                onNavigate={closeMobileNav}
+              />
             </>
           )}
         </nav>

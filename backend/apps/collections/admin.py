@@ -3,8 +3,10 @@ from django.contrib import admin
 from .models import (
     CollectionAction,
     CollectionCase,
+    CollectionDialogueMessage,
     CollectionEscalationRule,
     CollectionStageHistory,
+    CollectionTranche,
     LegalParty,
     LitigationCost,
     LitigationEvent,
@@ -20,6 +22,14 @@ from .models import (
 class ActionInline(admin.TabularInline):
     model = CollectionAction
     extra = 0
+    readonly_fields = ["created_by", "updated_by", "created_at"]
+
+
+class DialogueInline(admin.TabularInline):
+    model = CollectionDialogueMessage
+    extra = 0
+    readonly_fields = ["created_by", "updated_by", "created_at"]
+    fields = ["action", "kind", "body", "created_by", "created_at"]
 
 
 class PromiseInline(admin.TabularInline):
@@ -39,22 +49,44 @@ class StageHistoryInline(admin.TabularInline):
 @admin.register(CollectionCase)
 class CollectionCaseAdmin(admin.ModelAdmin):
     list_display = [
-        "loan", "stage", "par_class", "days_overdue", "overdue_amount",
+        "loan", "tranche", "stage", "par_class", "days_overdue", "overdue_amount",
         "next_action_date", "assigned_to", "tenant",
     ]
-    list_filter = ["stage", "par_class", "tenant"]
+    list_filter = ["tranche", "stage", "par_class", "tenant"]
     search_fields = [
         "loan__application__reference",
         "loan__core_banking_reference",
         "id",
     ]
-    inlines = [ActionInline, PromiseInline, StageHistoryInline]
+    inlines = [ActionInline, DialogueInline, PromiseInline, StageHistoryInline]
 
 
 @admin.register(Repayment)
 class RepaymentAdmin(admin.ModelAdmin):
-    list_display = ["loan", "amount", "payment_date", "tenant"]
+    list_display = ["loan", "amount", "payment_date", "created_by", "tenant"]
     list_filter = ["tenant"]
+
+
+@admin.register(CollectionDialogueMessage)
+class CollectionDialogueMessageAdmin(admin.ModelAdmin):
+    list_display = ["case", "action", "kind", "created_by", "created_at", "tenant"]
+    list_filter = ["kind", "tenant"]
+    search_fields = ["body"]
+    readonly_fields = ["created_by", "updated_by", "created_at", "updated_at"]
+
+
+@admin.register(CollectionTranche)
+class CollectionTrancheAdmin(admin.ModelAdmin):
+    list_display = [
+        "tenant",
+        "position",
+        "name",
+        "min_days_overdue",
+        "max_days_overdue",
+        "owner_kind",
+        "is_active",
+    ]
+    list_filter = ["tenant", "owner_kind", "is_active"]
 
 
 @admin.register(CollectionEscalationRule)
@@ -148,15 +180,15 @@ class LitigationCostAdmin(admin.ModelAdmin):
 @admin.register(LoanRestructure)
 class LoanRestructureAdmin(admin.ModelAdmin):
     list_display = [
-        "loan", "effective_date", "new_duration_months", "outstanding_principal",
-        "status", "tenant",
+        "loan", "status", "origin", "request_kind", "effective_date",
+        "new_duration_months", "outstanding_principal", "tenant",
     ]
-    list_filter = ["status", "tenant"]
+    list_filter = ["status", "origin", "request_kind", "tenant"]
 
 
 @admin.register(WriteOff)
 class WriteOffAdmin(admin.ModelAdmin):
     list_display = [
-        "loan", "amount", "write_off_date", "approved_by", "tenant",
+        "loan", "status", "amount", "write_off_date", "approved_by", "tenant",
     ]
-    list_filter = ["tenant"]
+    list_filter = ["status", "tenant"]

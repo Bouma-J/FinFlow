@@ -222,7 +222,10 @@ def submit_application(application, user):
 
     from apps.clients.models import Client
 
-    from .analysis_validation import assert_analysis_ready_for_submission
+    from .analysis_validation import (
+        assert_analysis_ready_for_submission,
+        refresh_reference_analysis,
+    )
     from .instruction_policy import (
         assert_policy_submit_gates,
         assert_product_bounds,
@@ -254,6 +257,7 @@ def submit_application(application, user):
         raise WorkflowError("La durée demandée est obligatoire.")
 
     assert_product_bounds(application)
+    refresh_reference_analysis(application)
     reference = assert_analysis_ready_for_submission(application)
     assert_policy_submit_gates(application)
     if not reference.is_reference:
@@ -270,9 +274,14 @@ def submit_application(application, user):
 
     was_returned = application.status == CreditApplication.Status.RETURNED
 
+    from .amounts import reference_amount
+
+    workflow_amount = (
+        reference_amount(application) or application.amount_requested
+    )
     instance = start_workflow(
         target=application,
-        amount=application.amount_requested,
+        amount=workflow_amount,
         risk_level=application.risk_level,
     )
     application.status = CreditApplication.Status.IN_APPROVAL

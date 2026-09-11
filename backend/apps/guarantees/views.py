@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
+from apps.common.list_filters import query_param
 from apps.common.scoped import get_for_tenant
 from apps.common.tenancy import get_current_tenant_id
 from apps.common.viewsets import AgencyScopedViewSet, TenantScopedViewSet
@@ -33,6 +34,7 @@ from .formalization_services import (
 )
 from .process_services import (
     ProcessError,
+    cbs_block_message,
     add_dation_asset,
     add_dation_fee,
     add_release_fee,
@@ -87,7 +89,13 @@ _MOVEMENT_STATUS = {
 
 class GuaranteeViewSet(AgencyScopedViewSet):
     queryset = Guarantee.objects.select_related(
-        "client", "application", "agency", "surety", "renewed_from"
+        "client",
+        "application",
+        "application__loan",
+        "application__loan__collection_case",
+        "agency",
+        "surety",
+        "renewed_from",
     ).all()
     serializer_class = GuaranteeSerializer
     action_perms = {
@@ -98,7 +106,15 @@ class GuaranteeViewSet(AgencyScopedViewSet):
         ],
     }
     filterset_fields = ["guarantee_type", "status", "client", "application", "is_insured", "agency"]
-    search_fields = ["reference", "description", "owners"]
+    search_fields = [
+        "reference",
+        "description",
+        "owners",
+        "client__last_name",
+        "client__first_name",
+        "client__company_name",
+        "client__reference",
+    ]
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -107,6 +123,11 @@ class GuaranteeViewSet(AgencyScopedViewSet):
 
     def get_queryset(self):
         qs = super().get_queryset()
+        formalized = query_param(self.request, "formalized")
+        if formalized == "1":
+            qs = qs.exclude(formalized_at__isnull=True)
+        elif formalized == "0":
+            qs = qs.filter(formalized_at__isnull=True)
         if self.action == "list":
             return qs
         return qs.select_related("surety").prefetch_related(
@@ -133,20 +154,40 @@ class GuaranteeViewSet(AgencyScopedViewSet):
         super().perform_create(serializer)
 
     def perform_update(self, serializer):
+        from .busy import guarantee_busy
+
         application = serializer.validated_data.get(
             "application", serializer.instance.application
         )
         self._assert_application_allows_collateral(
             application, self.request.user
         )
+        busy = guarantee_busy(serializer.instance)
+        if busy:
+            raise ValidationError({"detail": busy["message"]})
         super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        from .busy import guarantee_busy
+
+        busy = guarantee_busy(instance)
+        if busy:
+            raise ValidationError({"detail": busy["message"]})
+        super().perform_destroy(instance)
 
     @action(detail=True, methods=["post"])
     def add_movement(self, request, pk=None):
         """Enregistre un mouvement et met à jour l'état de la garantie."""
+        from .busy import guarantee_busy
+
         guarantee = self.get_object()
         serializer = GuaranteeMovementSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        movement_type = serializer.validated_data.get("movement_type")
+        if movement_type in _MOVEMENT_STATUS:
+            busy = guarantee_busy(guarantee)
+            if busy:
+                raise ValidationError({"detail": busy["message"]})
         with transaction.atomic():
             movement = serializer.save(guarantee=guarantee)
             if movement.movement_type == GuaranteeMovement.MovementType.REVALUATION:
@@ -242,9 +283,22 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
     }
     filterset_fields = ["status", "guarantee", "application", "agency"]
     search_fields = [
-        "reference", "cbs_loan_reference", "cbs_client_id", "comment",
+        "reference",
+        "cbs_loan_reference",
+        "cbs_client_id",
+        "comment",
+        "guarantee__client__last_name",
+        "guarantee__client__first_name",
+        "guarantee__client__company_name",
     ]
     http_method_names = ["get", "head", "options", "post"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        client = query_param(self.request, "client")
+        if client:
+            qs = qs.filter(guarantee__client_id=client)
+        return qs
 
     def _can_initiate(self, user):
         return user.is_superuser or user.has_perm(
@@ -435,6 +489,11 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
         upload = request.FILES.get("file")
         if not upload:
             raise ValidationError({"file": "Fichier obligatoire."})
+        from apps.common.upload_validation import validate_uploaded_file
+
+        upload = validate_uploaded_file(
+            upload, tenant=req.tenant, check_quota=True
+        )
         try:
             updated = upload_release_acte_signed(
                 req, upload, user=request.user
@@ -521,6 +580,8 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
             updated = complete_release_request(req)
         except ProcessError as exc:
             raise ValidationError(str(exc)) from exc
+        if updated.status == GuaranteeReleaseRequest.Status.BLOCKED:
+            raise ValidationError(cbs_block_message(updated))
         return Response(GuaranteeReleaseRequestSerializer(updated).data)
 
     @action(detail=True, methods=["get"])
@@ -543,7 +604,12 @@ class GuaranteeReleaseRequestViewSet(TenantScopedViewSet):
 
 class DationRequestViewSet(TenantScopedViewSet):
     queryset = DationRequest.objects.select_related(
-        "client", "application", "agency", "resulting_guarantee"
+        "client",
+        "application",
+        "application__loan",
+        "application__loan__collection_case",
+        "agency",
+        "resulting_guarantee",
     ).prefetch_related("assets", "assets__guarantee", "fees", "fees__asset").all()
     serializer_class = DationRequestSerializer
     action_perms = {
@@ -563,8 +629,16 @@ class DationRequestViewSet(TenantScopedViewSet):
         "workflow": ["guarantees.view_dationrequest"],
     }
     filterset_fields = ["status", "client", "application", "agency"]
-    search_fields = ["reference", "cbs_client_id", "asset_description", "comment"]
-    http_method_names = ["get", "head", "options", "post", "patch"]
+    search_fields = [
+        "reference",
+        "cbs_client_id",
+        "asset_description",
+        "comment",
+        "client__last_name",
+        "client__first_name",
+        "client__company_name",
+    ]
+    http_method_names = ["get", "head", "options", "post"]
 
     def _can_initiate(self, user):
         return user.is_superuser or user.has_perm(
@@ -630,6 +704,10 @@ class DationRequestViewSet(TenantScopedViewSet):
             from apps.credits.models import CreditApplication
 
             application = get_for_tenant(CreditApplication, app_id, error_field="application")
+            if application.client_id != client.pk:
+                raise ValidationError(
+                    {"application": "Ce dossier n'appartient pas au client indiqué."}
+                )
 
         guarantee_ids = request.data.get("guarantee_ids") or []
         if isinstance(guarantee_ids, str):
@@ -905,7 +983,12 @@ class DationRequestViewSet(TenantScopedViewSet):
             raise ValidationError(
                 "Seule une demande bloquée par le CBS peut être relancée."
             )
-        updated = complete_dation_request(req)
+        try:
+            updated = complete_dation_request(req)
+        except ProcessError as exc:
+            raise ValidationError(str(exc)) from exc
+        if updated.status == DationRequest.Status.BLOCKED:
+            raise ValidationError(cbs_block_message(updated))
         return Response(DationRequestSerializer(updated).data)
 
     @action(detail=True, methods=["get"])
@@ -952,10 +1035,23 @@ class GuaranteeFormalizationRequestViewSet(TenantScopedViewSet):
         "status", "legal_stage", "guarantee", "application", "agency",
     ]
     search_fields = [
-        "reference", "notary_name", "notary_reference",
-        "registration_number", "comment",
+        "reference",
+        "notary_name",
+        "notary_reference",
+        "registration_number",
+        "comment",
+        "guarantee__client__last_name",
+        "guarantee__client__first_name",
+        "guarantee__client__company_name",
     ]
-    http_method_names = ["get", "head", "options", "post", "patch"]
+    http_method_names = ["get", "head", "options", "post"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        client = query_param(self.request, "client")
+        if client:
+            qs = qs.filter(guarantee__client_id=client)
+        return qs
 
     def _can_initiate(self, user):
         return user.is_superuser or user.has_perm(
@@ -987,14 +1083,9 @@ class GuaranteeFormalizationRequestViewSet(TenantScopedViewSet):
         application = None
         client = None
         if app_id:
-            try:
-                application = CreditApplication.objects.select_related(
-                    "client", "product"
-                ).get(pk=app_id)
-            except CreditApplication.DoesNotExist as exc:
-                raise ValidationError(
-                    {"application": "Dossier introuvable."}
-                ) from exc
+            application = get_for_tenant(
+                CreditApplication, app_id, error_field="application"
+            )
         else:
             client = get_for_tenant(Client, client_id, error_field="client")
         try:

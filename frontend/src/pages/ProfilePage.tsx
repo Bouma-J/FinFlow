@@ -6,6 +6,7 @@ import { api } from "@/api/client";
 import type { Delegation, DelegationColleague } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { Badge, Card, PageHeader } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
@@ -85,18 +86,9 @@ export function ProfilePage() {
     },
     onError: (err: unknown) => {
       setPwdMsg(null);
-      const data =
-        err && typeof err === "object" && "response" in err
-          ? (err as { response?: { data?: Record<string, unknown> } }).response
-              ?.data
-          : undefined;
-      const msg =
-        (data?.current_password as string[] | string | undefined) ||
-        (data?.new_password as string[] | string | undefined) ||
-        (data?.new_password_confirm as string[] | string | undefined) ||
-        (data?.detail as string | undefined) ||
-        "Échec du changement de mot de passe.";
-      setPwdError(Array.isArray(msg) ? msg.join(" ") : String(msg));
+      setPwdError(
+        apiErrorMessage(err, "Échec du changement de mot de passe."),
+      );
     },
   });
 
@@ -118,17 +110,7 @@ export function ProfilePage() {
     },
     onError: (err: unknown) => {
       setDelMsg(null);
-      const data = (err as { response?: { data?: unknown } })?.response?.data;
-      setDelError(
-        typeof data === "string"
-          ? data
-          : data && typeof data === "object"
-            ? Object.values(data as Record<string, unknown>)
-                .flat()
-                .map(String)
-                .join(" · ")
-            : "Création impossible.",
-      );
+      setDelError(apiErrorMessage(err, "Création impossible."));
     },
   });
 

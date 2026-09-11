@@ -8,6 +8,7 @@ import type { CreditApplication, Surety } from "@/api/types";
 import { SuretyAutocomplete } from "@/components/SuretyAutocomplete";
 import { SuretyForm } from "@/components/SuretyForm";
 import { Card, ErrorState, PageHeader, Spinner, formatMoney } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 
 export function SuretyEngagementAddPage() {
   const { id } = useParams<{ id: string }>();
@@ -48,16 +49,8 @@ export function SuretyEngagementAddPage() {
       navigate(`/dossiers/${id}`);
     },
     onError: (e: unknown) => {
-      const data = (e as { response?: { data?: unknown } })?.response?.data;
       setError(
-        typeof data === "string"
-          ? data
-          : data && typeof data === "object"
-            ? Object.values(data as Record<string, unknown>)
-                .flatMap((v) => (Array.isArray(v) ? v : [v]))
-                .map(String)
-                .join(" · ")
-            : "Enregistrement impossible. Vérifiez les champs.",
+        apiErrorMessage(e, "Enregistrement impossible. Vérifiez les champs."),
       );
     },
   });

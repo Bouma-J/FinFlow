@@ -14,8 +14,27 @@ def guarantee_file_path(instance, filename):
 
 
 class DocumentType(models.TextChoices):
+    """Titre juridique pris en garantie (immobilier ou véhicule)."""
+
     LAND_TITLE = "LAND_TITLE", "Titre foncier"
     ATTRIBUTION_CERT = "ATTRIBUTION_CERT", "Attestation d'attribution"
+    EXPLOITATION_PERMIT = "EXPLOITATION_PERMIT", "Permis d'exploiter"
+    BUILDING_PERMIT = "BUILDING_PERMIT", "Permis de construire"
+    OCCUPANCY_PERMIT = "OCCUPANCY_PERMIT", "Permis d'habiter"
+    LEASEHOLD = "LEASEHOLD", "Bail emphytéotique"
+    SURFACE_RIGHT = "SURFACE_RIGHT", "Droit de superficie"
+    SALES_DEED = "SALES_DEED", "Acte de vente / compromis"
+    CADASTRAL_EXTRACT = "CADASTRAL_EXTRACT", "Extrait cadastral"
+    CUSTOMARY_TITLE = "CUSTOMARY_TITLE", "Titre / certificat coutumier"
+    URBAN_CERT = "URBAN_CERT", "Certificat d'urbanisme"
+    OTHER_REAL_ESTATE = "OTHER_REAL_ESTATE", "Autre titre immobilier"
+    REGISTRATION_CARD = "REGISTRATION_CARD", "Carte grise"
+    PURCHASE_INVOICE = "PURCHASE_INVOICE", "Facture d'achat"
+    CUSTOMS_CLEARANCE = "CUSTOMS_CLEARANCE", "Déclaration en douane"
+    TRANSFER_CERT = "TRANSFER_CERT", "Certificat de cession"
+    INSURANCE_CERT = "INSURANCE_CERT", "Attestation d'assurance"
+    TECH_INSPECTION = "TECH_INSPECTION", "Visite technique"
+    OTHER_VEHICLE = "OTHER_VEHICLE", "Autre document véhicule"
 
 
 class MatrimonialRegime(models.TextChoices):
@@ -157,10 +176,16 @@ class Guarantee(TenantScopedModel, AuthoredModel):
     document_issue_date = models.DateField(
         "date d'établissement du document", null=True, blank=True
     )
+    document_validity_date = models.DateField(
+        "date de validité du document", null=True, blank=True
+    )
     address = models.CharField("adresse du bien", max_length=255, blank=True)
     expertise_date = models.DateField("date de l'expertise", null=True, blank=True)
     expertise_firm = models.CharField("cabinet d'expertise", max_length=200, blank=True)
     expert_name = models.CharField("nom de l'expert", max_length=200, blank=True)
+    expertise_reference = models.CharField(
+        "référence du rapport d'expertise", max_length=100, blank=True
+    )
     value_to_consider = models.DecimalField(
         "valeur à considérer", max_digits=18, decimal_places=2, null=True, blank=True
     )

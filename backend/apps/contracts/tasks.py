@@ -30,9 +30,14 @@ def generate_contract_task(
     extra_values = extra_values or {}
     with tenant_context(tenant_id):
         try:
-            application = CreditApplication.all_tenants.get(pk=application_id)
+            application = CreditApplication.all_tenants.select_related(
+                "client", "client__agency", "product", "agency", "tenant"
+            ).prefetch_related("client__phones").get(pk=application_id)
             template = ContractTemplate.all_tenants.get(pk=template_id)
             user = User.objects.get(pk=user_id)
+            from apps.contracts.services import assert_surety_generation
+
+            assert_surety_generation(template, surety_engagement_id)
         except Exception:
             logger.exception("generate_contract_task : entité introuvable")
             raise

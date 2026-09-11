@@ -115,6 +115,29 @@ def test_dashboard_requires_view_dashboard_perm(tenant_a):
     assert res.status_code == 200
 
 
+def test_group_consolidation_requires_view_dashboard_perm():
+    user = User.objects.create_user(
+        username="grp_nodash",
+        password="FinFlow2026!",
+        tenant=None,
+        is_group_level=True,
+    )
+    api = APIClient()
+    api.force_authenticate(user)
+    res = api.get("/api/v1/reporting/group-consolidation/")
+    assert res.status_code == 403
+
+    perm = Permission.objects.get(
+        content_type__app_label="reporting",
+        codename="view_dashboard",
+    )
+    user.user_permissions.add(perm)
+    user = User.objects.get(pk=user.pk)
+    api.force_authenticate(user)
+    res = api.get("/api/v1/reporting/group-consolidation/")
+    assert res.status_code == 200
+
+
 def test_client_idor_cross_tenant(tenant_a, tenant_b, client_a):
     """Token filiale A ne lit pas un client de filiale B."""
     user_a = User.objects.create_user(

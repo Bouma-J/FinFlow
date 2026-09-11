@@ -6,6 +6,7 @@ import { api } from "@/api/client";
 import type { AdminUser, Agency, DataScope, Paginated, Role, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { Card, PageHeader, PaginationBar, QueryStatus, TenantScopeNotice } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 
 const DATA_SCOPE_OPTIONS: { value: DataScope; label: string }[] = [
   { value: "OWN", label: "Ses propres dossiers uniquement" },
@@ -162,9 +163,12 @@ export function AdminUsersPage() {
             : "Utilisateur créé."),
       );
     },
-    onError: () =>
+    onError: (err: unknown) =>
       setError(
-        "Création impossible (identifiant, mot de passe, e-mail ou agence ?).",
+        apiErrorMessage(
+          err,
+          "Création impossible (identifiant, mot de passe, e-mail ou agence ?).",
+        ),
       ),
   });
 
@@ -213,9 +217,12 @@ export function AdminUsersPage() {
       setResetError(null);
       setSuccess(data.detail);
     },
-    onError: () =>
+    onError: (err: unknown) =>
       setResetError(
-        "Régénération impossible (e-mail manquant, mot de passe trop faible ?).",
+        apiErrorMessage(
+          err,
+          "Régénération impossible (e-mail manquant, mot de passe trop faible ?).",
+        ),
       ),
   });
 

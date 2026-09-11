@@ -28,6 +28,7 @@ from .models import (
     Guarantee,
     GuaranteeMovement,
     GuaranteeReleaseRequest,
+    PledgeCategory,
     ReleaseFee,
 )
 
@@ -50,6 +51,15 @@ _OPEN_RELEASE_STATUSES = (
 
 class ProcessError(Exception):
     """Erreur métier des processus main levée / dation."""
+
+
+def cbs_block_message(request) -> str:
+    """Dernière ligne [CBS] du commentaire, pour un 400 métier."""
+    lines = (request.comment or "").strip().splitlines()
+    last = lines[-1] if lines else "Contrôle CBS impossible."
+    if last.startswith("[CBS] "):
+        last = last[6:]
+    return f"Contrôle CBS impossible : {last}"
 
 
 def _next_reference(prefix: str, model, tenant_id) -> str:
@@ -216,13 +226,11 @@ def initiate_release_request(
         raise ProcessError(
             "Seule une garantie active peut faire l'objet d'une main levée."
         )
-    if GuaranteeReleaseRequest.objects.filter(
-        guarantee=guarantee,
-        status__in=_OPEN_RELEASE_STATUSES,
-    ).exists():
-        raise ProcessError(
-            "Une demande de main levée est déjà en cours pour cette garantie."
-        )
+    from .busy import guarantee_busy
+
+    busy = guarantee_busy(guarantee)
+    if busy:
+        raise ProcessError(busy["message"])
 
     loan_obj, loan_ref = _resolve_loan_ref(guarantee, loan, cbs_loan_reference)
     if not loan_ref:
@@ -638,21 +646,17 @@ def release_client_context(*, client, tenant_id=None) -> dict:
     tid = tenant_id or client.tenant_id
     cbs_id = (getattr(client, "cbs_client_id", "") or "").strip()
 
-    busy_ids = set(
-        GuaranteeReleaseRequest.objects.filter(
-            guarantee__client_id=client.pk,
-            status__in=_OPEN_RELEASE_STATUSES,
-        ).values_list("guarantee_id", flat=True)
-    )
+    from .busy import busy_map
+
     guarantees_qs = (
         Guarantee.objects.filter(
             client_id=client.pk,
             status=Guarantee.Status.ACTIVE,
         )
-        .exclude(id__in=busy_ids)
         .select_related("application", "agency")
         .order_by("-created_at")
     )
+    occupied = busy_map(list(guarantees_qs.values_list("id", flat=True)))
 
     apps = (
         CreditApplication.objects.filter(client_id=client.pk)
@@ -716,11 +720,19 @@ def release_client_context(*, client, tenant_id=None) -> dict:
             }
         )
 
+    guarantees_data = GuaranteeSerializer(guarantees_qs, many=True).data
+    for row in guarantees_data:
+        info = occupied.get(str(row["id"]))
+        row["process_busy"] = info
+        row["formalization_busy"] = bool(
+            info and info["kind"] == "FORMALIZATION"
+        )
+
     return {
         "client_id": str(client.pk),
         "client_display": getattr(client, "display_name", str(client)),
         "cbs_client_id": cbs_id,
-        "guarantees": GuaranteeSerializer(guarantees_qs, many=True).data,
+        "guarantees": guarantees_data,
         "credits": credits,
     }
 
@@ -758,6 +770,12 @@ def complete_release_request(request: GuaranteeReleaseRequest):
     """
     Re-vérifie CBS, exige l'acte signé (règle A), puis libère la garantie.
     """
+    if request.status in (
+        GuaranteeReleaseRequest.Status.COMPLETED,
+        GuaranteeReleaseRequest.Status.CANCELLED,
+        GuaranteeReleaseRequest.Status.REJECTED,
+    ):
+        raise ProcessError("Cette main levée est déjà clôturée.")
     if not request.has_signed_acte():
         raise ProcessError(
             "L'acte de main levée signé doit être déposé avant la clôture."
@@ -871,10 +889,17 @@ def _build_dation_asset_lines(
     exclude_dation_id=None,
 ):
     """Construit la liste normalisée des biens du dossier."""
+    from .busy import busy_map
+
     lines = []
     seen = set()
-    busy = _busy_guarantee_ids_for_dation(
+    other_dation = _busy_guarantee_ids_for_dation(
         client_id=client.pk, exclude_dation_id=exclude_dation_id
+    )
+    occupied = busy_map(
+        list(guarantee_ids),
+        exclude_kind="DATION",
+        exclude_id=exclude_dation_id,
     )
 
     for raw_id in guarantee_ids:
@@ -892,11 +917,14 @@ def _build_dation_asset_lines(
             raise ProcessError(
                 f"La garantie {guarantee.reference or gid} n'est pas active."
             )
-        if gid in busy:
+        if gid in other_dation:
             raise ProcessError(
                 f"La garantie {guarantee.reference or gid} est déjà "
                 "engagée dans une autre dation ouverte."
             )
+        busy = occupied.get(gid)
+        if busy:
+            raise ProcessError(busy["message"])
         value = (
             guarantee.current_value
             or guarantee.value_to_consider
@@ -912,7 +940,11 @@ def _build_dation_asset_lines(
         if gtype == Guarantee.GuaranteeType.MORTGAGE:
             asset_type = DationAsset.AssetType.REAL_ESTATE
         elif gtype == Guarantee.GuaranteeType.PLEDGE:
-            asset_type = DationAsset.AssetType.VEHICLE
+            asset_type = (
+                DationAsset.AssetType.JEWELRY
+                if guarantee.pledge_category == PledgeCategory.VALUABLE
+                else DationAsset.AssetType.VEHICLE
+            )
         elif gtype == Guarantee.GuaranteeType.FINANCIAL:
             asset_type = DationAsset.AssetType.FINANCIAL
         lines.append(
@@ -1208,8 +1240,18 @@ def update_dation_request(request: DationRequest, *, user=None, **fields):
     if "require_full_coverage" in fields and fields["require_full_coverage"] is not None:
         request.require_full_coverage = bool(fields["require_full_coverage"])
     if "application" in fields:
-        request.application = fields["application"]
-        request.agency_id = getattr(fields["application"], "agency_id", None) if fields["application"] else request.agency_id
+        application = fields["application"]
+        if (
+            application is not None
+            and application.client_id != request.client_id
+        ):
+            raise ProcessError("Le dossier n'appartient pas à ce client.")
+        request.application = application
+        request.agency_id = (
+            getattr(application, "agency_id", None)
+            if application
+            else request.agency_id
+        )
     if user is not None:
         request.updated_by = user
     request.save()
@@ -1352,38 +1394,12 @@ def dation_documents(request: DationRequest):
 
 
 def _notify_collection_on_dation_complete(request: DationRequest):
-    """Note légère sur le dossier de recouvrement lié, si présent."""
-    if not request.application_id:
-        return
+    """Historique et prochaine action sur le dossier de recouvrement lié."""
     try:
-        from apps.collections.models import CollectionCase
-        from apps.collections.services import set_next_action
+        from apps.collections.dation_bridge import sync_collection_on_dation_complete
     except Exception:  # noqa: BLE001
         return
-    case = (
-        CollectionCase.objects.filter(
-            loan__application_id=request.application_id,
-        )
-        .exclude(stage=CollectionCase.Stage.CLOSED)
-        .order_by("-opened_at")
-        .first()
-    )
-    if case is None:
-        return
-    note = (
-        f"Dation {request.reference} clôturée — "
-        f"couverture={request.covers_claim()}, "
-        f"résiduel={request.residual_balance}"
-    )[:255]
-    try:
-        set_next_action(
-            case,
-            action_date=timezone.localdate(),
-            action_type="DATION",
-            note=note,
-        )
-    except Exception:  # noqa: BLE001
-        pass
+    sync_collection_on_dation_complete(request)
 
 
 @transaction.atomic
@@ -1392,6 +1408,14 @@ def complete_dation_request(request: DationRequest):
     Re-vérifie l'encours CBS, réalise les garanties sources, puis enregistre
     la garantie type DATION résultante.
     """
+    if request.status in (
+        DationRequest.Status.COMPLETED,
+        DationRequest.Status.CANCELLED,
+        DationRequest.Status.REJECTED,
+    ):
+        raise ProcessError("Ce dossier est déjà clôturé.")
+    if getattr(request, "resulting_guarantee_id", None):
+        raise ProcessError("Cette dation a déjà produit une garantie.")
     currency = request.cbs_currency or tenant_currency(request.tenant_id)
     try:
         cbs = assert_client_outstanding_for_dation(

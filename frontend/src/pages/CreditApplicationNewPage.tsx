@@ -1,5 +1,5 @@
 import { ArrowLeft, FilePlus2, TriangleAlert } from "lucide-react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { useAuth } from "@/auth/AuthContext";
 import { CreditApplicationForm } from "@/components/CreditApplicationForm";
@@ -7,6 +7,8 @@ import { PageHeader } from "@/components/ui";
 
 export function CreditApplicationNewPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const defaultClientId = searchParams.get("client") || undefined;
   const { user, activeTenant } = useAuth();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
 
@@ -34,10 +36,13 @@ export function CreditApplicationNewPage() {
         </div>
       )}
 
-      <CreditApplicationForm
-        onCreated={(app) => navigate(`/dossiers/${app.id}`)}
-        onCancel={() => navigate("/dossiers")}
-      />
+      {!needsTenant ? (
+        <CreditApplicationForm
+          defaultClientId={defaultClientId}
+          onCreated={(app) => navigate(`/dossiers/${app.id}`)}
+          onCancel={() => navigate("/dossiers")}
+        />
+      ) : null}
     </div>
   );
 }

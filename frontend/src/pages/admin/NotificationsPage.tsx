@@ -42,6 +42,8 @@ const EMPTY: NotificationSettings = {
   notify_on_return: true,
   notify_collection_email: false,
   notify_collection_sms: false,
+  notify_collection_transfer: true,
+  notify_collection_dialogue: true,
   from_email: "",
   reply_to: "",
   cc_tenant_email: false,
@@ -64,6 +66,8 @@ type PrefKey =
   | "notify_on_return"
   | "notify_collection_email"
   | "notify_collection_sms"
+  | "notify_collection_transfer"
+  | "notify_collection_dialogue"
   | "cc_tenant_email";
 
 const CIRCUIT_PREFS: {
@@ -99,6 +103,16 @@ const COLLECTION_PREFS: {
   hint: string;
   requiresSms?: boolean;
 }[] = [
+  {
+    key: "notify_collection_transfer",
+    title: "Transfert de tranche",
+    hint: "Alerte les responsables de la tranche d’arrivée (recouvrement, juridique…).",
+  },
+  {
+    key: "notify_collection_dialogue",
+    title: "Commentaire / recommandation",
+    hint: "Alerte l’agent affecté ou l’équipe de la tranche quand un message est déposé.",
+  },
   {
     key: "notify_collection_email",
     title: "Relances e-mail",
@@ -224,6 +238,8 @@ export function AdminNotificationsPage() {
         notify_on_return: form.notify_on_return,
         notify_collection_email: form.notify_collection_email,
         notify_collection_sms: smsEnabled ? form.notify_collection_sms : false,
+        notify_collection_transfer: form.notify_collection_transfer,
+        notify_collection_dialogue: form.notify_collection_dialogue,
         from_email: form.from_email,
         reply_to: form.reply_to,
         cc_tenant_email: form.cc_tenant_email,

@@ -170,6 +170,13 @@ def test_complete_realizes_source_guarantees(
             movement_type="REALIZATION"
         ).exists()
         assert req.resulting_guarantee.guarantee_type == Guarantee.GuaranteeType.DATION
+        from apps.guarantees.serializers import GuaranteeSerializer
+
+        src = GuaranteeSerializer(g).data
+        assert src["completed_dation_id"] == str(req.id)
+        assert src["open_dation_id"] is None
+        created = GuaranteeSerializer(req.resulting_guarantee).data
+        assert created["origin_dation_id"] == str(req.id)
 
 
 @patch(

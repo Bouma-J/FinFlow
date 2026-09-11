@@ -8,13 +8,29 @@ import type {
   AdminUser,
   CollectionActionType,
   CollectionCase,
+  CollectionDialogueKind,
+  CollectionDialogueMessage,
   CollectionStage,
   Paginated,
   PromiseStatus,
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { isSmsEnabled } from "@/auth/features";
-import { hasPerm } from "@/auth/permissions";
+import { hasAnyPerm, hasPerm } from "@/auth/permissions";
+import {
+  PERM_CREDITS,
+  PERM_DATIONS,
+  PERM_GUARANTEES,
+  PERM_LEGAL_PARTIES_MANAGE,
+  PERM_LITIGATION,
+  PERM_SURETIES,
+} from "@/auth/routePerms";
+import { PermLink } from "@/components/PermLink";
+import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
+import {
+  RestructureRequestPanel,
+  WriteOffRequestPanel,
+} from "@/components/FinancialDecisionPanels";
 import {
   Badge,
   Card,
@@ -23,6 +39,7 @@ import {
   Spinner,
   formatMoney,
 } from "@/components/ui";
+import { apiErrorMessage } from "@/utils/apiError";
 import { exportCollectionCasePdf } from "@/utils/exportCollectionCasePdf";
 
 const ACTION_TYPES: { value: CollectionActionType; label: string }[] = [
@@ -32,7 +49,95 @@ const ACTION_TYPES: { value: CollectionActionType; label: string }[] = [
   { value: "LETTER", label: "Courrier" },
   { value: "VISIT", label: "Visite" },
   { value: "LEGAL", label: "Acte judiciaire" },
+  { value: "DATION", label: "Dation en paiement" },
 ];
+
+const DIALOGUE_KINDS: { value: CollectionDialogueKind; label: string }[] = [
+  { value: "QUESTION", label: "Question" },
+  { value: "REQUEST", label: "Demande d'action" },
+  { value: "RECOMMENDATION", label: "Recommandation" },
+  { value: "REPLY", label: "Réponse" },
+];
+
+function DialogueComposer({
+  messages,
+  kind,
+  body,
+  onKind,
+  onBody,
+  onSubmit,
+  pending,
+  emptyLabel,
+}: {
+  messages: CollectionDialogueMessage[];
+  kind: CollectionDialogueKind;
+  body: string;
+  onKind: (kind: CollectionDialogueKind) => void;
+  onBody: (body: string) => void;
+  onSubmit: () => void;
+  pending: boolean;
+  emptyLabel: string;
+}) {
+  return (
+    <div className="action-dialogue">
+      {!messages.length ? (
+        <p className="muted small">{emptyLabel}</p>
+      ) : (
+        <ul className="timeline-list">
+          {messages.map((m) => (
+            <li key={m.id}>
+              <strong>{m.kind_display}</strong>
+              <span className="muted small">
+                {" "}
+                — {new Date(m.created_at).toLocaleString("fr-FR")}
+                {m.created_by_name ? ` · ${m.created_by_name}` : ""}
+              </span>
+              <p className="muted small">{m.body}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="inline-form"
+        style={{ boxShadow: "none", border: 0, padding: 0, marginTop: 8 }}
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
+      >
+        <div className="form-grid">
+          <label className="field">
+            <span>Type</span>
+            <select
+              value={kind}
+              onChange={(e) =>
+                onKind(e.target.value as CollectionDialogueKind)
+              }
+            >
+              {DIALOGUE_KINDS.map((k) => (
+                <option key={k.value} value={k.value}>
+                  {k.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="field">
+          <span>Commentaire / recommandation</span>
+          <textarea
+            rows={2}
+            value={body}
+            onChange={(e) => onBody(e.target.value)}
+            required
+          />
+        </label>
+        <button className="btn btn-primary btn-sm" disabled={pending}>
+          Envoyer
+        </button>
+      </form>
+    </div>
+  );
+}
 
 const STAGES: { value: CollectionStage; label: string }[] = [
   { value: "AMICABLE", label: "Amiable" },
@@ -50,20 +155,17 @@ export function CollectionCaseDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const canRestructure = hasPerm(user, "collections.add_loanrestructure");
+  const canDecideRestructure = hasPerm(user, "collections.change_loanrestructure");
   const canWriteOff = hasPerm(user, "collections.add_writeoff");
+  const canDecideWriteOff = hasPerm(user, "collections.change_writeoff");
   const canLitigation = hasPerm(user, "collections.change_litigationfile");
-  const canRepay = hasPerm(user, "collections.add_repayment");
   const canManageCase = hasPerm(user, "collections.change_collectioncase");
   const canAddAction = hasPerm(user, "collections.add_collectionaction");
   const canAddPromise = hasPerm(user, "collections.add_paymentpromise");
-  const canChangePromise = hasPerm(user, "collections.change_paymentpromise");
   const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
-
-  const [payAmount, setPayAmount] = useState("");
-  const [payDate, setPayDate] = useState(
-    () => new Date().toISOString().slice(0, 10),
-  );
-  const [payRef, setPayRef] = useState("");
+  const canCallSurety = hasPerm(user, "sureties.change_suretyengagement");
+  const canViewDations = hasAnyPerm(user, PERM_DATIONS);
+  const canViewGuarantees = hasAnyPerm(user, PERM_GUARANTEES);
 
   const [actionType, setActionType] = useState<CollectionActionType>("CALL");
   const [actionDate, setActionDate] = useState(
@@ -72,6 +174,18 @@ export function CollectionCaseDetailPage() {
   const [actionResult, setActionResult] = useState("");
   const [actionComment, setActionComment] = useState("");
   const [actionFollowUp, setActionFollowUp] = useState("");
+  const [actionFile, setActionFile] = useState<File | null>(null);
+  const [editingActionId, setEditingActionId] = useState<string | null>(null);
+  const [editResult, setEditResult] = useState("");
+  const [editComment, setEditComment] = useState("");
+  const [editFile, setEditFile] = useState<File | null>(null);
+
+  const [dialogueKind, setDialogueKind] =
+    useState<CollectionDialogueKind>("QUESTION");
+  const [dialogueBody, setDialogueBody] = useState("");
+  const [actionDialogue, setActionDialogue] = useState<
+    Record<string, { kind: CollectionDialogueKind; body: string }>
+  >({});
 
   const [promiseAmount, setPromiseAmount] = useState("");
   const [promiseDate, setPromiseDate] = useState("");
@@ -81,17 +195,14 @@ export function CollectionCaseDetailPage() {
   const [nextType, setNextType] = useState<CollectionActionType | "">("");
   const [nextNote, setNextNote] = useState("");
 
-  const [restructureMonths, setRestructureMonths] = useState("12");
-  const [restructureRate, setRestructureRate] = useState("");
-  const [restructureReason, setRestructureReason] = useState("");
-  const [writeOffReason, setWriteOffReason] = useState("");
-
   const caseQuery = useQuery({
     queryKey: ["collection-case", id],
     queryFn: async () =>
       (await api.get<CollectionCase>(`/collection-cases/${id}/`)).data,
     enabled: !!id,
   });
+
+  const canOperateCase = Boolean(caseQuery.data?.can_operate);
 
   const agents = useQuery({
     queryKey: ["collection-assign-users"],
@@ -101,7 +212,7 @@ export function CollectionCaseDetailPage() {
           params: { page_size: 200, is_active: true },
         })
       ).data,
-    enabled: canManageCase,
+    enabled: canManageCase && canOperateCase,
   });
 
   useEffect(() => {
@@ -119,46 +230,97 @@ export function CollectionCaseDetailPage() {
     qc.invalidateQueries({ queryKey: ["collection-agent-dashboard"] });
   };
 
-  const repayMutation = useMutation({
+  const refreshCbsMutation = useMutation({
     mutationFn: async () =>
-      (
-        await api.post(`/collection-cases/${id}/repayments/`, {
-          amount: payAmount,
-          payment_date: payDate,
-          reference: payRef,
-        })
-      ).data as CollectionCase,
-    onSuccess: () => {
-      setPayAmount("");
-      setPayRef("");
-      setSuccess("Encaissement enregistré et appliqué à l'échéancier.");
+      (await api.post(`/collection-cases/${id}/refresh-cbs/`)).data as CollectionCase,
+    onSuccess: (updated) => {
+      qc.setQueryData(["collection-case", id], updated);
       setError(null);
+      if (updated.stage === "CLOSED") {
+        setSuccess("Le CBS indique un crédit soldé — dossier clôturé.");
+      } else {
+        setSuccess("Situation d'impayé actualisée depuis le CBS.");
+      }
       invalidate();
     },
-    onError: () => setError("Impossible d'enregistrer l'encaissement."),
+    onError: (err: unknown) => {
+      setError(apiErrorMessage(err, "Impossible de lire la situation CBS."));
+    },
   });
 
   const actionMutation = useMutation({
-    mutationFn: async () =>
-      (
-        await api.post("/collection-actions/", {
-          case: id,
-          action_type: actionType,
-          action_date: actionDate,
-          result: actionResult,
-          comment: actionComment,
-          ...(actionFollowUp ? { next_follow_up_date: actionFollowUp } : {}),
-        })
-      ).data,
+    mutationFn: async () => {
+      const fd = new FormData();
+      fd.append("case", id || "");
+      fd.append("action_type", actionType);
+      fd.append("action_date", actionDate);
+      fd.append("result", actionResult);
+      fd.append("comment", actionComment);
+      if (actionFollowUp) fd.append("next_follow_up_date", actionFollowUp);
+      if (actionFile) fd.append("attachment", actionFile);
+      return (await api.post("/collection-actions/", fd)).data;
+    },
     onSuccess: () => {
       setActionResult("");
       setActionComment("");
       setActionFollowUp("");
+      setActionFile(null);
       setSuccess("Action de relance enregistrée.");
       setError(null);
       invalidate();
     },
-    onError: () => setError("Impossible d'enregistrer l'action."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible d'enregistrer l'action.")),
+  });
+
+  const actionEditMutation = useMutation({
+    mutationFn: async (actionId: string) => {
+      const fd = new FormData();
+      fd.append("result", editResult);
+      fd.append("comment", editComment);
+      if (editFile) fd.append("attachment", editFile);
+      return (await api.patch(`/collection-actions/${actionId}/`, fd)).data;
+    },
+    onSuccess: () => {
+      setEditingActionId(null);
+      setEditFile(null);
+      setSuccess("Action mise à jour.");
+      setError(null);
+      invalidate();
+    },
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible de modifier cette action.")),
+  });
+
+  const dialogueMutation = useMutation({
+    mutationFn: async (payload: {
+      kind: CollectionDialogueKind;
+      body: string;
+      action?: string;
+    }) =>
+      (
+        await api.post(`/collection-cases/${id}/dialogue/`, {
+          kind: payload.kind,
+          body: payload.body,
+          ...(payload.action ? { action: payload.action } : {}),
+        })
+      ).data,
+    onSuccess: (_data, payload) => {
+      if (payload.action) {
+        setActionDialogue((prev) => ({
+          ...prev,
+          [payload.action as string]: { kind: "QUESTION", body: "" },
+        }));
+        setSuccess("Commentaire ajouté à l'action.");
+      } else {
+        setDialogueBody("");
+        setSuccess("Message ajouté au dialogue du dossier.");
+      }
+      setError(null);
+      invalidate();
+    },
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible d'envoyer le message.")),
   });
 
   const promiseMutation = useMutation({
@@ -178,7 +340,8 @@ export function CollectionCaseDetailPage() {
       setError(null);
       invalidate();
     },
-    onError: () => setError("Impossible d'enregistrer la promesse."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible d'enregistrer la promesse.")),
   });
 
   const promiseStatusMutation = useMutation({
@@ -199,7 +362,8 @@ export function CollectionCaseDetailPage() {
       setError(null);
       invalidate();
     },
-    onError: () => setError("Impossible de mettre à jour la promesse."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible de mettre à jour la promesse.")),
   });
 
   const assignMutation = useMutation({
@@ -214,7 +378,8 @@ export function CollectionCaseDetailPage() {
       setError(null);
       invalidate();
     },
-    onError: () => setError("Impossible d'affecter l'agent."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible d'affecter l'agent.")),
   });
 
   const stageMutation = useMutation({
@@ -225,7 +390,8 @@ export function CollectionCaseDetailPage() {
       setError(null);
       invalidate();
     },
-    onError: () => setError("Impossible de changer le stade."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible de changer le stade.")),
   });
 
   const nextActionMutation = useMutation({
@@ -242,7 +408,8 @@ export function CollectionCaseDetailPage() {
       setError(null);
       invalidate();
     },
-    onError: () => setError("Impossible de planifier la prochaine action."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible de planifier la prochaine action.")),
   });
 
   const reminderMutation = useMutation({
@@ -255,40 +422,8 @@ export function CollectionCaseDetailPage() {
       setError(null);
       invalidate();
     },
-    onError: () => setError("Impossible d'envoyer la relance."),
-  });
-
-  const restructureMutation = useMutation({
-    mutationFn: async () =>
-      (
-        await api.post(`/collection-cases/${id}/restructure/`, {
-          new_duration_months: Number(restructureMonths),
-          ...(restructureRate ? { new_rate: restructureRate } : {}),
-          reason: restructureReason,
-        })
-      ).data,
-    onSuccess: () => {
-      setSuccess("Restructuration appliquée — nouvel échéancier généré.");
-      setError(null);
-      setRestructureReason("");
-      invalidate();
-    },
-    onError: () => setError("Restructuration impossible."),
-  });
-
-  const writeOffMutation = useMutation({
-    mutationFn: async () =>
-      (
-        await api.post(`/collection-cases/${id}/write-off/`, {
-          reason: writeOffReason,
-        })
-      ).data,
-    onSuccess: () => {
-      setSuccess("Prêt passé en perte — dossier clôturé.");
-      setError(null);
-      invalidate();
-    },
-    onError: () => setError("Passage en perte impossible."),
+    onError: (err) =>
+      setError(apiErrorMessage(err, "Impossible d'envoyer la relance.")),
   });
 
   const createLitigation = useMutation({
@@ -305,18 +440,11 @@ export function CollectionCaseDetailPage() {
       invalidate();
       navigate(`/recouvrement/${id}/contentieux/${lit.id}`);
     },
-    onError: () => setError("Impossible d'ouvrir une procédure contentieuse."),
+    onError: (err) =>
+      setError(
+        apiErrorMessage(err, "Impossible d'ouvrir une procédure contentieuse."),
+      ),
   });
-
-  function submitPay(e: FormEvent) {
-    e.preventDefault();
-    setSuccess(null);
-    if (!payAmount || Number(payAmount) <= 0) {
-      setError("Indiquez un montant d'encaissement positif.");
-      return;
-    }
-    repayMutation.mutate();
-  }
 
   function submitAction(e: FormEvent) {
     e.preventDefault();
@@ -353,6 +481,16 @@ export function CollectionCaseDetailPage() {
   }
 
   const c = caseQuery.data;
+  const canOperate = Boolean(c.can_operate);
+  const canWrite = canOperate;
+  const canCollect = Boolean(c.can_collect);
+  const financeFrozen = Boolean(c.financial_ops_frozen);
+  const openDation = Boolean(
+    c.blocking_dation &&
+      c.blocking_dation.status !== "COMPLETED" &&
+      c.blocking_dation.status !== "REJECTED" &&
+      c.blocking_dation.status !== "CANCELLED",
+  );
 
   return (
     <div className="page-shell">
@@ -364,6 +502,21 @@ export function CollectionCaseDetailPage() {
         }`}
         actions={
           <>
+            {(canOperate || canManageCase) && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                disabled={refreshCbsMutation.isPending}
+                onClick={() => {
+                  setSuccess(null);
+                  refreshCbsMutation.mutate();
+                }}
+              >
+                {refreshCbsMutation.isPending
+                  ? "Lecture CBS…"
+                  : "Actualiser depuis le CBS"}
+              </button>
+            )}
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -383,6 +536,28 @@ export function CollectionCaseDetailPage() {
           {success}
         </div>
       )}
+      {!canWrite && (
+        <p className="muted" style={{ marginBottom: 12 }}>
+          Consultation : les actions de recouvrement sont réservées au
+          responsable de cette tranche. Vous pouvez dialoguer ci-dessous.
+        </p>
+      )}
+      {financeFrozen && (
+        <div className="notice-warning" style={{ marginBottom: 12 }}>
+          {c.financial_ops_frozen_reason}
+          {c.blocking_dation?.id && canViewDations && (
+            <>
+              {" "}
+              <Link to={`/dations/${c.blocking_dation.id}`}>
+                Voir la dation
+                {c.blocking_dation.reference
+                  ? ` ${c.blocking_dation.reference}`
+                  : ""}
+              </Link>
+            </>
+          )}
+        </div>
+      )}
       {error && (
         <div className="form-error" style={{ marginBottom: 12 }}>
           {error}
@@ -400,9 +575,13 @@ export function CollectionCaseDetailPage() {
               <dt>Dossier</dt>
               <dd>
                 {c.application_id ? (
-                  <Link to={`/dossiers/${c.application_id}`}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    to={`/dossiers/${c.application_id}`}
+                  >
                     {c.application_reference || "Voir le dossier"}
-                  </Link>
+                  </PermLink>
                 ) : (
                   c.application_reference || "—"
                 )}
@@ -427,9 +606,38 @@ export function CollectionCaseDetailPage() {
               <dd>{c.core_banking_reference || "—"}</dd>
             </div>
             <div>
+              <dt>Synchro CBS</dt>
+              <dd>
+                {c.cbs_synced_at
+                  ? String(c.cbs_synced_at).replace("T", " ").slice(0, 16)
+                  : "—"}
+                {c.cbs_sync_error ? (
+                  <span className="form-error" style={{ display: "block" }}>
+                    {c.cbs_sync_error}
+                  </span>
+                ) : null}
+              </dd>
+            </div>
+            <div>
               <dt>PAR</dt>
               <dd>
                 <Badge value={c.par_class_display} />
+              </dd>
+            </div>
+            <div>
+              <dt>Tranche</dt>
+              <dd>
+                <Badge
+                  value={
+                    c.tranche_name
+                      ? `${c.tranche_name}${
+                          c.tranche_owner_kind_display
+                            ? ` · ${c.tranche_owner_kind_display}`
+                            : ""
+                        }`
+                      : "—"
+                  }
+                />
               </dd>
             </div>
             <div>
@@ -451,7 +659,7 @@ export function CollectionCaseDetailPage() {
             <div>
               <dt>Agent</dt>
               <dd>
-                {canManageCase ? (
+                {canWrite && canManageCase ? (
                   <div className="row-actions" style={{ gap: 8 }}>
                     <select
                       value={assignUserId}
@@ -488,7 +696,7 @@ export function CollectionCaseDetailPage() {
             <div>
               <dt>Stade</dt>
               <dd>
-                {canManageCase ? (
+                {canWrite && canManageCase ? (
                   <select
                     value={c.stage}
                     onChange={(e) =>
@@ -525,60 +733,27 @@ export function CollectionCaseDetailPage() {
           </dl>
         </Card>
 
-        {canRepay && (
-        <Card title="Nouvel encaissement">
-          <form
-            className="inline-form"
-            style={{ boxShadow: "none", border: 0, padding: 0 }}
-            onSubmit={submitPay}
-          >
-            <div className="form-grid">
-              <label className="field">
-                <span>Montant *</span>
-                <input
-                  type="number"
-                  min="1"
-                  step="0.01"
-                  value={payAmount}
-                  onChange={(e) => setPayAmount(e.target.value)}
-                  required
-                />
-              </label>
-              <label className="field">
-                <span>Date</span>
-                <input
-                  type="date"
-                  value={payDate}
-                  onChange={(e) => setPayDate(e.target.value)}
-                  required
-                />
-              </label>
-              <label className="field">
-                <span>Référence</span>
-                <input
-                  value={payRef}
-                  onChange={(e) => setPayRef(e.target.value)}
-                  placeholder="N° reçu / bordereau"
-                />
-              </label>
-            </div>
+        <Card title="Situation CBS">
+          <p className="muted small">
+            Les versements sont saisis dans le CBS. FinFlow relit l&apos;impayé
+            : le retard diminue, ou le crédit passe soldé et le dossier se
+            clôture.
+          </p>
+          {c.core_banking_reference ? (
             <p className="muted small">
-              Le montant est réparti automatiquement sur les échéances
-              impayées (FIFO).
+              Référence prêt : {c.core_banking_reference}
             </p>
-            <button
-              className="btn btn-primary"
-              disabled={repayMutation.isPending}
-            >
-              Enregistrer l&apos;encaissement
-            </button>
-          </form>
+          ) : (
+            <p className="form-error" style={{ marginTop: 8 }}>
+              Aucune référence CBS sur ce prêt — le retard ne peut pas être
+              relu.
+            </p>
+          )}
         </Card>
-        )}
       </div>
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
-        {canManageCase && (
+        {canWrite && canManageCase && (
         <Card title="Planifier la prochaine action">
           <form
             className="inline-form"
@@ -629,61 +804,108 @@ export function CollectionCaseDetailPage() {
         </Card>
         )}
 
-        <Card title="Garanties & dations">
-          {!c.guarantees?.length && !c.dation_requests?.length ? (
-            <p className="muted small">Aucune garantie ni dation liée.</p>
-          ) : (
-            <>
-              {!!c.guarantees?.length && (
-                <ul className="timeline-list" style={{ marginBottom: 12 }}>
-                  {c.guarantees.map((g) => (
-                    <li key={g.id}>
-                      <Link to={`/garanties/${g.id}`}>
-                        {g.guarantee_type_display}
-                      </Link>
-                      {" · "}
-                      <Badge value={g.status_display} />
-                      {g.description ? (
-                        <span className="muted small"> — {g.description}</span>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {!!c.dation_requests?.length && (
-                <ul className="timeline-list">
-                  {c.dation_requests.map((d) => (
-                    <li key={d.id}>
-                      <Link to={`/dations/${d.id}`}>Dation</Link>
-                      {" · "}
-                      <Badge value={d.status_display} />
-                      <span className="muted small">
-                        {" "}
-                        — {new Date(d.created_at).toLocaleDateString("fr-FR")}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {c.application_id && (
-                <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-                  <Link
-                    className="btn btn-ghost btn-sm"
-                    to={`/garanties?application=${c.application_id}`}
+        <Card title="Garanties, cautions et dations">
+          {!c.guarantees?.length &&
+          !c.surety_engagements?.length &&
+          !c.dation_requests?.length ? (
+            <p className="muted small">
+              Aucune garantie, caution ni dation liée.
+            </p>
+          ) : null}
+          {!!c.guarantees?.length && (
+            <ul className="timeline-list" style={{ marginBottom: 12 }}>
+              {c.guarantees.map((g) => (
+                <li key={g.id}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_GUARANTEES}
+                    to={`/garanties/${g.id}`}
                   >
-                    Voir garanties
-                  </Link>
-                  {canInitiateDation && (
-                    <Link
-                      className="btn btn-ghost btn-sm"
-                      to={`/dations/nouvelle?application=${c.application_id}`}
-                    >
-                      Nouvelle dation
-                    </Link>
+                    {g.guarantee_type_display}
+                  </PermLink>
+                  {" · "}
+                  <Badge value={g.status_display} />
+                  {g.description ? (
+                    <span className="muted small"> — {g.description}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {!!c.surety_engagements?.length && (
+            <ul className="timeline-list" style={{ marginBottom: 12 }}>
+              {c.surety_engagements.map((e) => (
+                <li key={e.id}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_SURETIES}
+                    to={`/cautions/${e.surety}`}
+                  >
+                    {e.surety_display}
+                  </PermLink>
+                  {" · "}
+                  <Badge value={e.status_display || e.status} />
+                  {e.engagement_type_display ? (
+                    <span className="muted small">
+                      {" "}
+                      — {e.engagement_type_display}
+                    </span>
+                  ) : null}
+                  {canWrite && canCallSurety && (
+                    <SuretyEngagementActions
+                      engagement={e}
+                      canManage
+                      canContracts={false}
+                      invalidateKeys={[["collection-case", id]]}
+                    />
                   )}
-                </div>
+                </li>
+              ))}
+            </ul>
+          )}
+          {!!c.dation_requests?.length && (
+            <ul className="timeline-list">
+              {c.dation_requests.map((d) => (
+                <li key={d.id}>
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_DATIONS}
+                    to={`/dations/${d.id}`}
+                  >
+                    {d.reference ? `Dation ${d.reference}` : "Dation"}
+                  </PermLink>
+                  {" · "}
+                  <Badge value={d.status_display} />
+                  <span className="muted small">
+                    {" "}
+                    — {new Date(d.created_at).toLocaleDateString("fr-FR")}
+                    {d.residual_balance && Number(d.residual_balance) > 0
+                      ? ` · résiduel ${d.residual_balance}`
+                      : ""}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {c.application_id && (
+            <div style={{ marginTop: 8, display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {canViewGuarantees && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/garanties?application=${c.application_id}`}
+              >
+                Voir garanties
+              </Link>
               )}
-            </>
+              {canWrite && canInitiateDation && !openDation && (
+                <Link
+                  className="btn btn-ghost btn-sm"
+                  to={`/dations/nouvelle?application=${c.application_id}`}
+                >
+                  Nouvelle dation
+                </Link>
+              )}
+            </div>
           )}
         </Card>
       </div>
@@ -722,8 +944,8 @@ export function CollectionCaseDetailPage() {
       </Card>
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
-        <Card title="Actions de relance">
-          {canAddAction && (
+        <Card title="Historique des actions">
+          {canWrite && canAddAction && (
           <form
             className="inline-form"
             style={{
@@ -783,6 +1005,13 @@ export function CollectionCaseDetailPage() {
                 onChange={(e) => setActionComment(e.target.value)}
               />
             </label>
+            <label className="field">
+              <span>Pièce jointe</span>
+              <input
+                type="file"
+                onChange={(e) => setActionFile(e.target.files?.[0] || null)}
+              />
+            </label>
             <button
               className="btn btn-primary btn-sm"
               disabled={actionMutation.isPending}
@@ -807,7 +1036,118 @@ export function CollectionCaseDetailPage() {
                       · suivi {a.next_follow_up_date}
                     </span>
                   )}
+                  {a.created_by_name && (
+                    <span className="muted small">
+                      {" "}
+                      · {a.created_by_name}
+                    </span>
+                  )}
                   {a.comment && <p className="muted small">{a.comment}</p>}
+                  {a.attachment_url && (
+                    <p className="muted small">
+                      <a href={a.attachment_url} target="_blank" rel="noreferrer">
+                        Pièce jointe
+                      </a>
+                    </p>
+                  )}
+                  {a.can_edit && (
+                    <div style={{ marginTop: 6 }}>
+                      {editingActionId === a.id ? (
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            actionEditMutation.mutate(a.id);
+                          }}
+                        >
+                          <input
+                            value={editResult}
+                            onChange={(e) => setEditResult(e.target.value)}
+                            placeholder="Résultat"
+                          />
+                          <textarea
+                            rows={2}
+                            value={editComment}
+                            onChange={(e) => setEditComment(e.target.value)}
+                            placeholder="Commentaire"
+                          />
+                          <input
+                            type="file"
+                            onChange={(e) =>
+                              setEditFile(e.target.files?.[0] || null)
+                            }
+                          />
+                          <div className="row-actions" style={{ gap: 6 }}>
+                            <button
+                              type="submit"
+                              className="btn btn-primary btn-sm"
+                              disabled={actionEditMutation.isPending}
+                            >
+                              Enregistrer
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setEditingActionId(null)}
+                            >
+                              Annuler
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => {
+                            setEditingActionId(a.id);
+                            setEditResult(a.result || "");
+                            setEditComment(a.comment || "");
+                            setEditFile(null);
+                          }}
+                        >
+                          Modifier
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <DialogueComposer
+                    messages={a.dialogue || []}
+                    kind={actionDialogue[a.id]?.kind || "QUESTION"}
+                    body={actionDialogue[a.id]?.body || ""}
+                    onKind={(kind) =>
+                      setActionDialogue((prev) => ({
+                        ...prev,
+                        [a.id]: {
+                          kind,
+                          body: prev[a.id]?.body || "",
+                        },
+                      }))
+                    }
+                    onBody={(body) =>
+                      setActionDialogue((prev) => ({
+                        ...prev,
+                        [a.id]: {
+                          kind: prev[a.id]?.kind || "QUESTION",
+                          body,
+                        },
+                      }))
+                    }
+                    onSubmit={() => {
+                      const draft = actionDialogue[a.id];
+                      const text = (draft?.body || "").trim();
+                      if (!text) {
+                        setError("Saisissez un commentaire sur cette action.");
+                        return;
+                      }
+                      setSuccess(null);
+                      dialogueMutation.mutate({
+                        kind: draft?.kind || "QUESTION",
+                        body: text,
+                        action: a.id,
+                      });
+                    }}
+                    pending={dialogueMutation.isPending}
+                    emptyLabel="Aucun commentaire sur cette action."
+                  />
                 </li>
               ))}
             </ul>
@@ -815,7 +1155,7 @@ export function CollectionCaseDetailPage() {
         </Card>
 
         <Card title="Promesses de paiement">
-          {canAddPromise && (
+          {canWrite && canAddPromise && (
           <form
             className="inline-form"
             style={{
@@ -865,7 +1205,8 @@ export function CollectionCaseDetailPage() {
                   <th>Date</th>
                   <th className="num">Montant</th>
                   <th>Statut</th>
-                  {(canChangePromise || canAddPromise) && <th></th>}
+                  <th>Saisi par</th>
+                  {canWrite && <th></th>}
                 </tr>
               </thead>
               <tbody>
@@ -876,9 +1217,10 @@ export function CollectionCaseDetailPage() {
                     <td>
                       <Badge value={p.status_display} />
                     </td>
-                    {(canChangePromise || canAddPromise) && (
+                    <td className="muted small">{p.created_by_name || "—"}</td>
+                    {canWrite && (
                       <td>
-                        {p.status === "PENDING" && (
+                        {p.status === "PENDING" && p.can_edit && (
                           <div className="row-actions" style={{ gap: 4 }}>
                             <button
                               type="button"
@@ -919,7 +1261,7 @@ export function CollectionCaseDetailPage() {
       </div>
 
       <div className="detail-grid" style={{ marginTop: 16 }}>
-        {canManageCase && (
+        {canWrite && canManageCase && (
         <Card title="Relances">
           <p className="muted small" style={{ marginBottom: 10 }}>
             Envoi immédiat (force les préférences filiale).
@@ -950,132 +1292,65 @@ export function CollectionCaseDetailPage() {
         </Card>
         )}
 
-        {canRestructure && c.stage !== "CLOSED" && c.loan_status === "ACTIVE" && (
+        {(canCollect && canRestructure && c.loan_status === "ACTIVE" && c.stage !== "CLOSED") ||
+        canDecideRestructure ||
+        (c.restructures?.length ?? 0) > 0 ? (
           <Card title="Restructuration">
-            <form
-              className="inline-form"
-              style={{ boxShadow: "none", border: 0, padding: 0 }}
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (
-                  !window.confirm(
-                    "Remplacer les échéances non soldées par un nouvel échéancier ?",
-                  )
-                ) {
-                  return;
-                }
-                setSuccess(null);
-                restructureMutation.mutate();
+            <RestructureRequestPanel
+              origin="COLLECTION"
+              loanId={c.loan}
+              caseId={c.id}
+              currency=""
+              outstanding={c.outstanding_principal}
+              currentDuration={12}
+              currentRate=""
+              restructures={c.restructures || []}
+              canPropose={canCollect && canRestructure && c.stage !== "CLOSED"}
+              canDecide={canDecideRestructure}
+              frozen={c.financial_ops_frozen}
+              frozenReason={c.financial_ops_frozen_reason}
+              loanActive={c.loan_status === "ACTIVE"}
+              currentUserId={user?.id}
+              onChanged={invalidate}
+              onError={(msg) => setError(msg || null)}
+              onSuccess={(msg) => {
+                setSuccess(msg);
+                setError(null);
               }}
-            >
-              <div className="form-grid">
-                <label className="field">
-                  <span>Nouvelle durée (mois)</span>
-                  <input
-                    type="number"
-                    min={1}
-                    value={restructureMonths}
-                    onChange={(e) => setRestructureMonths(e.target.value)}
-                    required
-                  />
-                </label>
-                <label className="field">
-                  <span>Nouveau taux % (optionnel)</span>
-                  <input
-                    type="number"
-                    step="0.001"
-                    value={restructureRate}
-                    onChange={(e) => setRestructureRate(e.target.value)}
-                    placeholder="inchangé"
-                  />
-                </label>
-                <label className="field">
-                  <span>Motif</span>
-                  <input
-                    value={restructureReason}
-                    onChange={(e) => setRestructureReason(e.target.value)}
-                  />
-                </label>
-              </div>
-              <p className="muted small">
-                Capital restant dû : {formatMoney(c.outstanding_principal || "0")}
-              </p>
-              <button
-                className="btn btn-primary btn-sm"
-                disabled={restructureMutation.isPending}
-              >
-                Appliquer la restructuration
-              </button>
-            </form>
-            {!!c.restructures?.length && (
-              <ul className="timeline-list" style={{ marginTop: 12 }}>
-                {c.restructures.map((r) => (
-                  <li key={r.id}>
-                    <strong>{r.effective_date}</strong>
-                    <span className="muted small">
-                      {" "}
-                      · {r.new_duration_months} mois ·{" "}
-                      {formatMoney(r.outstanding_principal)}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
+            />
           </Card>
-        )}
+        ) : null}
       </div>
 
-      {(canWriteOff || canLitigation) && (
+      {((canCollect && canWriteOff) ||
+        canDecideWriteOff ||
+        (c.write_offs?.length ?? 0) > 0 ||
+        canLitigation ||
+        c.litigations?.length) && (
         <div className="detail-grid" style={{ marginTop: 16 }}>
-          {canWriteOff && c.loan_status === "ACTIVE" && (
+          {(canCollect && canWriteOff) ||
+          canDecideWriteOff ||
+          (c.write_offs?.length ?? 0) > 0 ? (
             <Card title="Passage en perte">
-              <p className="muted small">
-                Met le prêt en statut « Passé en perte / défaut » et clôture le
-                dossier. Les échéances restent pour l&apos;historique.
-              </p>
-              <label className="field">
-                <span>Motif</span>
-                <input
-                  value={writeOffReason}
-                  onChange={(e) => setWriteOffReason(e.target.value)}
-                  placeholder="Irrécouvrable / décision comité…"
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ marginTop: 8 }}
-                disabled={writeOffMutation.isPending}
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      "Confirmer le passage en perte de ce prêt ?",
-                    )
-                  ) {
-                    return;
-                  }
-                  setSuccess(null);
-                  writeOffMutation.mutate();
+              <WriteOffRequestPanel
+                caseId={c.id}
+                currency=""
+                writeOffs={c.write_offs || []}
+                canPropose={canCollect && canWriteOff}
+                canDecide={canDecideWriteOff}
+                frozen={c.financial_ops_frozen}
+                frozenReason={c.financial_ops_frozen_reason}
+                loanActive={c.loan_status === "ACTIVE"}
+                currentUserId={user?.id}
+                onChanged={invalidate}
+                onError={(msg) => setError(msg || null)}
+                onSuccess={(msg) => {
+                  setSuccess(msg);
+                  setError(null);
                 }}
-              >
-                Passer en perte
-              </button>
-              {!!c.write_offs?.length && (
-                <ul className="timeline-list" style={{ marginTop: 12 }}>
-                  {c.write_offs.map((w) => (
-                    <li key={w.id}>
-                      <strong>
-                        {w.write_off_date} — {formatMoney(w.amount)}
-                      </strong>
-                      {w.reason && (
-                        <p className="muted small">{w.reason}</p>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              />
             </Card>
-          )}
+          ) : null}
 
           {canLitigation && (
             <Card title="Contentieux">
@@ -1083,6 +1358,7 @@ export function CollectionCaseDetailPage() {
                 Procédures judiciaires : cabinets, audiences, pièces, frais et
                 saisies.
               </p>
+              {canWrite && canLitigation && (
               <button
                 type="button"
                 className="btn btn-primary btn-sm"
@@ -1092,15 +1368,20 @@ export function CollectionCaseDetailPage() {
               >
                 Nouvelle procédure
               </button>
+              )}
               <ul className="timeline-list">
                 {(c.litigations || (c.litigation ? [c.litigation] : [])).map(
                   (lit) => (
                     <li key={lit.id}>
-                      <Link to={`/recouvrement/${id}/contentieux/${lit.id}`}>
+                      <PermLink
+                        user={user}
+                        anyOf={PERM_LITIGATION}
+                        to={`/recouvrement/${id}/contentieux/${lit.id}`}
+                      >
                         <strong>
                           {lit.title || lit.case_reference || "Procédure"}
                         </strong>
-                      </Link>
+                      </PermLink>
                       {" · "}
                       <Badge value={lit.status_display} />
                       {lit.hearing_date && (
@@ -1122,17 +1403,46 @@ export function CollectionCaseDetailPage() {
                   <li className="muted small">Aucune procédure.</li>
                 )}
               </ul>
-              <Link
-                className="btn btn-ghost btn-sm"
-                to="/admin/intervenants-juridiques"
-                style={{ marginTop: 8 }}
-              >
-                Intervenants juridiques
-              </Link>
+              {hasAnyPerm(user, PERM_LEGAL_PARTIES_MANAGE) && (
+                <Link
+                  className="btn btn-ghost btn-sm"
+                  to="/admin/intervenants-juridiques"
+                  style={{ marginTop: 8 }}
+                >
+                  Intervenants juridiques
+                </Link>
+              )}
             </Card>
           )}
         </div>
       )}
+
+      <Card title="Dialogue du dossier" className="mt-card">
+        <p className="muted small" style={{ marginBottom: 10 }}>
+          Échanges généraux sur le dossier (hors action). Pour commenter une
+          relance précise, utilisez le fil sous l&apos;action.
+        </p>
+        <DialogueComposer
+          messages={c.dialogue || []}
+          kind={dialogueKind}
+          body={dialogueBody}
+          onKind={setDialogueKind}
+          onBody={setDialogueBody}
+          onSubmit={() => {
+            if (!dialogueBody.trim()) {
+              setError("Saisissez un message.");
+              return;
+            }
+            setSuccess(null);
+            dialogueMutation.mutate({
+              kind: dialogueKind,
+              body: dialogueBody,
+            });
+          }}
+          pending={dialogueMutation.isPending}
+          emptyLabel="Aucun message sur le dossier."
+        />
+      </Card>
 
       <Card title="Historique des stades" className="mt-card">
         {!c.stage_history?.length ? (
@@ -1157,30 +1467,6 @@ export function CollectionCaseDetailPage() {
         )}
       </Card>
 
-      <Card title="Historique des encaissements" className="mt-card">
-        {!c.repayments?.length ? (
-          <p className="muted">Aucun encaissement.</p>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th className="num">Montant</th>
-                <th>Référence</th>
-              </tr>
-            </thead>
-            <tbody>
-              {c.repayments.map((r) => (
-                <tr key={r.id}>
-                  <td>{r.payment_date}</td>
-                  <td className="num">{formatMoney(r.amount)}</td>
-                  <td>{r.reference || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </Card>
     </div>
   );
 }

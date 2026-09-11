@@ -224,3 +224,38 @@ def test_delegation_allows_user_can_act(tenant_a):
     assert user_can_act(delegator, step) is True
     assert user_can_act(delegate, step) is True
     assert user_can_act(outsider, step) is False
+
+
+def test_apply_proposed_amount_updates_workflow_instance(
+    tenant_a, product_a, client_a,
+):
+    from django.contrib.contenttypes.models import ContentType
+
+    from apps.workflow.services import _apply_proposed_amount
+
+    with tenant_context(tenant_a.id):
+        definition = WorkflowDefinition.objects.create(
+            tenant=tenant_a, code="WF_AMT", version=1, is_active=True
+        )
+        application = CreditApplication.objects.create(
+            tenant=tenant_a,
+            reference="D-AMT",
+            client=client_a,
+            product=product_a,
+            amount_requested=Decimal("15000000"),
+            duration_months=12,
+            risk_level=1,
+        )
+        instance = WorkflowInstance.objects.create(
+            tenant=tenant_a,
+            definition=definition,
+            content_type=ContentType.objects.get_for_model(CreditApplication),
+            object_id=application.id,
+            amount=application.amount_requested,
+            risk_level=1,
+        )
+        _apply_proposed_amount(instance, Decimal("5000000"))
+        instance.refresh_from_db()
+        application.refresh_from_db()
+        assert instance.amount == Decimal("5000000")
+        assert application.amount_proposed == Decimal("5000000")

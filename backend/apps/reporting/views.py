@@ -97,7 +97,12 @@ class GroupConsolidationView(APIView):
     Sans filtre (et hors ?live=1), sert le snapshot matérialisé si frais.
     """
 
-    permission_classes = [IsAuthenticated, MustChangePasswordGate, IsGroupLevel]
+    permission_classes = [
+        IsAuthenticated,
+        MustChangePasswordGate,
+        IsGroupLevel,
+        HasDashboardPermission,
+    ]
 
     def get(self, request):
         if not _want_live(request) and not _has_material_filters(request.query_params):
@@ -113,6 +118,7 @@ class GroupConsolidationView(APIView):
         key = cache_key(
             "dashboard",
             "group",
+            getattr(request.user, "id", None),
             _params_fingerprint(request.query_params),
         )
         ttl = getattr(settings, "DASHBOARD_CACHE_TTL", 45)
@@ -131,7 +137,12 @@ class GroupConsolidationView(APIView):
 class GroupBreakdownView(APIView):
     """Décomposition consolidée selon un axe (drill-down), ex. ?dimension=country."""
 
-    permission_classes = [IsAuthenticated, MustChangePasswordGate, IsGroupLevel]
+    permission_classes = [
+        IsAuthenticated,
+        MustChangePasswordGate,
+        IsGroupLevel,
+        HasDashboardPermission,
+    ]
 
     def get(self, request):
         dimension = request.query_params.get("dimension", "tenant")

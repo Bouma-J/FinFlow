@@ -11,6 +11,7 @@ class TenantNotificationSettingsAdmin(admin.ModelAdmin):
         "notify_on_step",
         "notify_on_completion",
         "notify_collection_email",
+        "notify_collection_transfer",
         "from_email",
     ]
     list_filter = [
@@ -18,6 +19,8 @@ class TenantNotificationSettingsAdmin(admin.ModelAdmin):
         "notify_on_step",
         "notify_on_completion",
         "notify_collection_email",
+        "notify_collection_transfer",
+        "notify_collection_dialogue",
     ]
 
 

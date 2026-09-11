@@ -25,7 +25,7 @@ class CreditProduct(ReferenceModel):
 
     class ClientType(models.TextChoices):
         INDIVIDUAL = "INDIVIDUAL", "Particulier"
-        PROFESSIONAL = "PROFESSIONAL", "Professionnel"
+        PROFESSIONAL = "PROFESSIONAL", "Groupement"
         CORPORATE = "CORPORATE", "Entreprise"
         ALL = "ALL", "Tous"
 

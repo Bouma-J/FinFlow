@@ -8,37 +8,56 @@ from django.http import HttpResponse
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from rest_framework.response import Response
 
-from apps.common.access import DataScope, get_user_agency_ids
+from apps.common.list_filters import apply_gestionnaire, query_param
 from apps.common.viewsets import TenantScopedViewSet
 from apps.documents.models import Document, DocumentCategory
 from apps.documents.serializers import DocumentSerializer
 
+from .access import (
+    filter_qs_by_visible_case,
+    is_collection_officer,
+    is_finflow_admin,
+    require_authored_edit,
+    require_case_operate,
+    require_dialogue_edit,
+    require_finflow_admin,
+    scoped_collection_cases,
+    scoped_loan_decisions,
+)
+from .dation_bridge import require_financial_ops, require_loan_financial_ops
 from .models import (
     CollectionAction,
     CollectionCase,
+    CollectionDialogueMessage,
     CollectionEscalationRule,
+    CollectionTranche,
     LegalParty,
     LitigationCost,
     LitigationEvent,
     LitigationFile,
     LitigationSeizure,
+    LoanRestructure,
     PaymentPromise,
     Repayment,
+    WriteOff,
 )
 from .serializers import (
     CaseAssignSerializer,
     CaseNextActionSerializer,
     CaseReminderSerializer,
-    CaseRepaymentCreateSerializer,
     CaseRestructureSerializer,
     CaseStageSerializer,
     CaseWriteOffSerializer,
     CollectionActionSerializer,
     CollectionCaseListSerializer,
     CollectionCaseSerializer,
+    CollectionDialogueMessageSerializer,
     CollectionEscalationRuleSerializer,
+    CollectionTrancheSerializer,
+    DecisionCommentSerializer,
     LegalPartySerializer,
     LitigationCostCreateSerializer,
     LitigationCostSerializer,
@@ -50,21 +69,33 @@ from .serializers import (
     LitigationSeizureCreateSerializer,
     LitigationSeizureSerializer,
     LitigationUpsertSerializer,
+    LoanRestructureSerializer,
     PaymentPromiseSerializer,
     RepaymentSerializer,
+    WriteOffSerializer,
 )
 from .services import (
+    CBS_REPAYMENT_DENIED,
     agent_dashboard,
-    apply_restructure,
+    approve_restructure,
+    approve_write_off,
+    cancel_restructure,
+    cancel_write_off,
     change_case_stage,
     create_litigation,
     ensure_default_escalation_rules,
+    ensure_default_tranches,
     ensure_litigation_document_categories,
     litigation_documents,
+    propose_restructure,
+    propose_write_off,
+    refresh_loan_overdue,
+    reject_restructure,
+    reject_write_off,
+    replace_collection_tranches,
     send_collection_reminder,
     upcoming_hearings,
     upsert_litigation,
-    write_off_case,
 )
 
 User = get_user_model()
@@ -74,6 +105,19 @@ _CLOSED_LITIGATION_STATUSES = (
     LitigationFile.Status.ABANDONED,
     LitigationFile.Status.SETTLED,
 )
+
+
+def _tenant_from_request(request):
+    """Filiale courante : contexte X-Tenant-Id (groupe) ou user.tenant_id."""
+    from apps.common.tenancy import get_current_tenant_id
+    from apps.tenants.models import Tenant
+
+    tenant_id = get_current_tenant_id() or getattr(
+        request.user, "tenant_id", None
+    )
+    if not tenant_id:
+        return None
+    return Tenant.objects.filter(pk=tenant_id).first()
 
 
 def _litigation_write_payload(validated_data: dict) -> dict:
@@ -88,10 +132,20 @@ def _litigation_write_payload(validated_data: dict) -> dict:
 
 
 class RepaymentViewSet(TenantScopedViewSet):
-    queryset = Repayment.objects.select_related("loan").all()
+    queryset = Repayment.objects.select_related("loan", "created_by").all()
     serializer_class = RepaymentSerializer
     filterset_fields = ["loan"]
     search_fields = ["reference"]
+
+    def get_queryset(self):
+        return filter_qs_by_visible_case(
+            super().get_queryset(),
+            self.request.user,
+            case_field="loan__collection_case",
+        )
+
+    def create(self, request, *args, **kwargs):
+        raise ValidationError({"detail": CBS_REPAYMENT_DENIED})
 
 
 class CollectionCaseViewSet(TenantScopedViewSet):
@@ -102,13 +156,25 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         "loan__application__agency",
         "loan__application__product",
         "assigned_to",
+        "tranche",
     ).prefetch_related(
         "actions",
+        "actions__created_by",
+        "actions__updated_by",
+        "actions__dialogue_messages",
+        "actions__dialogue_messages__created_by",
         "promises",
+        "promises__created_by",
+        "dialogue_messages",
+        "dialogue_messages__created_by",
         "stage_history",
         "stage_history__changed_by",
-        "restructures",
         "write_offs",
+        "write_offs__approved_by",
+        "write_offs__requested_by",
+        "loan__restructures",
+        "loan__restructures__applied_by",
+        "loan__restructures__requested_by",
         "litigations__events",
         "litigations__events__performed_by",
         "litigations__costs",
@@ -123,6 +189,8 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         "loan__repayments",
         "loan__application__guarantees",
         "loan__application__dation_requests",
+        "loan__application__surety_engagements",
+        "loan__application__surety_engagements__surety",
     ).all()
     # Actions sensibles : pas le fallback HTTP→add_collectioncase.
     # Pilotage opérationnel (stade / prochaine action / relance) → change_collectioncase.
@@ -131,18 +199,22 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         "hearings_agenda": ["collections.view_collectioncase"],
         "export_csv": ["collections.view_collectioncase"],
         "add_repayment": ["collections.add_repayment"],
+        "refresh_cbs": ["collections.view_collectioncase"],
         "assign": ["collections.change_collectioncase"],
         "set_stage": ["collections.change_collectioncase"],
         "set_next_action_view": ["collections.change_collectioncase"],
         "send_reminder": ["collections.change_collectioncase"],
         "refresh_overdue": ["collections.change_collectioncase"],
+        "import_cbs_portfolio": ["collections.view_collectioncase"],
         "restructure": ["collections.add_loanrestructure"],
+        "preview_restructure": ["collections.add_loanrestructure"],
         "write_off": ["collections.add_writeoff"],
         # create/update contrôlés finement dans la méthode.
         "litigation": [],
         "litigation_events": ["collections.add_litigationevent"],
+        "add_dialogue": ["collections.view_collectioncase"],
     }
-    filterset_fields = ["stage", "par_class", "assigned_to"]
+    filterset_fields = ["stage", "par_class", "assigned_to", "tranche"]
     ordering_fields = [
         "days_overdue", "overdue_amount", "created_at", "next_action_date",
     ]
@@ -163,21 +235,13 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         user = self.request.user
         if not user or not user.is_authenticated:
             return qs.none()
-        if getattr(user, "is_group_level", False):
-            pass
-        else:
-            scope = getattr(user, "data_scope", DataScope.AGENCY)
-            if scope == DataScope.AGENCY:
-                agency_ids = get_user_agency_ids(user)
-                if not agency_ids:
-                    return qs.none()
-                qs = qs.filter(loan__application__agency_id__in=agency_ids)
-            elif scope == DataScope.OWN:
-                qs = qs.filter(assigned_to=user)
+        qs = scoped_collection_cases(qs, user)
         # TENANT : toute la filiale (déjà scopée par tenant)
         mine = self.request.query_params.get("mine")
         if mine in {"1", "true", "True"}:
-            qs = qs.filter(assigned_to=user)
+            from .access import mine_collection_cases
+
+            qs = mine_collection_cases(qs, user)
         unassigned = self.request.query_params.get("unassigned")
         if unassigned in {"1", "true", "True"}:
             qs = qs.filter(assigned_to__isnull=True)
@@ -197,6 +261,26 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             qs = qs.filter(
                 promises__status=PaymentPromise.Status.BROKEN,
             ).distinct()
+        client = query_param(self.request, "client")
+        if client:
+            qs = qs.filter(loan__application__client_id=client)
+        agency = query_param(self.request, "agency")
+        if agency:
+            qs = qs.filter(loan__application__agency_id=agency)
+        product = query_param(self.request, "product")
+        if product:
+            qs = qs.filter(loan__application__product_id=product)
+        owner_kind = query_param(self.request, "owner_kind")
+        if owner_kind:
+            qs = qs.filter(tranche__owner_kind=owner_kind)
+        qs = apply_gestionnaire(
+            qs,
+            self.request,
+            "loan__application__submitted_by_id",
+            "loan__application__created_by_id",
+        )
+        if query_param(self.request, "cbs_error") in {"1", "true", "True"}:
+            qs = qs.exclude(cbs_sync_error="")
         if self.action == "list":
             qs = qs.annotate(
                 pending_promises_count=Count(
@@ -209,7 +293,9 @@ class CollectionCaseViewSet(TenantScopedViewSet):
     @action(detail=False, methods=["get"], url_path="agent-dashboard")
     def agent_dashboard_view(self, request):
         """Indicateurs portefeuille (mine) ou équipe / filiale (team)."""
-        tenant_id = getattr(request, "tenant_id", None) or getattr(
+        from apps.common.tenancy import get_current_tenant_id
+
+        tenant_id = get_current_tenant_id() or getattr(
             request.user, "tenant_id", None
         )
         scope = request.query_params.get("scope", "mine")
@@ -232,6 +318,12 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             return Response(
                 {"detail": "Sélectionnez une filiale."},
                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        if not (
+            is_finflow_admin(request.user) or is_collection_officer(request.user)
+        ):
+            raise PermissionDenied(
+                "Recalcul CBS réservé au recouvrement et aux administrateurs."
             )
         # sync=1 réservé debug / petits volumes
         sync = str(request.query_params.get("sync", "")).lower() in (
@@ -256,10 +348,79 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             status=status.HTTP_202_ACCEPTED,
         )
 
+    @action(detail=False, methods=["post"], url_path="import-cbs-portfolio")
+    def import_cbs_portfolio(self, request):
+        """Première constitution / relance : crédits CBS → dossiers + tranches."""
+        from apps.common.tenancy import get_current_tenant_id
+        from apps.corebanking.portfolio_import import (
+            import_cbs_portfolio,
+            loan_refs_from_upload,
+        )
+        from apps.corebanking.services import (
+            CoreBankingError,
+            resolve_active_connector,
+        )
+        from apps.corebanking.tasks import import_cbs_portfolio_task
+
+        tenant_id = get_current_tenant_id() or getattr(
+            request.user, "tenant_id", None
+        )
+        if not tenant_id:
+            return Response(
+                {"detail": "Sélectionnez une filiale."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        require_finflow_admin(request.user)
+        try:
+            connector = resolve_active_connector(tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        upload = request.FILES.get("file") or request.FILES.get("fichier")
+        loan_refs = loan_refs_from_upload(upload) if upload else None
+        sync = str(request.query_params.get("sync", "")).lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if sync:
+            try:
+                stats = import_cbs_portfolio(
+                    tenant_id,
+                    connector=connector,
+                    user=request.user,
+                    loan_refs=loan_refs,
+                )
+            except CoreBankingError as exc:
+                raise ValidationError({"detail": str(exc)}) from exc
+            return Response(stats)
+
+        task = import_cbs_portfolio_task.delay(
+            str(tenant_id), str(connector.id), loan_refs
+        )
+        from apps.common.scoped import track_async_task
+
+        track_async_task(task.id, request.user.id)
+        return Response(
+            {
+                "detail": (
+                    "Import des crédits CBS lancé : les dossiers de "
+                    "recouvrement seront classés par tranche."
+                ),
+                "task_id": task.id,
+                "status": "queued",
+            },
+            status=status.HTTP_202_ACCEPTED,
+        )
+
     @action(detail=False, methods=["get"], url_path="hearings-agenda")
     def hearings_agenda(self, request):
         """Agenda des prochaines audiences contentieux."""
-        tenant_id = getattr(request, "tenant_id", None) or getattr(
+        from apps.common.tenancy import get_current_tenant_id
+
+        tenant_id = get_current_tenant_id() or getattr(
             request.user, "tenant_id", None
         )
         try:
@@ -275,28 +436,42 @@ class CollectionCaseViewSet(TenantScopedViewSet):
                 tenant_id=tenant_id,
                 within_days=max(1, min(within_days, 365)),
                 limit=max(1, min(limit, 200)),
+                user=request.user,
             )
+        )
+
+    @action(detail=True, methods=["post"], url_path="refresh-cbs")
+    def refresh_cbs(self, request, pk=None):
+        """Relit l'impayé / le solde de ce prêt depuis le CBS."""
+        case = self.get_object()
+        if not (
+            is_finflow_admin(request.user) or is_collection_officer(request.user)
+        ):
+            require_case_operate(request.user, case)
+        refreshed = refresh_loan_overdue(case.loan)
+        if refreshed is None:
+            raise ValidationError({
+                "detail": "Impossible de lire la situation CBS de ce prêt."
+            })
+        refreshed.refresh_from_db()
+        if refreshed.cbs_sync_error:
+            raise ValidationError({"detail": refreshed.cbs_sync_error})
+        return Response(
+            CollectionCaseSerializer(
+                refreshed, context={"request": request}
+            ).data
         )
 
     @action(detail=True, methods=["post"], url_path="repayments")
     def add_repayment(self, request, pk=None):
-        """Enregistre un encaissement et l'applique à l'échéancier."""
-        case = self.get_object()
-        serializer = CaseRepaymentCreateSerializer(
-            data=request.data, context={"case": case, "request": request}
-        )
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        case.refresh_from_db()
-        return Response(
-            CollectionCaseSerializer(case, context={"request": request}).data,
-            status=status.HTTP_201_CREATED,
-        )
+        """Les encaissements sont gérés par le CBS — saisie locale refusée."""
+        raise ValidationError({"detail": CBS_REPAYMENT_DENIED})
 
     @action(detail=True, methods=["post"], url_path="assign")
     def assign(self, request, pk=None):
         """Affecte (ou retire) l'agent de recouvrement."""
         case = self.get_object()
+        require_case_operate(request.user, case)
         serializer = CaseAssignSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user_id = serializer.validated_data.get("assigned_to")
@@ -309,11 +484,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
                 raise ValidationError({
                     "assigned_to": "Utilisateur introuvable."
                 }) from exc
-            if (
-                not getattr(agent, "is_group_level", False)
-                and agent.tenant_id
-                and agent.tenant_id != case.tenant_id
-            ):
+            if agent.tenant_id and agent.tenant_id != case.tenant_id:
                 raise ValidationError({
                     "assigned_to": "L'agent doit appartenir à la filiale."
                 })
@@ -327,6 +498,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
     def set_stage(self, request, pk=None):
         """Change le stade du dossier (amiable / précontentieux / …)."""
         case = self.get_object()
+        require_case_operate(request.user, case)
         serializer = CaseStageSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         change_case_stage(
@@ -345,6 +517,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
     def set_next_action_view(self, request, pk=None):
         """Planifie la prochaine action / visite."""
         case = self.get_object()
+        require_case_operate(request.user, case)
         serializer = CaseNextActionSerializer(
             data=request.data, context={"case": case}
         )
@@ -355,17 +528,43 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             CollectionCaseSerializer(case, context={"request": request}).data
         )
 
-    @action(detail=True, methods=["post"], url_path="restructure")
-    def restructure(self, request, pk=None):
-        """Restructure le prêt (nouvel échéancier sur capital restant dû)."""
+    @action(detail=True, methods=["post"], url_path="preview-restructure")
+    def preview_restructure(self, request, pk=None):
+        """Calcule l'échéancier proposé sans enregistrer."""
+        from .services import build_restructure_preview
+
         case = self.get_object()
+        require_financial_ops(request.user, case)
         serializer = CaseRestructureSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        data.pop("request_kind", None)
+        data.pop("reason", None)
         try:
-            apply_restructure(
-                case,
+            preview = build_restructure_preview(case.loan, **data)
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        return Response(preview)
+
+    @action(detail=True, methods=["post"], url_path="restructure")
+    def restructure(self, request, pk=None):
+        """Enregistre une demande d'analyse de restructuration."""
+        case = self.get_object()
+        require_financial_ops(request.user, case)
+        serializer = CaseRestructureSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = dict(serializer.validated_data)
+        request_kind = data.pop(
+            "request_kind", LoanRestructure.RequestKind.INTERNAL
+        )
+        try:
+            propose_restructure(
+                case.loan,
                 user=request.user,
-                **serializer.validated_data,
+                origin=LoanRestructure.Origin.COLLECTION,
+                request_kind=request_kind,
+                case=case,
+                **data,
             )
         except ValueError as exc:
             raise ValidationError({"detail": str(exc)}) from exc
@@ -376,12 +575,13 @@ class CollectionCaseViewSet(TenantScopedViewSet):
 
     @action(detail=True, methods=["post"], url_path="write-off")
     def write_off(self, request, pk=None):
-        """Passe le prêt en perte / défaut et clôture le dossier."""
+        """Enregistre une demande de passage en perte."""
         case = self.get_object()
+        require_financial_ops(request.user, case)
         serializer = CaseWriteOffSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         try:
-            write_off_case(
+            propose_write_off(
                 case,
                 user=request.user,
                 **serializer.validated_data,
@@ -397,6 +597,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
     def send_reminder(self, request, pk=None):
         """Envoie immédiatement une relance EMAIL ou SMS (force)."""
         case = self.get_object()
+        require_case_operate(request.user, case)
         serializer = CaseReminderSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         result = send_collection_reminder(
@@ -424,6 +625,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
                     "Droit insuffisant pour gérer le contentieux."
                 )
         case = self.get_object()
+        require_case_operate(request.user, case)
         serializer = LitigationUpsertSerializer(data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         litigation_id = serializer.validated_data.get("litigation_id")
@@ -459,6 +661,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
     def litigation_events(self, request, pk=None):
         """Ajoute un événement à une procédure (optionnel : litigation_id)."""
         case = self.get_object()
+        require_case_operate(request.user, case)
         serializer = LitigationEventCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = dict(serializer.validated_data)
@@ -477,7 +680,14 @@ class CollectionCaseViewSet(TenantScopedViewSet):
                 .first()
             )
         if lit is None:
-            lit = upsert_litigation(case, data={})
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucun dossier contentieux ouvert. "
+                        "Ouvrez d'abord une procédure."
+                    )
+                }
+            )
         event = LitigationEvent.objects.create(
             tenant_id=case.tenant_id,
             litigation=lit,
@@ -490,6 +700,25 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             status=status.HTTP_201_CREATED,
         )
 
+    @action(detail=True, methods=["post"], url_path="dialogue")
+    def add_dialogue(self, request, pk=None):
+        """Message de dialogue (question / demande / recommandation)."""
+        case = self.get_object()
+        payload = request.data.copy()
+        payload["case"] = str(case.id)
+        serializer = CollectionDialogueMessageSerializer(
+            data=payload,
+            context={"request": request},
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(
+            tenant_id=case.tenant_id,
+            case=case,
+            created_by=request.user,
+            updated_by=request.user,
+        )
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
     @action(detail=False, methods=["get"], url_path="export")
     def export_csv(self, request):
         """Export CSV du portefeuille filtré (max 5000 lignes)."""
@@ -497,6 +726,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             "loan__application__client",
             "loan__application__product",
             "assigned_to",
+            "tranche",
         )[:5000]
         buffer = io.StringIO()
         writer = csv.writer(buffer, delimiter=";")
@@ -506,6 +736,7 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             "client",
             "produit",
             "stade",
+            "tranche",
             "par",
             "jours_retard",
             "montant_impaye",
@@ -514,16 +745,17 @@ class CollectionCaseViewSet(TenantScopedViewSet):
             "agent",
         ])
         for c in qs:
-            app = c.loan.application
-            client = getattr(app, "client", None)
-            product = getattr(app, "product", None)
+            app = getattr(c.loan, "application", None)
+            client = getattr(app, "client", None) if app else None
+            product = getattr(app, "product", None) if app else None
             agent = c.assigned_to
             writer.writerow([
                 str(c.id),
-                app.reference or "",
+                (app.reference or "") if app else "",
                 client.display_name if client else "",
                 product.label if product else "",
                 c.stage,
+                c.tranche.name if c.tranche_id else "",
                 c.par_class,
                 c.days_overdue,
                 str(c.overdue_amount),
@@ -542,15 +774,135 @@ class CollectionCaseViewSet(TenantScopedViewSet):
 
 
 class CollectionActionViewSet(TenantScopedViewSet):
-    queryset = CollectionAction.objects.select_related("case").all()
+    queryset = CollectionAction.objects.select_related(
+        "case", "created_by", "updated_by"
+    ).all()
     serializer_class = CollectionActionSerializer
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
     filterset_fields = ["case", "action_type"]
+
+    def get_queryset(self):
+        return filter_qs_by_visible_case(super().get_queryset(), self.request.user)
+
+    def perform_create(self, serializer):
+        case = serializer.validated_data["case"]
+        require_case_operate(self.request.user, case)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        require_authored_edit(self.request.user, serializer.instance)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        require_authored_edit(self.request.user, instance)
+        super().perform_destroy(instance)
 
 
 class PaymentPromiseViewSet(TenantScopedViewSet):
-    queryset = PaymentPromise.objects.select_related("case").all()
+    queryset = PaymentPromise.objects.select_related("case", "created_by").all()
     serializer_class = PaymentPromiseSerializer
     filterset_fields = ["case", "status"]
+
+    def get_queryset(self):
+        return filter_qs_by_visible_case(super().get_queryset(), self.request.user)
+
+    def perform_create(self, serializer):
+        case = serializer.validated_data["case"]
+        require_case_operate(self.request.user, case)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        require_authored_edit(self.request.user, serializer.instance)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        require_authored_edit(self.request.user, instance)
+        super().perform_destroy(instance)
+
+
+class CollectionDialogueMessageViewSet(TenantScopedViewSet):
+    queryset = CollectionDialogueMessage.objects.select_related(
+        "case", "action", "created_by", "updated_by"
+    ).all()
+    serializer_class = CollectionDialogueMessageSerializer
+    filterset_fields = ["case", "action", "kind"]
+    action_perms = {
+        "create": ["collections.view_collectioncase"],
+        "list": ["collections.view_collectioncase"],
+        "retrieve": ["collections.view_collectioncase"],
+        "update": ["collections.view_collectioncase"],
+        "partial_update": ["collections.view_collectioncase"],
+        "destroy": ["collections.view_collectioncase"],
+    }
+
+    def get_queryset(self):
+        return filter_qs_by_visible_case(super().get_queryset(), self.request.user)
+
+    def perform_create(self, serializer):
+        case = serializer.validated_data["case"]
+        visible = scoped_collection_cases(
+            CollectionCase.objects.all(), self.request.user
+        )
+        if not visible.filter(pk=case.pk).exists():
+            raise PermissionDenied("Dossier introuvable.")
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        require_dialogue_edit(self.request.user, serializer.instance)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        require_dialogue_edit(self.request.user, instance)
+        super().perform_destroy(instance)
+
+
+class CollectionTrancheViewSet(TenantScopedViewSet):
+    queryset = CollectionTranche.objects.all()
+    serializer_class = CollectionTrancheSerializer
+    filterset_fields = ["is_active", "owner_kind"]
+    ordering_fields = ["position", "min_days_overdue"]
+    action_perms = {
+        "list": ["collections.view_collectioncase"],
+        "retrieve": ["collections.view_collectioncase"],
+        "replace": ["collections.view_collectiontranche"],
+    }
+
+    def list(self, request, *args, **kwargs):
+        tenant = _tenant_from_request(request)
+        if tenant is not None:
+            ensure_default_tranches(tenant)
+        return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        require_finflow_admin(self.request.user)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        require_finflow_admin(self.request.user)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        require_finflow_admin(self.request.user)
+        super().perform_destroy(instance)
+
+    @action(detail=False, methods=["post"], url_path="replace")
+    def replace(self, request):
+        tenant = _tenant_from_request(request)
+        if tenant is None:
+            return Response(
+                {"detail": "Sélectionnez une filiale."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        require_finflow_admin(request.user)
+        items = request.data.get("tranches")
+        if items is None and isinstance(request.data, list):
+            items = request.data
+        if not isinstance(items, list):
+            raise ValidationError(
+                {"tranches": "Envoyez la liste complète des tranches."}
+            )
+        created = replace_collection_tranches(tenant=tenant, items=items)
+        return Response(CollectionTrancheSerializer(created, many=True).data)
 
 
 class CollectionEscalationRuleViewSet(TenantScopedViewSet):
@@ -560,14 +912,22 @@ class CollectionEscalationRuleViewSet(TenantScopedViewSet):
     ordering_fields = ["min_days_overdue"]
 
     def list(self, request, *args, **kwargs):
-        tenant = getattr(request, "tenant", None)
-        if tenant is None and getattr(request.user, "tenant_id", None):
-            from apps.tenants.models import Tenant
-
-            tenant = Tenant.objects.filter(pk=request.user.tenant_id).first()
+        tenant = _tenant_from_request(request)
         if tenant is not None:
             ensure_default_escalation_rules(tenant)
         return super().list(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        require_finflow_admin(self.request.user)
+        super().perform_create(serializer)
+
+    def perform_update(self, serializer):
+        require_finflow_admin(self.request.user)
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        require_finflow_admin(self.request.user)
+        super().perform_destroy(instance)
 
 
 class LegalPartyViewSet(TenantScopedViewSet):
@@ -581,6 +941,8 @@ class LegalPartyViewSet(TenantScopedViewSet):
 class LitigationFileViewSet(TenantScopedViewSet):
     queryset = LitigationFile.objects.select_related(
         "case",
+        "case__loan",
+        "case__loan__application",
         "law_firm",
         "lawyer_party",
         "bailiff_party",
@@ -612,19 +974,28 @@ class LitigationFileViewSet(TenantScopedViewSet):
             return
         raise PermissionDenied(message)
 
+    def get_queryset(self):
+        return filter_qs_by_visible_case(super().get_queryset(), self.request.user)
+
     def get_serializer_class(self):
         if self.action in {"create", "update", "partial_update"}:
             return LitigationFileWriteSerializer
         return LitigationFileSerializer
 
     def create(self, request, *args, **kwargs):
-        serializer = LitigationFileWriteSerializer(data=request.data)
+        serializer = LitigationFileWriteSerializer(
+            data=request.data, context={"request": request}
+        )
         serializer.is_valid(raise_exception=True)
         case = serializer.validated_data.get("case")
         if case is None:
             raise ValidationError({"case": "Dossier de recouvrement requis."})
+        require_case_operate(request.user, case)
         payload = _litigation_write_payload(serializer.validated_data)
-        lit = create_litigation(case, data=payload)
+        try:
+            lit = create_litigation(case, data=payload)
+        except ValueError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
         return Response(
             LitigationFileSerializer(lit, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
@@ -633,8 +1004,11 @@ class LitigationFileViewSet(TenantScopedViewSet):
     def update(self, request, *args, **kwargs):
         partial = kwargs.pop("partial", False)
         lit = self.get_object()
+        require_case_operate(request.user, lit.case)
         serializer = LitigationFileWriteSerializer(
-            data=request.data, partial=partial
+            data=request.data,
+            partial=partial,
+            context={"request": request},
         )
         serializer.is_valid(raise_exception=True)
         payload = _litigation_write_payload(serializer.validated_data)
@@ -658,6 +1032,7 @@ class LitigationFileViewSet(TenantScopedViewSet):
         if request.method == "GET":
             qs = lit.events.select_related("performed_by").all()
             return Response(LitigationEventSerializer(qs, many=True).data)
+        require_case_operate(request.user, lit.case)
         self._require_perm(
             request.user,
             "collections.add_litigationevent",
@@ -685,6 +1060,7 @@ class LitigationFileViewSet(TenantScopedViewSet):
         if request.method == "GET":
             qs = lit.seizures.select_related("bailiff", "guarantee").all()
             return Response(LitigationSeizureSerializer(qs, many=True).data)
+        require_case_operate(request.user, lit.case)
         self._require_perm(
             request.user,
             "collections.add_litigationseizure",
@@ -708,6 +1084,7 @@ class LitigationFileViewSet(TenantScopedViewSet):
         if request.method == "GET":
             qs = lit.costs.select_related("party").all()
             return Response(LitigationCostSerializer(qs, many=True).data)
+        require_case_operate(request.user, lit.case)
         self._require_perm(
             request.user,
             "collections.add_litigationcost",
@@ -734,6 +1111,7 @@ class LitigationFileViewSet(TenantScopedViewSet):
             )
             return Response(DocumentSerializer(docs, many=True).data)
 
+        require_case_operate(request.user, lit.case)
         self._require_perm(
             request.user,
             "collections.change_litigationfile",
@@ -785,3 +1163,130 @@ class LitigationFileViewSet(TenantScopedViewSet):
         lit = self.get_object()
         created = ensure_litigation_document_categories(lit.tenant)
         return Response({"created": created})
+
+
+def _decision_error(exc):
+    if isinstance(exc, PermissionDenied):
+        raise exc
+    raise ValidationError({"detail": str(exc)}) from exc
+
+
+class LoanRestructureViewSet(TenantScopedViewSet):
+    queryset = LoanRestructure.objects.select_related(
+        "loan", "case", "requested_by", "applied_by"
+    ).all()
+    serializer_class = LoanRestructureSerializer
+    http_method_names = ["get", "post", "head", "options"]
+    action_perms = {
+        "approve": ["collections.change_loanrestructure"],
+        "reject": ["collections.change_loanrestructure"],
+        "cancel": [],
+    }
+
+    def get_queryset(self):
+        return scoped_loan_decisions(super().get_queryset(), self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        raise PermissionDenied("Utilisez la fiche prêt ou le dossier de recouvrement.")
+
+    def _record(self):
+        return self.get_object()
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        serializer = DecisionCommentSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        record = self._record()
+        require_loan_financial_ops(record.loan, user=request.user)
+        try:
+            record = approve_restructure(
+                self._record(),
+                user=request.user,
+                comment=serializer.validated_data.get("comment") or "",
+            )
+        except ValueError as exc:
+            _decision_error(exc)
+        return Response(LoanRestructureSerializer(record).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        serializer = DecisionCommentSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        try:
+            record = reject_restructure(
+                self._record(),
+                user=request.user,
+                comment=serializer.validated_data.get("comment") or "",
+            )
+        except ValueError as exc:
+            _decision_error(exc)
+        return Response(LoanRestructureSerializer(record).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        try:
+            record = cancel_restructure(self._record(), user=request.user)
+        except ValueError as exc:
+            _decision_error(exc)
+        return Response(LoanRestructureSerializer(record).data)
+
+
+class WriteOffViewSet(TenantScopedViewSet):
+    queryset = WriteOff.objects.select_related(
+        "loan", "case", "requested_by", "approved_by"
+    ).all()
+    serializer_class = WriteOffSerializer
+    http_method_names = ["get", "post", "head", "options"]
+    action_perms = {
+        "approve": ["collections.change_writeoff"],
+        "reject": ["collections.change_writeoff"],
+        "cancel": [],
+    }
+
+    def get_queryset(self):
+        return scoped_loan_decisions(super().get_queryset(), self.request.user)
+
+    def create(self, request, *args, **kwargs):
+        raise PermissionDenied("Utilisez le dossier de recouvrement.")
+
+    def _record(self):
+        return self.get_object()
+
+    @action(detail=True, methods=["post"])
+    def approve(self, request, pk=None):
+        serializer = DecisionCommentSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        record = self._record()
+        require_loan_financial_ops(record.loan, user=request.user)
+        try:
+            record = approve_write_off(
+                self._record(),
+                user=request.user,
+                comment=serializer.validated_data.get("comment") or "",
+            )
+        except ValueError as exc:
+            _decision_error(exc)
+        return Response(WriteOffSerializer(record).data)
+
+    @action(detail=True, methods=["post"])
+    def reject(self, request, pk=None):
+        serializer = DecisionCommentSerializer(data=request.data or {})
+        serializer.is_valid(raise_exception=True)
+        try:
+            record = reject_write_off(
+                self._record(),
+                user=request.user,
+                comment=serializer.validated_data.get("comment") or "",
+            )
+        except ValueError as exc:
+            _decision_error(exc)
+        return Response(WriteOffSerializer(record).data)
+
+    @action(detail=True, methods=["post"])
+    def cancel(self, request, pk=None):
+        try:
+            record = cancel_write_off(self._record(), user=request.user)
+        except ValueError as exc:
+            _decision_error(exc)
+        return Response(WriteOffSerializer(record).data)
+

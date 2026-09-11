@@ -25,6 +25,7 @@ import {
   EmptyState,
   PageHeader,
   Spinner,
+  TenantScopeNotice,
 } from "@/components/ui";
 
 const KIND_LABEL: Record<string, string> = {
@@ -36,6 +37,7 @@ const KIND_LABEL: Record<string, string> = {
 
 export function AfterSalesHubPage() {
   const { user, activeTenant } = useAuth();
+  const needsTenant = Boolean(user?.is_group_level && !activeTenant);
 
   const canMl = hasAnyPerm(user, PERM_RELEASES);
   const canDation = hasAnyPerm(user, PERM_DATIONS);
@@ -50,6 +52,7 @@ export function AfterSalesHubPage() {
           params: activeTenant ? { tenant: activeTenant } : {},
         })
       ).data,
+    enabled: !needsTenant,
   });
 
   const m = hub.data?.modules;
@@ -120,6 +123,14 @@ export function AfterSalesHubPage() {
     extra: string | null;
   }>;
 
+  const recent = (hub.data?.recent ?? []).filter((row) => {
+    if (row.kind === "MAIN_LEVEE") return canMl;
+    if (row.kind === "DATION") return canDation;
+    if (row.kind === "FORMALISATION") return canForm;
+    if (row.kind === "COLLECTION") return canColl;
+    return false;
+  });
+
   return (
     <div className="page-shell">
       <PageHeader
@@ -128,7 +139,9 @@ export function AfterSalesHubPage() {
         subtitle="Mains levées, dations, formalisations et recouvrement"
       />
 
-      {hub.isLoading ? (
+      {needsTenant ? (
+        <TenantScopeNotice />
+      ) : hub.isLoading ? (
         <Spinner />
       ) : hub.isError ? (
         <EmptyState message="Impossible de charger le hub après-vente." />
@@ -227,7 +240,7 @@ export function AfterSalesHubPage() {
           </div>
 
           <Card title="Files récentes">
-            {!hub.data?.recent?.length ? (
+            {!recent.length ? (
               <EmptyState message="Aucun dossier après-vente ouvert." />
             ) : (
               <table className="table">
@@ -241,7 +254,7 @@ export function AfterSalesHubPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {hub.data.recent.map((row) => (
+                  {recent.map((row) => (
                     <tr key={`${row.kind}-${row.id}`}>
                       <td>
                         <Badge

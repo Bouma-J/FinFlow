@@ -49,9 +49,7 @@ def assert_analysis_ready_for_submission(application):
             "dans l'analyse de référence."
         )
 
-    ctype = reference.client_type or getattr(
-        application.client, "client_type", ""
-    )
+    ctype = getattr(application.client, "client_type", "") or reference.client_type
 
     if ctype == "CORPORATE":
         if _dec(reference.turnover) <= 0:
@@ -97,4 +95,20 @@ def assert_analysis_ready_for_submission(application):
                 "rattachez-en au moins une avant soumission."
             )
 
+    return reference
+
+
+def refresh_reference_analysis(application):
+    """Recalcule l'analyse de référence à partir des conditions actuelles."""
+    from .models import FinancialAnalysis
+
+    if application is None or not getattr(application, "pk", None):
+        return None
+    reference = (
+        application.financial_analyses.filter(is_reference=True).first()
+        or application.financial_analyses.order_by("-created_at").first()
+    )
+    if reference is None:
+        return None
+    reference.save()
     return reference
