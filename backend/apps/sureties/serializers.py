@@ -151,7 +151,7 @@ class SuretyDocumentSerializer(serializers.ModelSerializer):
 
 
 class SuretyListSerializer(serializers.ModelSerializer):
-    """Liste allégée — sans engagements ni scans."""
+    """Liste allégée — résumé des engagements ouverts (client / crédit / caution)."""
 
     display_name = serializers.CharField(read_only=True)
     total_committed = serializers.DecimalField(
@@ -160,16 +160,91 @@ class SuretyListSerializer(serializers.ModelSerializer):
     available_ceiling = serializers.DecimalField(
         max_digits=18, decimal_places=2, read_only=True
     )
+    client_display = serializers.SerializerMethodField()
+    credit_amount = serializers.SerializerMethodField()
+    credit_currency = serializers.SerializerMethodField()
+    guaranteed_amount = serializers.SerializerMethodField()
 
     class Meta:
         model = Surety
         fields = [
             "id", "surety_type", "display_name", "agency", "phone", "city",
             "activity",
+            "client_display", "credit_amount", "credit_currency",
+            "guaranteed_amount",
             "commitment_ceiling", "total_committed", "available_ceiling",
             "is_active", "created_at",
         ]
         read_only_fields = fields
+
+    def _open_engagements(self, obj):
+        cached = getattr(obj, "_prefetched_objects_cache", {}).get("engagements")
+        if cached is not None:
+            open_statuses = {
+                SuretyEngagement.Status.ACTIVE,
+                SuretyEngagement.Status.CALLED,
+            }
+            rows = [e for e in cached if e.status in open_statuses]
+            rows.sort(key=lambda e: e.created_at or e.pk, reverse=True)
+            return rows
+        return list(
+            obj.engagements.filter(
+                status__in=[
+                    SuretyEngagement.Status.ACTIVE,
+                    SuretyEngagement.Status.CALLED,
+                ]
+            )
+            .select_related("application", "application__client")
+            .order_by("-created_at")
+        )
+
+    def get_client_display(self, obj):
+        engagements = self._open_engagements(obj)
+        if not engagements:
+            return ""
+        names = []
+        seen = set()
+        for eng in engagements:
+            client = getattr(eng.application, "client", None)
+            if not client:
+                continue
+            label = (getattr(client, "display_name", None) or str(client)).strip()
+            if not label or label in seen:
+                continue
+            seen.add(label)
+            names.append(label)
+        if not names:
+            return ""
+        if len(names) == 1:
+            return names[0]
+        return f"{names[0]} (+{len(names) - 1})"
+
+    def get_credit_amount(self, obj):
+        engagements = self._open_engagements(obj)
+        if not engagements:
+            return None
+        app = engagements[0].application
+        if app is None:
+            return None
+        for attr in ("amount_approved", "amount_proposed", "amount_requested"):
+            value = getattr(app, attr, None)
+            if value is not None:
+                return value
+        return None
+
+    def get_credit_currency(self, obj):
+        engagements = self._open_engagements(obj)
+        if not engagements or engagements[0].application is None:
+            return None
+        return getattr(engagements[0].application, "currency", None) or None
+
+    def get_guaranteed_amount(self, obj):
+        engagements = self._open_engagements(obj)
+        if not engagements:
+            return None
+        if len(engagements) == 1:
+            return engagements[0].amount
+        return obj.total_committed
 
 
 class SuretySerializer(serializers.ModelSerializer):

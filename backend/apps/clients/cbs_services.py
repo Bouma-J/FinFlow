@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal, InvalidOperation
 
 from django.db import transaction
 from django.utils import timezone
@@ -86,6 +87,26 @@ def _parse_date(value):
         return None
 
 
+def _parse_decimal(value):
+    text = _blank(value)
+    if not text:
+        return None
+    try:
+        return Decimal(text)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _parse_int(value):
+    text = _blank(value)
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except (TypeError, ValueError):
+        return None
+
+
 def _map_civility(value: str) -> str:
     return _CIVILITY_MAP.get(_blank(value).upper(), "")
 
@@ -111,6 +132,21 @@ def _map_marital(value: str) -> str:
         "VEUVE": MaritalStatus.WIDOWED,
         "WIDOWED": MaritalStatus.WIDOWED,
     }.get(key, _MARITAL_MAP.get(_blank(value).upper(), ""))
+
+
+def build_cbs_situation_snapshot(preview: dict) -> dict:
+    """Copie de sauvegarde JSON (normalisée + raw), en plus des colonnes."""
+    snapshot: dict = {}
+    for key, value in (preview or {}).items():
+        if hasattr(value, "isoformat"):
+            snapshot[key] = value.isoformat()
+        elif isinstance(value, Decimal):
+            snapshot[key] = str(value)
+        elif isinstance(value, (str, int, float, bool, type(None), list, dict)):
+            snapshot[key] = value
+        else:
+            snapshot[key] = str(value)
+    return snapshot
 
 
 def parse_identifiers(data: dict, client_type: str) -> dict:
@@ -293,6 +329,145 @@ def _resolve_agency(*, tenant_id, user, point_of_service: str):
     return None
 
 
+def map_preview_to_client_fields(
+    *,
+    preview: dict,
+    client_type: str,
+    tenant_id,
+    user,
+    agency,
+    kyc_status: str,
+) -> dict:
+    """
+    Mapping champ-par-champ situation CBS → colonnes ``Client``.
+
+    Correspondance API normalisée → modèle :
+    - full_name → cbs_full_name (+ last_name si nom/prénom absents)
+    - last_name / first_name → last_name / first_name
+    - company_name / sigle → company_name / sigle
+    - code_adherent → cbs_client_id
+    - num_manuel → cbs_account_number
+    - num_piece_identite → national_id
+    - identification_nationale → ifu
+    - num_carte_operateur → rccm
+    - num_ordre → cbs_order_number
+    - birth_date → birth_date
+    - birth_place → birth_country
+    - civility / marital_status → civility / marital_status
+    - spouse_name → spouse_last_name
+    - id_document_* → id_document_*
+    - id_profession → cbs_profession_id ; profession → profession
+    - id_nationalite → cbs_nationality_id ; nationality → nationality
+    - date_creation → cbs_creation_date
+    - head_office → head_office (+ address morale)
+    - id_secteur_activite → cbs_sector_id
+    - id_type_client → cbs_client_type_id
+    - id_zone → cbs_zone_id
+    - id_produit_epg → cbs_savings_product_id
+    - nbre_signature → cbs_signature_count
+    - distance → cbs_distance
+    - phone / email / city / address / boite_postale
+    - date_inscription → cbs_registration_date
+    - limit_credit → cbs_credit_limit
+    - est_valide → cbs_est_valide
+    - id_point_service / nom_point_service → cbs_point_of_service_*
+    - context / message → cbs_context / cbs_message
+    - raw.externalId → cbs_external_id
+    """
+    raw = preview.get("raw") if isinstance(preview.get("raw"), dict) else {}
+    code = _blank(preview.get("code_adherent"))
+
+    fields = {
+        "tenant_id": tenant_id or get_current_tenant_id(),
+        "client_type": client_type,
+        "agency": agency,
+        "phone": _blank(preview.get("phone")),
+        "email": _blank(preview.get("email")),
+        "city": _blank(preview.get("city")),
+        "address": _blank(preview.get("address")),
+        "postal_box": _blank(preview.get("boite_postale")),
+        "head_office": _blank(preview.get("head_office")),
+        "sigle": _blank(preview.get("sigle")),
+        "cbs_client_id": code,
+        "cbs_account_number": _blank(preview.get("num_manuel")),
+        "cbs_full_name": _blank(preview.get("full_name")),
+        "cbs_order_number": _blank(preview.get("num_ordre")),
+        "cbs_profession_id": _blank(preview.get("id_profession")),
+        "cbs_nationality_id": _blank(preview.get("id_nationalite")),
+        "cbs_sector_id": _blank(preview.get("id_secteur_activite")),
+        "cbs_client_type_id": _blank(preview.get("id_type_client")),
+        "cbs_zone_id": _blank(preview.get("id_zone")),
+        "cbs_savings_product_id": _blank(preview.get("id_produit_epg")),
+        "cbs_signature_count": _parse_int(preview.get("nbre_signature")),
+        "cbs_distance": _parse_decimal(preview.get("distance")),
+        "cbs_registration_date": _parse_date(preview.get("date_inscription")),
+        "cbs_creation_date": _parse_date(preview.get("date_creation")),
+        "cbs_credit_limit": _parse_decimal(preview.get("limit_credit")),
+        "cbs_est_valide": (
+            bool(preview.get("est_valide"))
+            if preview.get("est_valide") is not None
+            else None
+        ),
+        "cbs_point_of_service_id": _blank(preview.get("id_point_service")),
+        "cbs_point_of_service_name": _blank(preview.get("nom_point_service")),
+        "cbs_external_id": _blank(
+            raw.get("externalId") or preview.get("external_id")
+        ),
+        "cbs_context": _blank(preview.get("context")),
+        "cbs_message": _blank(preview.get("message")),
+        "cbs_synced_at": timezone.now(),
+        "cbs_situation": build_cbs_situation_snapshot(preview),
+        "kyc_status": kyc_status,
+        "created_by": user if getattr(user, "is_authenticated", False) else None,
+        "updated_by": user if getattr(user, "is_authenticated", False) else None,
+    }
+
+    if client_type == Client.ClientType.INDIVIDUAL:
+        last_name = _blank(preview.get("last_name"))
+        first_name = _blank(preview.get("first_name"))
+        if not last_name and not first_name:
+            last_name = _blank(preview.get("full_name"))
+        fields.update(
+            {
+                "last_name": last_name,
+                "first_name": first_name,
+                "birth_date": _parse_date(preview.get("birth_date")),
+                "birth_country": _blank(preview.get("birth_place")),
+                "civility": _map_civility(preview.get("civility") or ""),
+                "marital_status": _map_marital(
+                    preview.get("marital_status") or ""
+                ),
+                "spouse_last_name": _blank(preview.get("spouse_name")),
+                "national_id": _blank(preview.get("num_piece_identite")),
+                "id_document_issue_date": _parse_date(
+                    preview.get("id_document_issue_date")
+                ),
+                "id_document_expiry_date": _parse_date(
+                    preview.get("id_document_expiry_date")
+                ),
+                "profession": _blank(preview.get("profession")),
+                "nationality": _blank(preview.get("nationality")),
+            }
+        )
+    else:
+        fields.update(
+            {
+                "company_name": _blank(
+                    preview.get("company_name") or preview.get("full_name")
+                ),
+                "ifu": _blank(preview.get("identification_nationale")),
+                "rccm": _blank(preview.get("num_carte_operateur")),
+                "address": _blank(preview.get("head_office"))
+                or _blank(preview.get("address")),
+            }
+        )
+
+    if kyc_status == Client.KycStatus.VALIDATED:
+        fields["kyc_validated_at"] = timezone.localdate()
+
+    return fields
+
+
 @transaction.atomic
 def import_client_from_cbs(*, tenant_id, user, data: dict) -> tuple[Client, dict]:
     """
@@ -334,73 +509,13 @@ def import_client_from_cbs(*, tenant_id, user, data: dict) -> tuple[Client, dict
         user=user,
         point_of_service=_blank(preview.get("id_point_service")),
     )
-
-    fields = {
-        "tenant_id": tenant_id or get_current_tenant_id(),
-        "client_type": client_type,
-        "agency": agency,
-        "phone": _blank(preview.get("phone")),
-        "email": _blank(preview.get("email")),
-        "city": _blank(preview.get("city")),
-        "address": _blank(preview.get("address")),
-        "cbs_client_id": code,
-        "cbs_account_number": _blank(preview.get("num_manuel")),
-        "kyc_status": kyc_status,
-        "created_by": user if getattr(user, "is_authenticated", False) else None,
-        "updated_by": user if getattr(user, "is_authenticated", False) else None,
-    }
-
-    if client_type == Client.ClientType.INDIVIDUAL:
-        last_name = _blank(preview.get("last_name"))
-        first_name = _blank(preview.get("first_name"))
-        if not last_name and not first_name:
-            last_name = _blank(preview.get("full_name"))
-        fields.update(
-            {
-                "last_name": last_name,
-                "first_name": first_name,
-                "birth_date": _parse_date(preview.get("birth_date")),
-                "birth_country": _blank(preview.get("birth_place")),
-                "civility": _map_civility(preview.get("civility") or ""),
-                "marital_status": _map_marital(
-                    preview.get("marital_status") or ""
-                ),
-                "spouse_last_name": _blank(preview.get("spouse_name")),
-                "national_id": _blank(preview.get("num_piece_identite")),
-                "id_document_issue_date": _parse_date(
-                    preview.get("id_document_issue_date")
-                ),
-                "id_document_expiry_date": _parse_date(
-                    preview.get("id_document_expiry_date")
-                ),
-                "profession": _blank(
-                    preview.get("profession") or preview.get("id_profession")
-                ),
-                "nationality": _blank(
-                    preview.get("nationality") or preview.get("id_nationalite")
-                ),
-            }
-        )
-    else:
-        company = _blank(preview.get("company_name") or preview.get("full_name"))
-        sigle = _blank(preview.get("sigle"))
-        if sigle and sigle.upper() not in company.upper():
-            company = f"{company} ({sigle})" if company else sigle
-        fields.update(
-            {
-                "company_name": company,
-                "ifu": _blank(preview.get("identification_nationale")),
-                "rccm": _blank(
-                    preview.get("num_carte_operateur")
-                    or preview.get("num_ordre")
-                ),
-                "address": _blank(preview.get("head_office"))
-                or _blank(preview.get("address")),
-            }
-        )
-
-    if kyc_status == Client.KycStatus.VALIDATED:
-        fields["kyc_validated_at"] = timezone.localdate()
-
+    fields = map_preview_to_client_fields(
+        preview=preview,
+        client_type=client_type,
+        tenant_id=tenant_id,
+        user=user,
+        agency=agency,
+        kyc_status=kyc_status,
+    )
     client = Client.objects.create(**fields)
     return client, preview

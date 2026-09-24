@@ -28,11 +28,14 @@ UI_APPLICATION_LIST_FIELDS = {
     "client_display",
     "client_reference",
     "product_label",
+    "agency",
+    "agency_display",
     "amount_requested",
     "amount_proposed",
     "amount_approved",
     "status",
     "status_display",
+    "submitted_by_display",
     "collection_case_id",
     "collection_stage_display",
 }
@@ -65,6 +68,8 @@ UI_MY_DOSSIERS_FIELDS = {
     "amount_proposed",
     "status",
     "status_display",
+    "current_step_name",
+    "current_step_label",
 }
 
 
@@ -398,6 +403,8 @@ def test_my_dossiers_client_type_filters_and_amounts(
         )
         ct = ContentType.objects.get_for_model(CreditApplication)
         for app in (person_app, gie_app, corp_app):
+            app.status = CreditApplication.Status.IN_APPROVAL
+            app.save(update_fields=["status", "updated_at"])
             WorkflowInstance.objects.create(
                 tenant=tenant_a,
                 definition=definition,
@@ -407,7 +414,11 @@ def test_my_dossiers_client_type_filters_and_amounts(
             )
 
     api, headers = _auth(user, tenant_a)
-    all_rows = api.get("/api/v1/approval-tasks/my_dossiers/", **headers)
+    all_rows = api.get(
+        "/api/v1/approval-tasks/my_dossiers/",
+        {"queue": "all"},
+        **headers,
+    )
     assert all_rows.status_code == 200, all_rows.content
     refs = {r["reference"] for r in all_rows.json()["results"]}
     assert {"DOS-IO-P", "DOS-IO-G", "DOS-IO-C"} <= refs
@@ -422,7 +433,7 @@ def test_my_dossiers_client_type_filters_and_amounts(
 
     groupement = api.get(
         "/api/v1/approval-tasks/my_dossiers/",
-        {"client_type": "groupement"},
+        {"client_type": "groupement", "queue": "all"},
         **headers,
     )
     assert {r["reference"] for r in groupement.json()["results"]} == {"DOS-IO-G"}
@@ -431,14 +442,14 @@ def test_my_dossiers_client_type_filters_and_amounts(
 
     entreprise = api.get(
         "/api/v1/approval-tasks/my_dossiers/",
-        {"client_type": "entreprise"},
+        {"client_type": "entreprise", "queue": "all"},
         **headers,
     )
     assert {r["reference"] for r in entreprise.json()["results"]} == {"DOS-IO-C"}
 
     particulier = api.get(
         "/api/v1/approval-tasks/my_dossiers/",
-        {"client_type": "particulier"},
+        {"client_type": "particulier", "queue": "all"},
         **headers,
     )
     assert {r["reference"] for r in particulier.json()["results"]} == {"DOS-IO-P"}

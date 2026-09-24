@@ -13,6 +13,7 @@ export function PermLink({
   fallback,
   className,
   onClick,
+  state,
 }: {
   user: CurrentUser | null | undefined;
   anyOf: readonly string[];
@@ -21,6 +22,7 @@ export function PermLink({
   fallback?: ReactNode;
   className?: string;
   onClick?: (e: MouseEvent<HTMLAnchorElement>) => void;
+  state?: unknown;
 }) {
   if (!hasAnyPerm(user, anyOf)) {
     if (fallback === null) return null;
@@ -29,7 +31,7 @@ export function PermLink({
     return <>{children}</>;
   }
   return (
-    <Link to={to} className={className} onClick={onClick}>
+    <Link to={to} state={state} className={className} onClick={onClick}>
       {children}
     </Link>
   );

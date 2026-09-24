@@ -32,6 +32,46 @@ class WorkflowDefinition(TenantScopedModel):
     version = models.PositiveIntegerField("version", default=1)
     is_active = models.BooleanField("actif", default=True)
 
+    # Critères de sélection du circuit (optionnels, combinables).
+    # - montant seul, produit/famille seul, ou les deux
+    # - null = pas de filtre sur ce critère
+    min_amount = models.DecimalField(
+        "montant plancher (circuit)",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Inclusif. Vide = pas de plancher.",
+    )
+    max_amount = models.DecimalField(
+        "montant plafond (circuit)",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Inclusif. Vide = pas de plafond.",
+    )
+    product = models.ForeignKey(
+        "catalog.CreditProduct",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="workflow_definitions",
+        verbose_name="produit de crédit",
+        help_text="Circuit réservé à ce produit. Vide = tous les produits "
+        "(sauf filtre famille).",
+    )
+    product_category = models.ForeignKey(
+        "catalog.ProductCategory",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="workflow_definitions",
+        verbose_name="famille de produits",
+        help_text="Circuit réservé à cette famille (ex. immobilier). "
+        "Ignoré si un produit précis est renseigné.",
+    )
+
     class Meta:
         verbose_name = "circuit d'approbation"
         verbose_name_plural = "circuits d'approbation"
@@ -45,6 +85,44 @@ class WorkflowDefinition(TenantScopedModel):
 
     def __str__(self):
         return f"{self.code} v{self.version}"
+
+    def matches_amount(self, amount) -> bool:
+        """True si le montant entre dans la tranche du circuit (bornes inclusives)."""
+        if amount is None:
+            amount = 0
+        if self.min_amount is not None and amount < self.min_amount:
+            return False
+        if self.max_amount is not None and amount > self.max_amount:
+            return False
+        return True
+
+    def matches_product(self, product) -> bool:
+        """True si le produit du dossier satisfait les filtres produit/famille."""
+        if self.product_id is None and self.product_category_id is None:
+            return True
+        if product is None:
+            return False
+        if self.product_id is not None:
+            return str(product.pk) == str(self.product_id)
+        category_id = getattr(product, "category_id", None)
+        return (
+            category_id is not None
+            and str(category_id) == str(self.product_category_id)
+        )
+
+    def matches(self, amount, product=None) -> bool:
+        return self.matches_amount(amount) and self.matches_product(product)
+
+    def specificity_score(self) -> int:
+        """Plus le score est élevé, plus le circuit est ciblé (prioritaire)."""
+        score = 0
+        if self.min_amount is not None or self.max_amount is not None:
+            score += 2
+        if self.product_id is not None:
+            score += 2
+        elif self.product_category_id is not None:
+            score += 1
+        return score
 
 
 class ApprovalStep(TenantScopedModel):

@@ -14,11 +14,12 @@ from .portfolio_import import (
     is_live_cbs_connector,
     loan_refs_from_upload,
 )
+from .ref_sync import SYNC_SCOPES, sync_cbs_referentials
 from .serializers import (
     CoreBankingConnectorSerializer,
     IntegrationLogSerializer,
 )
-from .services import CoreBankingError, send_operation
+from .services import CoreBankingError, probe_credit_situation, send_operation
 
 
 class CoreBankingConnectorViewSet(TenantScopedViewSet):
@@ -27,6 +28,8 @@ class CoreBankingConnectorViewSet(TenantScopedViewSet):
     action_perms = {
         "test_operation": ["corebanking.change_corebankingconnector"],
         "import_portfolio": ["corebanking.change_corebankingconnector"],
+        "sync_referentials": ["corebanking.change_corebankingconnector"],
+        "probe_situation": ["corebanking.view_corebankingconnector"],
     }
     filterset_fields = ["protocol", "is_active"]
     search_fields = ["name"]
@@ -55,6 +58,80 @@ class CoreBankingConnectorViewSet(TenantScopedViewSet):
         payload = request.data.get("payload", {})
         log = send_operation(connector, operation, payload)
         return Response(IntegrationLogSerializer(log).data)
+
+    @action(detail=False, methods=["post"], url_path="probe-situation")
+    def probe_situation(self, request):
+        """
+        Vérification admin ``crd/situation`` :
+        body ``{ refDemande, codeAdherent }`` → réponse classée pour l'UI.
+        """
+        import logging
+        from decimal import Decimal
+
+        from apps.common.tenancy import get_current_tenant_id
+
+        require_finflow_admin(request.user)
+        ref = str(
+            request.data.get("refDemande") or request.data.get("ref_demande") or ""
+        ).strip()
+        code = str(
+            request.data.get("codeAdherent")
+            or request.data.get("code_adherent")
+            or ""
+        ).strip()
+        if not ref:
+            raise ValidationError({"refDemande": "Obligatoire."})
+        if not code:
+            raise ValidationError({"codeAdherent": "Obligatoire."})
+
+        logger = logging.getLogger("finflow")
+        tenant_id = get_current_tenant_id()
+        try:
+            result = probe_credit_situation(
+                tenant_id,
+                ref_demande=ref,
+                code_adherent=code,
+            )
+        except CoreBankingError as exc:
+            logger.warning(
+                "Probe situation CBS ref=%s code=%s : %s",
+                ref,
+                code,
+                exc,
+                exc_info=True,
+            )
+            raise ValidationError({"detail": str(exc)}) from exc
+
+        def _jsonable(value):
+            if isinstance(value, Decimal):
+                return str(value)
+            if isinstance(value, dict):
+                return {k: _jsonable(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_jsonable(v) for v in value]
+            return value
+
+        return Response(_jsonable(result))
+
+    @action(detail=True, methods=["post"], url_path="sync-referentials")
+    def sync_referentials(self, request, pk=None):
+        """Importe les référentiels Perfect (ref/*) dans FinFlow."""
+        require_finflow_admin(request.user)
+        connector = self.get_object()
+        scopes = request.data.get("scopes")
+        if scopes is not None and not isinstance(scopes, (list, tuple)):
+            raise ValidationError(
+                {"scopes": f"Liste attendue parmi : {', '.join(SYNC_SCOPES)}."}
+            )
+        try:
+            report = sync_cbs_referentials(
+                connector.tenant_id,
+                connector=connector,
+                scopes=scopes,
+            )
+        except CoreBankingError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+        return Response(report)
 
     @action(detail=True, methods=["post"], url_path="import-portfolio")
     def import_portfolio(self, request, pk=None):

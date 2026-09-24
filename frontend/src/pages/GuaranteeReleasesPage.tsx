@@ -29,7 +29,7 @@ import type {
 } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { hasPerm } from "@/auth/permissions";
-import { PERM_GUARANTEES } from "@/auth/routePerms";
+import { PERM_CREDITS, PERM_GUARANTEES } from "@/auth/routePerms";
 import { ClientAutocomplete } from "@/components/ClientAutocomplete";
 import { PermLink } from "@/components/PermLink";
 import { DecisionPanel } from "@/components/DecisionPanel";
@@ -47,6 +47,7 @@ import {
 import {
   Badge,
   Card,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
   ErrorState,
   PageHeader,
@@ -56,6 +57,8 @@ import {
   formatDate,
   formatMoney,
 } from "@/components/ui";
+
+const LIST_PAGE_SIZE = Math.max(15, DEFAULT_PAGE_SIZE);
 
 const RELEASE_FEE_TYPES = [
   { value: "NOTARY", label: "Notaire / acte" },
@@ -70,6 +73,7 @@ function todayISO() {
 }
 
 export function GuaranteeReleasesPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { clientFilter, clearClientFilter } = useClientSearchParam();
   const canInitiate = hasPerm(
@@ -89,133 +93,152 @@ export function GuaranteeReleasesPage() {
   }
 
   const list = useQuery({
-    queryKey: ["guarantee-releases", page, search, status, agency, clientFilter],
+    queryKey: [
+      "guarantee-releases",
+      page,
+      LIST_PAGE_SIZE,
+      search,
+      status,
+      agency,
+      clientFilter,
+    ],
     queryFn: async () =>
       (
-        await api.get<Paginated<GuaranteeReleaseRequest>>("/guarantee-releases/", {
-          params: {
-            page,
-            ...(search.trim() ? { search: search.trim() } : {}),
-            ...(status ? { status } : {}),
-            ...(agency ? { agency } : {}),
-            ...(clientFilter ? { client: clientFilter } : {}),
+        await api.get<Paginated<GuaranteeReleaseRequest>>(
+          "/guarantee-releases/",
+          {
+            params: {
+              page,
+              page_size: LIST_PAGE_SIZE,
+              ...(search.trim() ? { search: search.trim() } : {}),
+              ...(status ? { status } : {}),
+              ...(agency ? { agency } : {}),
+              ...(clientFilter ? { client: clientFilter } : {}),
+            },
           },
-        })
+        )
       ).data,
   });
 
   return (
-    <div>
-      <PageHeader
-        icon={ShieldOff}
-        title="Mains levées"
-        subtitle="Brouillon → demande client → acte généré/signé → circuit CBS"
-        actions={
-          canInitiate ? (
-            <Link className="btn btn-primary" to="/mains-levees/nouvelle">
-              <Plus />
-              Nouvelle main levée
-            </Link>
-          ) : undefined
-        }
-      />
-
-      <ListFilters
-        search={
-          <SearchInput
-            value={search}
-            onChange={setFilter(setSearch)}
-            placeholder="Réf. ML, prêt CBS, client…"
-          />
-        }
-        activeCount={countActive(search, status, agency, clientFilter)}
-        onReset={() => {
-          setSearch("");
-          setStatus("");
-          setAgency("");
-          setPage(1);
-          if (clientFilter) clearClientFilter();
-        }}
-      >
-        <FilterField label="Statut" active={!!status}>
-          <FilterSelect value={status} onChange={setFilter(setStatus)}>
-            {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
-              <option key={value || "all"} value={value}>
-                {label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
-      </ListFilters>
-      <ClientFilterBanner
-        clientId={clientFilter}
-        onClear={() => {
-          clearClientFilter();
-          setPage(1);
-        }}
-      />
-
-      <QueryStatus
-        isLoading={list.isLoading}
-        isError={list.isError}
-        isEmpty={!list.data?.results.length}
-        emptyMessage="Aucune demande de main levée ne correspond à ces critères."
-        onRetry={() => list.refetch()}
-      >
-        <>
-        <table className="table card">
-          <thead>
-            <tr>
-              <th>Référence</th>
-              <th>Garantie</th>
-              <th>Client</th>
-              <th>Date demande</th>
-              <th>Réf. prêt CBS</th>
-              <th>Statut</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(list.data?.results ?? []).map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <code>{r.reference || "—"}</code>
-                </td>
-                <td>
-                  <PermLink
-                    user={user}
-                    anyOf={PERM_GUARANTEES}
-                    to={`/garanties/${r.guarantee}`}
-                  >
-                    {r.guarantee_reference || r.guarantee.slice(0, 8)}
-                  </PermLink>
-                </td>
-                <td>{r.client_display}</td>
-                <td>{r.request_date ? formatDate(r.request_date) : "—"}</td>
-                <td className="muted small">{r.cbs_loan_reference || "—"}</td>
-                <td>
-                  <Badge value={r.status} label={r.status_display} />
-                </td>
-                <td>
-                  <Link
-                    className="btn btn-ghost btn-sm"
-                    to={`/mains-levees/${r.id}`}
-                  >
-                    Ouvrir
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <PaginationBar
-          page={page}
-          count={list.data?.count ?? 0}
-          onPageChange={setPage}
+    <div className="page-shell page-shell--list">
+      <div className="list-page-chrome">
+        <PageHeader
+          icon={ShieldOff}
+          title="Mains levées"
+          subtitle="Brouillon → demande client → acte généré/signé → circuit CBS"
+          actions={
+            canInitiate ? (
+              <Link className="btn btn-primary" to="/mains-levees/nouvelle">
+                <Plus />
+                Nouvelle main levée
+              </Link>
+            ) : undefined
+          }
         />
-        </>
-      </QueryStatus>
+
+        <ListFilters
+          search={
+            <SearchInput
+              value={search}
+              onChange={setFilter(setSearch)}
+              placeholder="Réf. ML, prêt CBS, client…"
+            />
+          }
+          activeCount={countActive(search, status, agency, clientFilter)}
+          onReset={() => {
+            setSearch("");
+            setStatus("");
+            setAgency("");
+            setPage(1);
+            if (clientFilter) clearClientFilter();
+          }}
+        >
+          <FilterField label="Statut" active={!!status}>
+            <FilterSelect value={status} onChange={setFilter(setStatus)}>
+              {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
+                <option key={value || "all"} value={value}>
+                  {label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+        </ListFilters>
+        <ClientFilterBanner
+          clientId={clientFilter}
+          onClear={() => {
+            clearClientFilter();
+            setPage(1);
+          }}
+        />
+      </div>
+
+      <div className="list-table-region">
+        <QueryStatus
+          isLoading={list.isLoading}
+          isError={list.isError}
+          isEmpty={!list.data?.results.length}
+          emptyMessage="Aucune demande de main levée ne correspond à ces critères."
+          onRetry={() => list.refetch()}
+        >
+          <>
+            <div className="table-scroll table-scroll--fill">
+              <table className="table card">
+                <thead>
+                  <tr>
+                    <th>Référence</th>
+                    <th>Garantie</th>
+                    <th>Client</th>
+                    <th>Date demande</th>
+                    <th>Réf. prêt CBS</th>
+                    <th>Statut</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(list.data?.results ?? []).map((r) => (
+                    <tr
+                      key={r.id}
+                      className="row-clickable"
+                      onClick={() => navigate(`/mains-levees/${r.id}`)}
+                    >
+                      <td>
+                        <code>{r.reference || "—"}</code>
+                      </td>
+                      <td>
+                        <PermLink
+                          user={user}
+                          anyOf={PERM_GUARANTEES}
+                          to={`/garanties/${r.guarantee}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                        </PermLink>
+                      </td>
+                      <td>{r.client_display}</td>
+                      <td>
+                        {r.request_date ? formatDate(r.request_date) : "—"}
+                      </td>
+                      <td className="muted small">
+                        {r.cbs_loan_reference || "—"}
+                      </td>
+                      <td>
+                        <Badge value={r.status} label={r.status_display} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              page={page}
+              count={list.data?.count ?? 0}
+              pageSize={LIST_PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          </>
+        </QueryStatus>
+      </div>
     </div>
   );
 }
@@ -979,40 +1002,89 @@ export function GuaranteeReleaseDetailPage() {
           : 3;
 
   return (
-    <div className="release-detail-page">
-      <PageHeader
-        icon={Unlock}
-        title={r.reference || "Main levée"}
-        subtitle={r.client_display}
-        actions={
-          <div className="row-actions">
-            <Link className="btn btn-ghost" to="/mains-levees">
-              <ArrowLeft />
+    <div className="page-shell detail-banner-page release-detail-page">
+      <div className="client-banner">
+        <div className="client-banner-main">
+          <div className="client-banner-info">
+            <span className="client-banner-icon">
+              <Unlock size={26} />
+            </span>
+            <div className="client-banner-identity">
+              <h2 className="client-banner-name">
+                {r.client_display || "Main levée"}
+              </h2>
+              <p className="client-banner-ref">
+                Main levée <code>{r.reference || "—"}</code>
+                {r.guarantee && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_GUARANTEES}
+                    className="client-banner-inline-link"
+                    to={`/garanties/${r.guarantee}`}
+                    fallback={
+                      r.guarantee_reference ? (
+                        <span className="muted">
+                          · {r.guarantee_reference}
+                        </span>
+                      ) : null
+                    }
+                  >
+                    · Garantie{" "}
+                    {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                  </PermLink>
+                )}
+                {r.application && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    className="client-banner-inline-link"
+                    to={`/dossiers/${r.application}`}
+                    fallback={null}
+                  >
+                    · Dossier crédit {r.application.slice(0, 8)}
+                  </PermLink>
+                )}
+              </p>
+              <div className="client-banner-meta">
+                <Badge value={r.status} label={r.status_display} />
+                <Badge
+                  value={r.acte_status || "NONE"}
+                  label={r.acte_status_display || "Acte non généré"}
+                />
+                {r.cbs_settled != null && (
+                  <Badge
+                    value={r.cbs_settled ? "ACTIVE" : "WARN"}
+                    label={r.cbs_settled ? "Prêt soldé CBS" : "Prêt non soldé"}
+                  />
+                )}
+                <span className="muted">
+                  Encours : {formatMoney(r.cbs_outstanding, cur)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="client-banner-actions">
+            <Link className="btn btn-banner" to="/mains-levees">
+              <ArrowLeft size={15} />
               Retour
             </Link>
-            {canInitiate && editable && (
-              <button
-                className="btn btn-primary"
-                onClick={() => submit.mutate()}
-                disabled={submit.isPending}
-              >
-                Soumettre au circuit
-              </button>
-            )}
             {canInitiate &&
               !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) && (
                 <button
-                  className="btn btn-ghost"
+                  type="button"
+                  className="btn btn-banner"
                   onClick={() => refreshCbs.mutate()}
                   disabled={refreshCbs.isPending}
                 >
-                  <RefreshCw size={16} />
+                  <RefreshCw size={15} />
                   Rafraîchir CBS
                 </button>
               )}
             {canCancel && (
               <button
-                className="btn btn-ghost"
+                type="button"
+                className="btn btn-banner btn-banner-danger"
                 onClick={() => cancel.mutate()}
                 disabled={cancel.isPending}
               >
@@ -1021,44 +1093,25 @@ export function GuaranteeReleaseDetailPage() {
             )}
             {r.status === "BLOCKED" && (
               <button
-                className="btn btn-primary"
+                type="button"
+                className="btn btn-banner btn-banner-primary"
                 onClick={() => retry.mutate()}
                 disabled={retry.isPending}
               >
-                <RefreshCw size={16} />
+                <RefreshCw size={15} />
                 Retenter CBS
               </button>
             )}
-          </div>
-        }
-      />
-
-      <div className="client-banner">
-        <div className="client-banner-info">
-          <span className="client-banner-icon">
-            <Unlock size={26} />
-          </span>
-          <div>
-            <h2 className="client-banner-name">
-              {r.guarantee_reference || "Main levée"}
-            </h2>
-            <div className="client-banner-meta">
-              <code>{r.reference}</code>
-              <Badge value={r.status} label={r.status_display} />
-              <Badge
-                value={r.acte_status || "NONE"}
-                label={r.acte_status_display || "Acte non généré"}
-              />
-              {r.cbs_settled != null && (
-                <Badge
-                  value={r.cbs_settled ? "ACTIVE" : "WARN"}
-                  label={r.cbs_settled ? "Prêt soldé CBS" : "Prêt non soldé"}
-                />
-              )}
-              <span className="muted">
-                Encours : {formatMoney(r.cbs_outstanding, cur)}
-              </span>
-            </div>
+            {canInitiate && editable && (
+              <button
+                type="button"
+                className="btn btn-banner btn-banner-primary"
+                onClick={() => submit.mutate()}
+                disabled={submit.isPending}
+              >
+                Soumettre au circuit
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -1267,19 +1320,17 @@ export function GuaranteeReleaseDetailPage() {
             {(docs.data ?? []).length > 0 && (
               <ul className="link-list">
                 {(docs.data ?? []).map((d) => (
-                  <li key={d.id}>
+                  <li
+                    key={d.id}
+                    className="row-clickable"
+                    onClick={() =>
+                      window.open(d.file, "_blank", "noopener,noreferrer")
+                    }
+                  >
                     <span>
                       <FileUp size={14} /> {d.name}
                       <em className="muted small"> · {d.category_label}</em>
                     </span>
-                    <a
-                      className="btn btn-ghost btn-sm"
-                      href={d.file}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Ouvrir
-                    </a>
                   </li>
                 ))}
               </ul>

@@ -56,6 +56,7 @@ class ClientListSerializer(serializers.ModelSerializer):
             "id", "reference", "client_type", "display_name", "agency",
             "phone", "email", "city", "kyc_status", "is_active",
             "cbs_client_id", "cbs_account_number",
+            "cbs_point_of_service_name", "cbs_credit_limit",
             "created_at",
         ]
         read_only_fields = fields
@@ -83,7 +84,7 @@ class ClientSerializer(serializers.ModelSerializer):
             "father_last_name", "father_first_name",
             "mother_last_name", "mother_first_name",
             # Personne morale
-            "company_name", "legal_form", "ifu", "rccm",
+            "company_name", "sigle", "legal_form", "ifu", "rccm",
             "ifu_scan", "rccm_scan",
             "manager_last_name", "manager_first_name", "manager_phone",
             "manager_email", "manager_address", "manager_id_document_type",
@@ -92,16 +93,31 @@ class ClientSerializer(serializers.ModelSerializer):
             "manager_position", "manager_birth_date", "manager_birth_country",
             "manager_birth_city",
             # Coordonnées communes
-            "phone", "email", "address", "city",
+            "phone", "email", "address", "city", "postal_box", "head_office",
             "phones", "additional_phones",
-            # Core Banking
-            "cbs_client_id", "cbs_account_number",
+            # Core Banking (mapping 1:1 situation adhérent)
+            "cbs_client_id", "cbs_account_number", "cbs_full_name",
+            "cbs_order_number", "cbs_profession_id", "cbs_nationality_id",
+            "cbs_sector_id", "cbs_client_type_id", "cbs_zone_id",
+            "cbs_savings_product_id", "cbs_signature_count", "cbs_distance",
+            "cbs_registration_date", "cbs_creation_date", "cbs_credit_limit",
+            "cbs_est_valide", "cbs_point_of_service_id",
+            "cbs_point_of_service_name", "cbs_external_id",
+            "cbs_context", "cbs_message", "cbs_synced_at", "cbs_situation",
             # KYC / statut
             "kyc_status", "kyc_validated_at", "is_active",
             "created_at", "updated_at",
         ]
         read_only_fields = [
             "id", "reference", "is_active", "created_at", "updated_at",
+            "cbs_full_name", "cbs_order_number", "cbs_profession_id",
+            "cbs_nationality_id", "cbs_sector_id", "cbs_client_type_id",
+            "cbs_zone_id", "cbs_savings_product_id", "cbs_signature_count",
+            "cbs_distance", "cbs_registration_date", "cbs_creation_date",
+            "cbs_credit_limit", "cbs_est_valide",
+            "cbs_point_of_service_id", "cbs_point_of_service_name",
+            "cbs_external_id", "cbs_context", "cbs_message",
+            "cbs_synced_at", "cbs_situation",
         ]
 
     def to_representation(self, instance):

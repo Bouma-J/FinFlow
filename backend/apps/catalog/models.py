@@ -159,6 +159,107 @@ class Currency(CbsMappedReference):
         ]
 
 
+class FinancingObject(CbsMappedReference):
+    """Objet de financement Perfect (idObjetFinancement).
+
+    ``code`` = code Vision (ex. CONSO), ``cbs_code`` = id Vision (ex. \"30\").
+    ``purpose_type`` optionnel : lien vers l'enum FinFlow ``PurposeType``.
+    """
+
+    purpose_type = models.CharField(
+        "type d'objet FinFlow",
+        max_length=32,
+        blank=True,
+        help_text="Code PurposeType (CONSUMPTION, REAL_ESTATE…) pour le mapping décaissement.",
+    )
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "objet de financement"
+        verbose_name_plural = "objets de financement"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_financingobject_code_per_tenant",
+            )
+        ]
+
+
+class ServicePoint(CbsMappedReference):
+    """Point de service Perfect (idPointService) — source CBS uniquement."""
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "point de service CBS"
+        verbose_name_plural = "points de service CBS"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_servicepoint_code_per_tenant",
+            )
+        ]
+
+
+class CbsManager(CbsMappedReference):
+    """Gestionnaire Perfect (idGestionnaire) — source CBS uniquement.
+
+    Associé à un utilisateur FinFlow via ``User.cbs_id`` (= ``cbs_code``).
+    """
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "gestionnaire CBS"
+        verbose_name_plural = "gestionnaires CBS"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_cbsmanager_code_per_tenant",
+            )
+        ]
+
+
+class FinancingSource(CbsMappedReference):
+    """Source de financement Perfect (ref/source-fin-list) — source CBS uniquement."""
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "source de financement CBS"
+        verbose_name_plural = "sources de financement CBS"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_financingsource_code_per_tenant",
+            )
+        ]
+
+
+class DecisionMotif(CbsMappedReference):
+    """Motif de décision Perfect (ref/motif-decision-list) — source CBS uniquement."""
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "motif de décision CBS"
+        verbose_name_plural = "motifs de décision CBS"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_decisionmotif_code_per_tenant",
+            )
+        ]
+
+
+class CbsProfession(CbsMappedReference):
+    """Profession Perfect (ref/profession-list) — source CBS uniquement.
+
+    Associée au client via ``Client.cbs_profession_id`` (= ``cbs_code``).
+    """
+
+    class Meta(CbsMappedReference.Meta):
+        verbose_name = "profession CBS"
+        verbose_name_plural = "professions CBS"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["tenant", "code"],
+                name="unique_cbsprofession_code_per_tenant",
+            )
+        ]
+
+
 class ChecklistItem(TenantScopedModel):
     """Pièce attendue d'une check-list documentaire, liée à un produit."""
 

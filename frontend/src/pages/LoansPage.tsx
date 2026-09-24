@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Banknote } from "lucide-react";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type { Paginated } from "@/api/types";
@@ -19,6 +20,7 @@ import {
 } from "@/components/ListFilters";
 import {
   Badge,
+  DEFAULT_PAGE_SIZE,
   PageHeader,
   PaginationBar,
   QueryStatus,
@@ -52,7 +54,11 @@ const STATUS_LABELS: Record<string, string> = {
   DEFAULTED: "Défaut",
 };
 
+/** Au moins 15 prêts par page ; le surplus se parcourt dans le tableau. */
+const LIST_PAGE_SIZE = Math.max(15, DEFAULT_PAGE_SIZE);
+
 export function LoansPage() {
+  const navigate = useNavigate();
   const { user, activeTenant } = useAuth();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
   const [page, setPage] = useState(1);
@@ -76,6 +82,7 @@ export function LoansPage() {
       "loans",
       activeTenant,
       page,
+      LIST_PAGE_SIZE,
       status,
       search,
       product,
@@ -89,6 +96,7 @@ export function LoansPage() {
         await api.get<Paginated<LoanRow>>("/loans/", {
           params: {
             page,
+            page_size: LIST_PAGE_SIZE,
             ...(status ? { status } : {}),
             ...(search.trim() ? { search: search.trim() } : {}),
             ...(product ? { product } : {}),
@@ -103,146 +111,161 @@ export function LoansPage() {
   });
 
   return (
-    <div className="page-shell">
-      <PageHeader
-        icon={Banknote}
-        title="Prêts"
-        subtitle="Prêts décaissés et références CBS"
-      />
-      {needsTenant && <TenantScopeNotice />}
-
-      <ListFilters
-        search={
-          <SearchInput
-            value={search}
-            onChange={setFilter(setSearch)}
-            placeholder="Réf. dossier, client, CBS…"
-          />
-        }
-        activeCount={countActive(
-          search,
-          gestionnaire,
-          status,
-          product,
-          agency,
-          disbursedAfter,
-          disbursedBefore,
-        )}
-        onReset={() => {
-          setSearch("");
-          setGestionnaire("");
-          setStatus("");
-          setProduct("");
-          setAgency("");
-          setDisbursedAfter("");
-          setDisbursedBefore("");
-          setPage(1);
-        }}
-      >
-        <OfficerFilter
-          value={gestionnaire}
-          onChange={setFilter(setGestionnaire)}
+    <div className="page-shell page-shell--list">
+      <div className="list-page-chrome">
+        <PageHeader
+          icon={Banknote}
+          title="Prêts"
+          subtitle="Prêts décaissés et références CBS"
         />
-        <FilterField label="Statut" active={!!status}>
-          <FilterSelect value={status} onChange={setFilter(setStatus)}>
-            <option value="">Tous statuts</option>
-            <option value="ACTIVE">En cours</option>
-            <option value="CLOSED">Soldé</option>
-            <option value="DEFAULTED">Défaut</option>
-          </FilterSelect>
-        </FilterField>
-        <ProductFilter value={product} onChange={setFilter(setProduct)} />
-        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
-        <FilterField label="Décaissé du" active={!!disbursedAfter}>
-          <input
-            type="date"
-            value={disbursedAfter}
-            onChange={(e) => setFilter(setDisbursedAfter)(e.target.value)}
-          />
-        </FilterField>
-        <FilterField label="jusqu'au" active={!!disbursedBefore}>
-          <input
-            type="date"
-            value={disbursedBefore}
-            onChange={(e) => setFilter(setDisbursedBefore)(e.target.value)}
-          />
-        </FilterField>
-      </ListFilters>
+        {needsTenant && <TenantScopeNotice />}
 
-      <QueryStatus
-        isLoading={list.isLoading}
-        isError={list.isError}
-        isEmpty={!list.data?.results.length}
-        emptyMessage="Aucun prêt pour cette filiale."
-        onRetry={() => list.refetch()}
-      >
-        <table className="table card">
-          <thead>
-            <tr>
-              <th>Dossier</th>
-              <th>Client</th>
-              <th>Capital</th>
-              <th>Durée</th>
-              <th>Décaissé</th>
-              <th>Statut</th>
-              <th>CBS</th>
-              <th>Recouvrement</th>
-            </tr>
-          </thead>
-          <tbody>
-            {(list.data?.results ?? []).map((loan) => (
-              <tr key={loan.id}>
-                <td>
-                  <PermLink
-                    user={user}
-                    anyOf={PERM_CREDITS}
-                    to={`/dossiers/${loan.application}`}
-                  >
-                    {loan.application_reference || loan.application.slice(0, 8)}
-                  </PermLink>
-                </td>
-                <td>{loan.client_display || "—"}</td>
-                <td className="num">
-                  {formatMoney(loan.principal, loan.currency)}
-                </td>
-                <td>{loan.duration_months} mois</td>
-                <td>{formatDate(loan.disbursed_at)}</td>
-                <td>
-                  <Badge
-                    value={loan.status}
-                    label={STATUS_LABELS[loan.status] ?? loan.status}
-                  />
-                </td>
-                <td className="muted small">
-                  {loan.cbs_contract_number ||
-                    loan.core_banking_reference ||
-                    loan.cbs_disbursement_status ||
-                    "—"}
-                </td>
-                <td>
-                  {loan.collection_case_id ? (
-                    <PermLink
-                      user={user}
-                      anyOf={PERM_COLLECTIONS}
-                      to={`/recouvrement/${loan.collection_case_id}`}
+        <ListFilters
+          search={
+            <SearchInput
+              value={search}
+              onChange={setFilter(setSearch)}
+              placeholder="Réf. dossier, client, CBS…"
+            />
+          }
+          activeCount={countActive(
+            search,
+            gestionnaire,
+            status,
+            product,
+            agency,
+            disbursedAfter,
+            disbursedBefore,
+          )}
+          onReset={() => {
+            setSearch("");
+            setGestionnaire("");
+            setStatus("");
+            setProduct("");
+            setAgency("");
+            setDisbursedAfter("");
+            setDisbursedBefore("");
+            setPage(1);
+          }}
+        >
+          <OfficerFilter
+            value={gestionnaire}
+            onChange={setFilter(setGestionnaire)}
+          />
+          <FilterField label="Statut" active={!!status}>
+            <FilterSelect value={status} onChange={setFilter(setStatus)}>
+              <option value="">Tous statuts</option>
+              <option value="ACTIVE">En cours</option>
+              <option value="CLOSED">Soldé</option>
+              <option value="DEFAULTED">Défaut</option>
+            </FilterSelect>
+          </FilterField>
+          <ProductFilter value={product} onChange={setFilter(setProduct)} />
+          <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+          <FilterField label="Décaissé du" active={!!disbursedAfter}>
+            <input
+              type="date"
+              value={disbursedAfter}
+              onChange={(e) => setFilter(setDisbursedAfter)(e.target.value)}
+            />
+          </FilterField>
+          <FilterField label="jusqu'au" active={!!disbursedBefore}>
+            <input
+              type="date"
+              value={disbursedBefore}
+              onChange={(e) => setFilter(setDisbursedBefore)(e.target.value)}
+            />
+          </FilterField>
+        </ListFilters>
+      </div>
+
+      <div className="list-table-region">
+        <QueryStatus
+          isLoading={list.isLoading}
+          isError={list.isError}
+          isEmpty={!list.data?.results.length}
+          emptyMessage="Aucun prêt pour cette filiale."
+          onRetry={() => list.refetch()}
+        >
+          <>
+            <div className="table-scroll table-scroll--fill">
+              <table className="table card">
+                <thead>
+                  <tr>
+                    <th>Dossier</th>
+                    <th>Client</th>
+                    <th className="num">Capital</th>
+                    <th>Durée</th>
+                    <th>Décaissé</th>
+                    <th>Statut</th>
+                    <th>CBS</th>
+                    <th>Recouvrement</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(list.data?.results ?? []).map((loan) => (
+                    <tr
+                      key={loan.id}
+                      className="row-clickable"
+                      onClick={() => navigate(`/dossiers/${loan.application}`)}
                     >
-                      {loan.collection_stage_display || "Dossier"}
-                    </PermLink>
-                  ) : (
-                    <span className="muted">—</span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <PaginationBar
-          page={page}
-          count={list.data?.count ?? 0}
-          pageSize={25}
-          onPageChange={setPage}
-        />
-      </QueryStatus>
+                      <td>
+                        <PermLink
+                          user={user}
+                          anyOf={PERM_CREDITS}
+                          to={`/dossiers/${loan.application}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {loan.application_reference ||
+                            loan.application.slice(0, 8)}
+                        </PermLink>
+                      </td>
+                      <td>{loan.client_display || "—"}</td>
+                      <td className="num">
+                        {formatMoney(loan.principal, loan.currency)}
+                      </td>
+                      <td>{loan.duration_months} mois</td>
+                      <td>{formatDate(loan.disbursed_at)}</td>
+                      <td>
+                        <Badge
+                          value={loan.status}
+                          label={STATUS_LABELS[loan.status] ?? loan.status}
+                        />
+                      </td>
+                      <td className="muted small">
+                        {loan.cbs_contract_number ||
+                          loan.core_banking_reference ||
+                          loan.cbs_disbursement_status ||
+                          "—"}
+                      </td>
+                      <td>
+                        {loan.collection_case_id ? (
+                          <PermLink
+                            user={user}
+                            anyOf={PERM_COLLECTIONS}
+                            to={`/recouvrement/${loan.collection_case_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {loan.collection_stage_display || "Dossier"}
+                          </PermLink>
+                        ) : (
+                          <span className="muted">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              page={page}
+              count={list.data?.count ?? 0}
+              pageSize={LIST_PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          </>
+        </QueryStatus>
+      </div>
     </div>
   );
 }

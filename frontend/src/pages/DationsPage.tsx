@@ -56,6 +56,7 @@ import {
 import {
   Badge,
   Card,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
   ErrorState,
   PageHeader,
@@ -65,6 +66,8 @@ import {
   formatDate,
   formatMoney,
 } from "@/components/ui";
+
+const LIST_PAGE_SIZE = Math.max(15, DEFAULT_PAGE_SIZE);
 
 type ExtraAsset = {
   key: string;
@@ -116,6 +119,7 @@ const DOC_CATS = [
 ];
 
 export function DationsPage() {
+  const navigate = useNavigate();
   const { user } = useAuth();
   const { clientFilter, clearClientFilter } = useClientSearchParam();
   const canInitiate = hasPerm(user, "guarantees.initiate_dationrequest");
@@ -132,12 +136,21 @@ export function DationsPage() {
   }
 
   const list = useQuery({
-    queryKey: ["dation-requests", page, search, status, agency, clientFilter],
+    queryKey: [
+      "dation-requests",
+      page,
+      LIST_PAGE_SIZE,
+      search,
+      status,
+      agency,
+      clientFilter,
+    ],
     queryFn: async () =>
       (
         await api.get<Paginated<DationRequest>>("/dation-requests/", {
           params: {
             page,
+            page_size: LIST_PAGE_SIZE,
             ...(search.trim() ? { search: search.trim() } : {}),
             ...(status ? { status } : {}),
             ...(agency ? { agency } : {}),
@@ -148,121 +161,137 @@ export function DationsPage() {
   });
 
   return (
-    <div>
-      <PageHeader
-        icon={HandCoins}
-        title="Dations en paiement"
-        subtitle="Biens, frais, pièces jointes, couverture CBS et circuit paramétrable"
-        actions={
-          canInitiate ? (
-            <Link className="btn btn-primary" to="/dations/nouvelle">
-              <Plus />
-              Nouvelle dation
-            </Link>
-          ) : undefined
-        }
-      />
-
-      <ListFilters
-        search={
-          <SearchInput
-            value={search}
-            onChange={setFilter(setSearch)}
-            placeholder="Référence, client, description du bien…"
-          />
-        }
-        activeCount={countActive(search, status, agency, clientFilter)}
-        onReset={() => {
-          setSearch("");
-          setStatus("");
-          setAgency("");
-          setPage(1);
-          if (clientFilter) clearClientFilter();
-        }}
-      >
-        <FilterField label="Statut" active={!!status}>
-          <FilterSelect value={status} onChange={setFilter(setStatus)}>
-            {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
-              <option key={value || "all"} value={value}>
-                {label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
-      </ListFilters>
-      <ClientFilterBanner
-        clientId={clientFilter}
-        onClear={() => {
-          clearClientFilter();
-          setPage(1);
-        }}
-      />
-
-      <QueryStatus
-        isLoading={list.isLoading}
-        isError={list.isError}
-        isEmpty={!list.data?.results.length}
-        emptyMessage="Aucune dation ne correspond à ces critères."
-        onRetry={() => list.refetch()}
-      >
-        <>
-        <table className="table card">
-          <thead>
-            <tr>
-              <th>Référence</th>
-              <th>Client</th>
-              <th>Créance CBS</th>
-              <th>Valeur biens</th>
-              <th>Couverture</th>
-              <th>Statut</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {(list.data?.results ?? []).map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <code>{r.reference || "—"}</code>
-                </td>
-                <td>{r.client_display}</td>
-                <td className="num">
-                  {formatMoney(r.cbs_total_outstanding, r.cbs_currency || "XOF")}
-                </td>
-                <td className="num">
-                  {formatMoney(
-                    r.assets_total_value ?? r.asset_value,
-                    r.cbs_currency || "XOF",
-                  )}
-                </td>
-                <td>
-                  {r.covers_claim == null ? (
-                    "—"
-                  ) : r.covers_claim ? (
-                    <Badge value="OK" label="Couvre" />
-                  ) : (
-                    <Badge value="WARN" label="Insuffisant" />
-                  )}
-                </td>
-                <td>
-                  <Badge value={r.status} label={r.status_display} />
-                </td>
-                <td>
-                  <Link className="btn btn-ghost btn-sm" to={`/dations/${r.id}`}>
-                    Ouvrir
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-        <PaginationBar
-          page={page}
-          count={list.data?.count ?? 0}
-          onPageChange={setPage}
+    <div className="page-shell page-shell--list">
+      <div className="list-page-chrome">
+        <PageHeader
+          icon={HandCoins}
+          title="Dations en paiement"
+          subtitle="Biens, frais, pièces jointes, couverture CBS et circuit paramétrable"
+          actions={
+            canInitiate ? (
+              <Link className="btn btn-primary" to="/dations/nouvelle">
+                <Plus />
+                Nouvelle dation
+              </Link>
+            ) : undefined
+          }
         />
-        </>
-      </QueryStatus>
+
+        <ListFilters
+          search={
+            <SearchInput
+              value={search}
+              onChange={setFilter(setSearch)}
+              placeholder="Référence, client, description du bien…"
+            />
+          }
+          activeCount={countActive(search, status, agency, clientFilter)}
+          onReset={() => {
+            setSearch("");
+            setStatus("");
+            setAgency("");
+            setPage(1);
+            if (clientFilter) clearClientFilter();
+          }}
+        >
+          <FilterField label="Statut" active={!!status}>
+            <FilterSelect value={status} onChange={setFilter(setStatus)}>
+              {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
+                <option key={value || "all"} value={value}>
+                  {label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+        </ListFilters>
+        <ClientFilterBanner
+          clientId={clientFilter}
+          onClear={() => {
+            clearClientFilter();
+            setPage(1);
+          }}
+        />
+      </div>
+
+      <div className="list-table-region">
+        <QueryStatus
+          isLoading={list.isLoading}
+          isError={list.isError}
+          isEmpty={!list.data?.results.length}
+          emptyMessage="Aucune dation ne correspond à ces critères."
+          onRetry={() => list.refetch()}
+        >
+          <>
+            <div className="table-scroll table-scroll--fill">
+              <table className="table card">
+                <colgroup>
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "26%" }} />
+                  <col style={{ width: "16%" }} />
+                  <col style={{ width: "16%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "14%" }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Référence</th>
+                    <th>Client</th>
+                    <th className="num">Créance CBS</th>
+                    <th className="num">Valeur biens</th>
+                    <th>Couverture</th>
+                    <th>Statut</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(list.data?.results ?? []).map((r) => (
+                    <tr
+                      key={r.id}
+                      className="row-clickable"
+                      onClick={() => navigate(`/dations/${r.id}`)}
+                    >
+                      <td>
+                        <code>{r.reference || "—"}</code>
+                      </td>
+                      <td>{r.client_display}</td>
+                      <td className="num">
+                        {formatMoney(
+                          r.cbs_total_outstanding,
+                          r.cbs_currency || "XOF",
+                        )}
+                      </td>
+                      <td className="num">
+                        {formatMoney(
+                          r.assets_total_value ?? r.asset_value,
+                          r.cbs_currency || "XOF",
+                        )}
+                      </td>
+                      <td>
+                        {r.covers_claim == null ? (
+                          "—"
+                        ) : r.covers_claim ? (
+                          <Badge value="OK" label="Couvre" />
+                        ) : (
+                          <Badge value="WARN" label="Insuffisant" />
+                        )}
+                      </td>
+                      <td>
+                        <Badge value={r.status} label={r.status_display} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              page={page}
+              count={list.data?.count ?? 0}
+              pageSize={LIST_PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          </>
+        </QueryStatus>
+      </div>
     </div>
   );
 }
@@ -1237,69 +1266,123 @@ export function DationDetailPage() {
   const canRefreshCbs =
     canInitiate &&
     !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status);
+  const canUploadDocs =
+    canInitiate &&
+    !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status);
   const myTask =
     myTasks?.results.find(
       (t) => t.target_meta?.kind === "DATION" && t.target_meta.id === r.id,
     ) ?? null;
   const fees: DationFee[] = r.fees ?? [];
+  const assets = r.assets ?? [];
+  const assetsTotal = Number(r.assets_total_value ?? r.asset_value ?? 0);
+  const claimToCover = Number(r.claim_to_cover ?? r.cbs_total_outstanding ?? 0);
+  const coveragePct =
+    claimToCover > 0
+      ? Math.min(100, Math.round((assetsTotal / claimToCover) * 100))
+      : assetsTotal > 0
+        ? 100
+        : 0;
+  const coverageTone =
+    r.covers_claim == null ? "neutral" : r.covers_claim ? "ok" : "warn";
+  const cancelled = ["CANCELLED", "REJECTED"].includes(r.status);
+  const stepConstitutionDone =
+    !editable || assets.length > 0 || Boolean(r.asset_description);
+  const stepCircuitDone = ["APPROVED", "COMPLETED", "BLOCKED"].includes(
+    r.status,
+  );
+  const stepCbsDone = r.status === "COMPLETED";
+  const stepClosed = r.status === "COMPLETED";
+  const stepCurrent = cancelled
+    ? 0
+    : !stepConstitutionDone || editable
+      ? 1
+      : r.status === "IN_APPROVAL"
+        ? 2
+        : r.status === "BLOCKED" || r.status === "APPROVED"
+          ? 3
+          : stepClosed
+            ? 4
+            : 2;
 
   return (
-    <div>
-      <PageHeader
-        icon={HandCoins}
-        title={r.reference || "Dation en paiement"}
-        subtitle={r.client_display}
-        actions={
-          <div className="row-actions">
-            <Link className="btn btn-ghost" to="/dations">
-              <ArrowLeft />
+    <div className="page-shell dation-detail-page">
+      <div className="client-banner">
+        <div className="client-banner-main">
+          <div className="client-banner-info">
+            <span className="client-banner-icon">
+              <HandCoins size={26} />
+            </span>
+            <div className="client-banner-identity">
+              <h2 className="client-banner-name">
+                {r.client_display || "Dation en paiement"}
+              </h2>
+              <p className="client-banner-ref">
+                Dation <code>{r.reference || "—"}</code>
+                {r.application && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    className="client-banner-inline-link"
+                    to={`/dossiers/${r.application}`}
+                    fallback={
+                      r.application_reference ? (
+                        <span className="muted">
+                          · Crédit {r.application_reference}
+                        </span>
+                      ) : null
+                    }
+                  >
+                    · Dossier crédit{" "}
+                    {r.application_reference || r.application.slice(0, 8)}
+                  </PermLink>
+                )}
+              </p>
+              <div className="client-banner-meta">
+                <Badge value={r.status} label={r.status_display} />
+                {r.covers_claim == null ? null : r.covers_claim ? (
+                  <Badge value="OK" label="Créance couverte" />
+                ) : (
+                  <Badge value="WARN" label="Couverture insuffisante" />
+                )}
+                <span className="muted">
+                  Créance : {formatMoney(r.cbs_total_outstanding, cur)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="client-banner-actions">
+            <Link className="btn btn-banner" to="/dations">
+              <ArrowLeft size={15} />
               Retour
             </Link>
-            {r.application && (
-              <PermLink
-                user={user}
-                anyOf={PERM_CREDITS}
-                className="btn btn-ghost"
-                to={`/dossiers/${r.application}`}
-                fallback={null}
-              >
-                Dossier crédit
-                {r.application_reference ? ` ${r.application_reference}` : ""}
-              </PermLink>
-            )}
             {r.collection_case_id && (
               <PermLink
                 user={user}
                 anyOf={PERM_COLLECTIONS}
-                className="btn btn-ghost"
+                className="btn btn-banner"
                 to={`/recouvrement/${r.collection_case_id}`}
                 fallback={null}
               >
                 Recouvrement
               </PermLink>
             )}
-            {canInitiate && editable && (
-              <button
-                className="btn btn-primary"
-                onClick={() => submit.mutate()}
-                disabled={submit.isPending}
-              >
-                Soumettre au circuit
-              </button>
-            )}
             {canRefreshCbs && (
               <button
-                className="btn btn-ghost"
+                type="button"
+                className="btn btn-banner"
                 onClick={() => refreshCbs.mutate()}
                 disabled={refreshCbs.isPending}
               >
-                <RefreshCw size={16} />
+                <RefreshCw size={15} />
                 Rafraîchir CBS
               </button>
             )}
             {canCancel && (
               <button
-                className="btn btn-ghost"
+                type="button"
+                className="btn btn-banner btn-banner-danger"
                 onClick={() => {
                   const needsConfirm =
                     r.status === "IN_APPROVAL" || r.status === "BLOCKED";
@@ -1322,25 +1405,36 @@ export function DationDetailPage() {
             )}
             {r.status === "BLOCKED" && (
               <button
-                className="btn btn-primary"
+                type="button"
+                className="btn btn-banner btn-banner-primary"
                 onClick={() => retry.mutate()}
                 disabled={retry.isPending}
               >
-                <RefreshCw size={16} />
+                <RefreshCw size={15} />
                 Retenter CBS
               </button>
             )}
+            {canInitiate && editable && (
+              <button
+                type="button"
+                className="btn btn-banner btn-banner-primary"
+                onClick={() => submit.mutate()}
+                disabled={submit.isPending}
+              >
+                Soumettre au circuit
+              </button>
+            )}
           </div>
-        }
-      />
+        </div>
+      </div>
 
       {actionError && <div className="form-error">{actionError}</div>}
 
       {!r.application && (
-        <div className="callout" style={{ marginBottom: 12 }}>
-          Cette dation n&apos;est pas rattachée à un dossier de crédit. Le
-          gel du recouvrement et les liens vers le prêt ne s&apos;appliquent
-          pas tant qu&apos;un dossier n&apos;est pas indiqué.
+        <div className="callout callout-info" style={{ marginBottom: 12 }}>
+          Cette dation n&apos;est pas rattachée à un dossier de crédit. Le gel
+          du recouvrement et les liens vers le prêt ne s&apos;appliquent pas
+          tant qu&apos;un dossier n&apos;est pas indiqué.
         </div>
       )}
       {r.status === "BLOCKED" && (
@@ -1355,263 +1449,454 @@ export function DationDetailPage() {
           besoin.
         </div>
       )}
-      <div className="detail-grid">
-        <Card title="Règlement">
-          <dl className="def-list two">
-            <div>
-              <dt>Statut</dt>
-              <dd>
-                <Badge value={r.status} label={r.status_display} />
-              </dd>
-            </div>
-            <div>
-              <dt>Client</dt>
-              <dd>
-                <PermLink
-                  user={user}
-                  anyOf={PERM_CLIENTS}
-                  to={`/clients/${r.client}`}
-                >
-                  {r.client_display}
-                </PermLink>
-              </dd>
-            </div>
-            {r.application && (
+
+      <div className="process-steps" aria-label="Étapes de la dation">
+        {[
+          {
+            n: 1,
+            label: "Constitution",
+            hint: stepConstitutionDone
+              ? editable
+                ? "Brouillon"
+                : "Prête"
+              : "Biens à saisir",
+            done: stepConstitutionDone && !editable,
+          },
+          {
+            n: 2,
+            label: "Circuit",
+            hint:
+              r.status === "IN_APPROVAL"
+                ? "En validation"
+                : stepCircuitDone
+                  ? "Validé"
+                  : "À soumettre",
+            done: stepCircuitDone && r.status !== "IN_APPROVAL",
+          },
+          {
+            n: 3,
+            label: "Exécution CBS",
+            hint:
+              r.status === "BLOCKED"
+                ? "Bloquée"
+                : r.status === "APPROVED"
+                  ? "En cours"
+                  : stepCbsDone
+                    ? "OK"
+                    : "En attente",
+            done: stepCbsDone,
+          },
+          {
+            n: 4,
+            label: "Clôture",
+            hint: stepClosed ? "Terminée" : "En attente",
+            done: stepClosed,
+          },
+        ].map((s) => (
+          <div
+            key={s.n}
+            className={`process-step${s.done ? " done" : ""}${
+              stepCurrent === s.n ? " current" : ""
+            }${cancelled && !s.done ? " muted" : ""}`}
+          >
+            <span className="step-num">{s.n}</span>
+            <span>
+              <strong>{s.label}</strong>
+              {s.hint}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="detail-sections">
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <UserRound size={17} /> Dossier
+              </>
+            }
+          >
+            <dl className="def-list two">
               <div>
-                <dt>Dossier crédit</dt>
+                <dt>Statut</dt>
+                <dd>
+                  <Badge value={r.status} label={r.status_display} />
+                </dd>
+              </div>
+              <div>
+                <dt>Client</dt>
                 <dd>
                   <PermLink
                     user={user}
-                    anyOf={PERM_CREDITS}
-                    to={`/dossiers/${r.application}`}
+                    anyOf={PERM_CLIENTS}
+                    to={`/clients/${r.client}`}
                   >
-                    {r.application_reference || r.application.slice(0, 8)}
+                    {r.client_display}
                   </PermLink>
                 </dd>
               </div>
-            )}
-            {r.collection_case_id && (
+              {r.application && (
+                <div>
+                  <dt>Dossier crédit</dt>
+                  <dd>
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_CREDITS}
+                      to={`/dossiers/${r.application}`}
+                    >
+                      {r.application_reference || r.application.slice(0, 8)}
+                    </PermLink>
+                  </dd>
+                </div>
+              )}
+              {r.collection_case_id && (
+                <div>
+                  <dt>Recouvrement</dt>
+                  <dd>
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_COLLECTIONS}
+                      to={`/recouvrement/${r.collection_case_id}`}
+                    >
+                      Fiche dossier
+                    </PermLink>
+                  </dd>
+                </div>
+              )}
               <div>
-                <dt>Recouvrement</dt>
+                <dt>Identifiant CBS</dt>
                 <dd>
-                  <PermLink
-                    user={user}
-                    anyOf={PERM_COLLECTIONS}
-                    to={`/recouvrement/${r.collection_case_id}`}
-                  >
-                    Fiche dossier
-                  </PermLink>
+                  <code>{r.cbs_client_id || "—"}</code>
                 </dd>
               </div>
+              <div>
+                <dt>Créé le</dt>
+                <dd>{formatDate(r.created_at)}</dd>
+              </div>
+              {r.completed_at && (
+                <div>
+                  <dt>Clôturée le</dt>
+                  <dd>{formatDate(r.completed_at)}</dd>
+                </div>
+              )}
+              {r.resulting_guarantee && (
+                <div>
+                  <dt>Garantie créée</dt>
+                  <dd>
+                    <PermLink
+                      user={user}
+                      anyOf={PERM_GUARANTEES}
+                      to={`/garanties/${r.resulting_guarantee}`}
+                    >
+                      Voir la garantie
+                    </PermLink>
+                  </dd>
+                </div>
+              )}
+            </dl>
+            {r.comment && (
+              <p className="muted small" style={{ marginTop: 12 }}>
+                <MessageSquareText size={14} /> {r.comment}
+              </p>
             )}
-            <div>
-              <dt>Créance CBS</dt>
-              <dd>{formatMoney(r.cbs_total_outstanding, cur)}</dd>
-            </div>
-            <div>
-              <dt>Frais client</dt>
-              <dd>{formatMoney(r.fees_client_total ?? null, cur)}</dd>
-            </div>
-            <div>
-              <dt>Créance à couvrir</dt>
-              <dd>{formatMoney(r.claim_to_cover ?? null, cur)}</dd>
-            </div>
-            <div>
-              <dt>Total biens</dt>
-              <dd>
-                {formatMoney(r.assets_total_value ?? r.asset_value ?? null, cur)}
-              </dd>
-            </div>
-            <div>
-              <dt>Solde résiduel</dt>
-              <dd>{formatMoney(r.residual_balance ?? null, cur)}</dd>
-            </div>
-            <div>
-              <dt>Trop-value</dt>
-              <dd>{formatMoney(r.surplus_amount ?? null, cur)}</dd>
-            </div>
-            <div>
-              <dt>Couverture</dt>
-              <dd>
+            {r.settlement_notes && (
+              <p className="muted small" style={{ marginTop: 8 }}>
+                {r.settlement_notes}
+              </p>
+            )}
+          </Card>
+
+          <Card
+            title={
+              <>
+                <Banknote size={17} /> Couverture &amp; règlement
+              </>
+            }
+          >
+            <div className={`dation-coverage panel tone-${coverageTone}`}>
+              <div className="dation-coverage-head">
+                <strong>Synthèse de couverture</strong>
                 {r.covers_claim == null ? (
-                  "—"
+                  <Badge value="DRAFT" label="À calculer" />
                 ) : r.covers_claim ? (
                   <Badge value="OK" label="Couvre" />
                 ) : (
                   <Badge value="WARN" label="Insuffisant" />
                 )}
-              </dd>
+              </div>
+              <div className="dation-coverage-metrics">
+                <div>
+                  <span className="label">Créance CBS</span>
+                  <strong>
+                    {formatMoney(r.cbs_total_outstanding, cur)}
+                  </strong>
+                </div>
+                <div>
+                  <span className="label">Frais client</span>
+                  <strong>
+                    {formatMoney(r.fees_client_total ?? null, cur)}
+                  </strong>
+                </div>
+                <div>
+                  <span className="label">Créance à couvrir</span>
+                  <strong>
+                    {formatMoney(r.claim_to_cover ?? null, cur)}
+                  </strong>
+                </div>
+                <div>
+                  <span className="label">Total biens</span>
+                  <strong>
+                    {formatMoney(
+                      r.assets_total_value ?? r.asset_value ?? null,
+                      cur,
+                    )}
+                  </strong>
+                </div>
+                <div>
+                  <span className="label">Solde résiduel</span>
+                  <strong>
+                    {formatMoney(r.residual_balance ?? null, cur)}
+                  </strong>
+                </div>
+                <div>
+                  <span className="label">Trop-value</span>
+                  <strong>
+                    {formatMoney(r.surplus_amount ?? null, cur)}
+                  </strong>
+                </div>
+              </div>
+              <div
+                className="dation-coverage-bar"
+                role="progressbar"
+                aria-valuenow={coveragePct}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <span
+                  className="dation-coverage-fill"
+                  style={{ width: `${coveragePct}%` }}
+                />
+              </div>
+              <p className="dation-coverage-status">
+                Couverture estimée : {coveragePct}%
+                {r.coverage_gap && Number(r.coverage_gap) > 0
+                  ? ` · Écart ${formatMoney(r.coverage_gap, cur)}`
+                  : ""}
+              </p>
             </div>
-            <div>
-              <dt>Vérifié le</dt>
-              <dd>{r.cbs_checked_at ? formatDate(r.cbs_checked_at) : "—"}</dd>
-            </div>
-            {r.resulting_guarantee && (
+            <dl className="def-list two" style={{ marginTop: 14 }}>
               <div>
-                <dt>Garantie créée</dt>
+                <dt>Frais institution</dt>
                 <dd>
-                  <PermLink
-                    user={user}
-                    anyOf={PERM_GUARANTEES}
-                    to={`/garanties/${r.resulting_guarantee}`}
-                  >
-                    Voir la garantie
-                  </PermLink>
+                  {formatMoney(r.fees_institution_total ?? null, cur)}
                 </dd>
               </div>
+              <div>
+                <dt>Vérifié CBS le</dt>
+                <dd>
+                  {r.cbs_checked_at ? formatDate(r.cbs_checked_at) : "—"}
+                </dd>
+              </div>
+              <div>
+                <dt>Devise</dt>
+                <dd>{cur}</dd>
+              </div>
+              <div>
+                <dt>Couverture complète exigée</dt>
+                <dd>{r.require_full_coverage ? "Oui" : "Non"}</dd>
+              </div>
+            </dl>
+          </Card>
+        </div>
+
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <ShieldCheck size={17} /> Biens cédés
+              </>
+            }
+          >
+            {assets.length === 0 ? (
+              <p className="muted small">
+                {r.asset_description || "Aucun bien enregistré."}
+              </p>
+            ) : (
+              <ul className="dation-asset-list">
+                {assets.map((a) => (
+                  <li key={a.id} className="dation-asset-row">
+                    <div className="dation-asset-body">
+                      <div className="dation-asset-title">
+                        <span>{a.source_display}</span>
+                        {a.asset_type_display && (
+                          <em className="muted small">
+                            · {a.asset_type_display}
+                          </em>
+                        )}
+                      </div>
+                      <p className="dation-asset-desc">
+                        {a.description || "—"}
+                      </p>
+                      {a.guarantee ? (
+                        <PermLink
+                          user={user}
+                          anyOf={PERM_GUARANTEES}
+                          to={`/garanties/${a.guarantee}`}
+                        >
+                          <code>
+                            {a.guarantee_reference ||
+                              a.guarantee_type_display ||
+                              "Garantie"}
+                          </code>
+                        </PermLink>
+                      ) : a.guarantee_reference ? (
+                        <code className="muted">{a.guarantee_reference}</code>
+                      ) : null}
+                      {a.notes && (
+                        <p className="muted small">{a.notes}</p>
+                      )}
+                    </div>
+                    <div className="dation-asset-meta">
+                      <strong>{formatMoney(a.value, cur)}</strong>
+                      {editable && canInitiate && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => removeAsset.mutate(a.id)}
+                          aria-label="Retirer le bien"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
             )}
-          </dl>
-          {r.comment && (
-            <p className="muted small" style={{ marginTop: 12 }}>
-              {r.comment}
-            </p>
-          )}
-        </Card>
+          </Card>
 
-        <Card title="Biens du dossier">
-          {(r.assets ?? []).length === 0 ? (
-            <p>{r.asset_description || "—"}</p>
-          ) : (
-            <ul className="link-list">
-              {r.assets!.map((a) => (
-                <li key={a.id}>
-                  <span>
-                    <ShieldCheck size={14} /> {a.source_display}
-                    {a.asset_type_display && (
-                      <em className="muted small">
-                        {" "}
-                        · {a.asset_type_display}
-                      </em>
-                    )}
-                    {a.guarantee ? (
-                      <PermLink
-                        user={user}
-                        anyOf={PERM_GUARANTEES}
-                        to={`/garanties/${a.guarantee}`}
-                      >
-                        <code>{a.guarantee_reference || "Garantie"}</code>
-                      </PermLink>
-                    ) : a.guarantee_reference ? (
-                      <code className="muted"> {a.guarantee_reference}</code>
-                    ) : null}
-                    <em className="muted small"> — {a.description}</em>
-                  </span>
-                  <span className="row-actions">
-                    <span className="num">{formatMoney(a.value, cur)}</span>
-                    {editable && canInitiate && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => removeAsset.mutate(a.id)}
-                        aria-label="Retirer"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+          <Card
+            title={
+              <>
+                <Receipt size={17} /> Frais
+              </>
+            }
+          >
+            {fees.length === 0 ? (
+              <p className="muted small">Aucun frais enregistré.</p>
+            ) : (
+              <ul className="link-list">
+                {fees.map((f) => (
+                  <li key={f.id}>
+                    <span>
+                      <Receipt size={14} /> {f.fee_type_display}
+                      {f.label ? ` — ${f.label}` : ""}
+                      <em className="muted small"> · {f.payer_display}</em>
+                    </span>
+                    <span className="row-actions">
+                      <span className="num">
+                        {formatMoney(f.amount, cur)}
+                      </span>
+                      {editable && canInitiate && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => removeFee.mutate(f.id)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {editable && canInitiate && (
+              <div className="form-grid" style={{ marginTop: 12 }}>
+                <label className="field">
+                  <span>Type</span>
+                  <select
+                    value={feeType}
+                    onChange={(e) => setFeeType(e.target.value)}
+                  >
+                    {FEE_TYPES.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Montant</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={feeAmount}
+                    onChange={(e) => setFeeAmount(e.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Payeur</span>
+                  <select
+                    value={feePayer}
+                    onChange={(e) => setFeePayer(e.target.value)}
+                  >
+                    <option value="CLIENT">Client</option>
+                    <option value="INSTITUTION">Institution</option>
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Libellé</span>
+                  <input
+                    value={feeLabel}
+                    onChange={(e) => setFeeLabel(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  disabled={!feeAmount || addFee.isPending}
+                  onClick={() => addFee.mutate()}
+                >
+                  <Plus size={14} />
+                  Ajouter frais
+                </button>
+              </div>
+            )}
+          </Card>
+        </div>
 
-        <Card title="Frais">
-          {fees.length === 0 ? (
-            <p className="muted small">Aucun frais enregistré.</p>
-          ) : (
-            <ul className="link-list">
-              {fees.map((f) => (
-                <li key={f.id}>
-                  <span>
-                    <Receipt size={14} /> {f.fee_type_display}
-                    {f.label ? ` — ${f.label}` : ""}
-                    <em className="muted small"> · {f.payer_display}</em>
-                  </span>
-                  <span className="row-actions">
-                    <span className="num">{formatMoney(f.amount, cur)}</span>
-                    {editable && canInitiate && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => removeFee.mutate(f.id)}
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {editable && canInitiate && (
-            <div className="form-grid" style={{ marginTop: 12 }}>
-              <label className="field">
-                <span>Type</span>
-                <select value={feeType} onChange={(e) => setFeeType(e.target.value)}>
-                  {FEE_TYPES.map((t) => (
-                    <option key={t.value} value={t.value}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Montant</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="0.01"
-                  value={feeAmount}
-                  onChange={(e) => setFeeAmount(e.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>Payeur</span>
-                <select value={feePayer} onChange={(e) => setFeePayer(e.target.value)}>
-                  <option value="CLIENT">Client</option>
-                  <option value="INSTITUTION">Institution</option>
-                </select>
-              </label>
-              <label className="field">
-                <span>Libellé</span>
-                <input
-                  value={feeLabel}
-                  onChange={(e) => setFeeLabel(e.target.value)}
-                />
-              </label>
-              <button
-                type="button"
-                className="btn btn-primary btn-sm"
-                disabled={!feeAmount || addFee.isPending}
-                onClick={() => addFee.mutate()}
-              >
-                <Plus size={14} />
-                Ajouter frais
-              </button>
-            </div>
-          )}
-        </Card>
-
-        <Card title="Pièces jointes (documents / photos)">
-          {(docs.data ?? []).length === 0 ? (
-            <p className="muted small">Aucune pièce jointe.</p>
-          ) : (
-            <ul className="link-list">
-              {(docs.data ?? []).map((d) => (
-                <li key={d.id}>
-                  <span>
-                    <FileUp size={14} /> {d.name}
-                    <em className="muted small"> · {d.category_label}</em>
-                  </span>
-                  <a className="btn btn-ghost btn-sm" href={d.file} target="_blank" rel="noreferrer">
-                    Ouvrir
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-          {canInitiate &&
-            !["COMPLETED", "CANCELLED", "REJECTED"].includes(r.status) && (
+        <div className="detail-sections-row">
+          <Card
+            title={
+              <>
+                <FileUp size={17} /> Pièces jointes
+              </>
+            }
+          >
+            {(docs.data ?? []).length === 0 ? (
+              <p className="muted small">Aucune pièce jointe.</p>
+            ) : (
+              <ul className="link-list">
+                {(docs.data ?? []).map((d) => (
+                  <li
+                    key={d.id}
+                    className="row-clickable"
+                    onClick={() =>
+                      window.open(d.file, "_blank", "noopener,noreferrer")
+                    }
+                  >
+                    <span>
+                      <FileUp size={14} /> {d.name}
+                      <em className="muted small"> · {d.category_label}</em>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {canUploadDocs && (
               <div className="form-grid" style={{ marginTop: 12 }}>
                 <label className="field">
                   <span>Fichier</span>
@@ -1631,7 +1916,10 @@ export function DationDetailPage() {
                 </label>
                 <label className="field">
                   <span>Catégorie</span>
-                  <select value={docCat} onChange={(e) => setDocCat(e.target.value)}>
+                  <select
+                    value={docCat}
+                    onChange={(e) => setDocCat(e.target.value)}
+                  >
                     {DOC_CATS.map((c) => (
                       <option key={c.value} value={c.value}>
                         {c.label}
@@ -1646,12 +1934,13 @@ export function DationDetailPage() {
                     onChange={(e) => setDocAsset(e.target.value)}
                   >
                     <option value="">Dossier entier</option>
-                    {(r.assets ?? []).map((a) => (
+                    {assets.map((a) => (
                       <option key={a.id} value={a.id}>
-                        {(a.description || a.guarantee_reference || a.id).slice(
-                          0,
-                          60,
-                        )}
+                        {(
+                          a.description ||
+                          a.guarantee_reference ||
+                          a.id
+                        ).slice(0, 60)}
                       </option>
                     ))}
                   </select>
@@ -1667,37 +1956,49 @@ export function DationDetailPage() {
                 </button>
               </div>
             )}
-        </Card>
-
-        {myTask && (
-          <Card title={`Décision — ${myTask.step_name}`}>
-            <div className="card-title-icon">
-              <Gavel size={16} />
-            </div>
-            <DecisionPanel task={myTask} />
           </Card>
-        )}
 
-        <Card title="Circuit">
-          {!workflow.data?.instance ? (
-            <EmptyState
-              message={
-                editable
-                  ? "Circuit non démarré — soumettez le brouillon."
-                  : "Aucun circuit associé."
-              }
-            />
-          ) : (
-            <dl className="def-list two">
-              <div>
-                <dt>Statut circuit</dt>
-                <dd>
-                  <Badge value={workflow.data.instance.status} />
-                </dd>
+          <Card
+            title={
+              <>
+                <Landmark size={17} /> Circuit
+              </>
+            }
+          >
+            {!workflow.data?.instance ? (
+              <EmptyState
+                message={
+                  editable
+                    ? "Circuit non démarré — soumettez le brouillon."
+                    : "Aucun circuit associé."
+                }
+              />
+            ) : (
+              <dl className="def-list two">
+                <div>
+                  <dt>Statut circuit</dt>
+                  <dd>
+                    <Badge value={workflow.data.instance.status} />
+                  </dd>
+                </div>
+                {workflow.data.instance.definition && (
+                  <div>
+                    <dt>Définition</dt>
+                    <dd>{workflow.data.instance.definition}</dd>
+                  </div>
+                )}
+              </dl>
+            )}
+            {myTask && (
+              <div className="dation-decision-block">
+                <h4>
+                  <Gavel size={16} /> Décision — {myTask.step_name}
+                </h4>
+                <DecisionPanel task={myTask} />
               </div>
-            </dl>
-          )}
-        </Card>
+            )}
+          </Card>
+        </div>
       </div>
     </div>
   );

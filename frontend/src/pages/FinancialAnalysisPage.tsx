@@ -15,6 +15,7 @@ import { FinancialAnalysisForm } from "@/components/FinancialAnalysisForm";
 import { ErrorState, PageHeader, Spinner } from "@/components/ui";
 
 const OPEN_FOR_CONTRIBUTION = ["DRAFT", "SUBMITTED", "IN_APPROVAL", "RETURNED"];
+const ANALYSIS_LOCKED = ["DISBURSED", "CLOSED", "CANCELLED", "REJECTED"];
 
 export function FinancialAnalysisPage() {
   const { id, analysisId } = useParams<{ id: string; analysisId?: string }>();
@@ -123,12 +124,18 @@ export function FinancialAnalysisPage() {
   const myTask =
     myTasks?.results?.find((t) => t.application?.id === app.id) ?? null;
   const openWindow = OPEN_FOR_CONTRIBUTION.includes(app.status);
+  const analysisLocked = ANALYSIS_LOCKED.includes(app.status);
   const canContributeWindow =
-    isSuper || ((isOwner && openWindow) || !!myTask);
+    !analysisLocked && (isSuper || ((isOwner && openWindow) || !!myTask));
 
   if (isEdit) {
     const isAuthor = isSuper || (!!uid && existing?.created_by === uid);
-    if (!canChange || !isAuthor || !(existing?.can_edit || isSuper)) {
+    if (
+      analysisLocked ||
+      !canChange ||
+      !isAuthor ||
+      !(existing?.can_edit || (isSuper && !analysisLocked))
+    ) {
       return (
         <div className="page-shell">
           <PageHeader
@@ -143,8 +150,9 @@ export function FinancialAnalysisPage() {
             }
           />
           <p className="form-error">
-            Vous ne pouvez pas modifier cette analyse (droits insuffisants ou
-            fenêtre de contribution fermée).
+            {analysisLocked
+              ? "Ce dossier est décaissé ou clôturé : l'analyse financière n'est plus modifiable."
+              : "Vous ne pouvez pas modifier cette analyse (droits insuffisants ou fenêtre de contribution fermée)."}
           </p>
         </div>
       );
@@ -164,7 +172,9 @@ export function FinancialAnalysisPage() {
           }
         />
         <p className="form-error">
-          Vous n&apos;êtes pas autorisé à ajouter une analyse sur ce dossier.
+          {analysisLocked
+            ? "Ce dossier est décaissé ou clôturé : aucune nouvelle analyse financière ne peut être ajoutée."
+            : "Vous n'êtes pas autorisé à ajouter une analyse sur ce dossier."}
         </p>
       </div>
     );

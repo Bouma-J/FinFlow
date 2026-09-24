@@ -68,13 +68,37 @@ const NUMERIC_KEYS = [
   // E&S — emplois
   "jobs_created", "jobs_maintained", "jobs_women", "jobs_youth",
   "workforce_count",
-  // Activité annexe / groupement
+  // Activité génératrice de revenus / groupement
   "activity_turnover", "activity_expenses",
   "members_count", "active_contributing_members",
   "collective_contributions", "collective_savings",
   "collective_other_income", "collective_operating_expenses",
   "group_activity_turnover", "group_activity_expenses",
 ] as const;
+
+type IndividualProfile = "SALARIE" | "INDEPENDANT" | "MIXTE";
+
+const INDIVIDUAL_PROFILES: { value: IndividualProfile; label: string }[] = [
+  { value: "SALARIE", label: "Salarié" },
+  { value: "INDEPENDANT", label: "Indépendant" },
+  { value: "MIXTE", label: "Mixte (salarié + activité)" },
+];
+
+function inferIndividualProfile(
+  initial?: FinancialAnalysis,
+): IndividualProfile {
+  const stored = initial?.individual_profile;
+  if (stored === "SALARIE" || stored === "INDEPENDANT" || stored === "MIXTE") {
+    return stored;
+  }
+  const salary = Number(initial?.salary_income || initial?.net_salary || 0);
+  const activity =
+    Boolean(initial?.has_side_activity) ||
+    Number(initial?.activity_turnover || 0) > 0;
+  if (salary > 0 && activity) return "MIXTE";
+  if (activity) return "INDEPENDANT";
+  return "SALARIE";
+}
 
 const ES_STR_KEYS = [
   "sector", "sub_sector", "value_chain_position", "market_dynamic",
@@ -117,6 +141,9 @@ const FIELD_LABELS: Record<string, string> = {
   application: "Dossier",
   turnover: "Chiffre d'affaires",
   reference_period: "Période de référence",
+  individual_profile: "Profil particulier",
+  salary_income: "Salaire net",
+  activity_turnover: "CA / recettes activité",
 };
 
 function num(v: string | null | undefined): string {
@@ -229,6 +256,28 @@ export function FinancialAnalysisForm({
   const [hasSideActivity, setHasSideActivity] = useState(
     Boolean((initial as { has_side_activity?: boolean } | undefined)?.has_side_activity),
   );
+  const [individualProfile, setIndividualProfile] = useState<IndividualProfile>(
+    () => inferIndividualProfile(initial),
+  );
+  const showSalaryBlock =
+    isIndividual &&
+    (individualProfile === "SALARIE" || individualProfile === "MIXTE");
+  const showActivityBlock =
+    isIndividual &&
+    (individualProfile === "INDEPENDANT" ||
+      individualProfile === "MIXTE" ||
+      (individualProfile === "SALARIE" && hasSideActivity));
+  const showStabilityBlock = showSalaryBlock;
+
+  function setProfile(next: IndividualProfile) {
+    setIndividualProfile(next);
+    if (next === "INDEPENDANT" || next === "MIXTE") {
+      setHasSideActivity(true);
+    } else if (next === "SALARIE") {
+      // Activité optionnelle : on ne force pas, on conserve le choix utilisateur.
+    }
+  }
+
   const [solidarity, setSolidarity] = useState(
     Boolean(
       (initial as { solidarity_commitment?: boolean } | undefined)
@@ -251,9 +300,17 @@ export function FinancialAnalysisForm({
         { id: "fa-balance", icon: Building2, label: "Bilan simplifié", show: isCorporate },
         { id: "fa-trend", icon: Gauge, label: "Tendance (N-1)", show: isCorporate },
         { id: "fa-income", icon: Wallet, label: "Revenus du ménage", show: isIndividual },
-        { id: "fa-activity", icon: Store, label: "Activité annexe", show: isIndividual },
+        {
+          id: "fa-activity",
+          icon: Store,
+          label:
+            individualProfile === "INDEPENDANT"
+              ? "Activité"
+              : "Activité génératrice de revenus",
+          show: isIndividual && (showActivityBlock || individualProfile === "SALARIE"),
+        },
         { id: "fa-charges", icon: ReceiptText, label: "Charges du ménage", show: isIndividual },
-        { id: "fa-stability", icon: Landmark, label: "Stabilité & quotité", show: isIndividual },
+        { id: "fa-stability", icon: Landmark, label: "Stabilité & quotité", show: showStabilityBlock },
         { id: "fa-group", icon: Users, label: "Groupement", show: isGroupement },
         { id: "fa-collateral", icon: Shield, label: "Garanties & cautions", show: true },
         { id: "fa-treasury", icon: Wallet, label: "Trésorerie prévisionnelle", show: true },
@@ -262,7 +319,14 @@ export function FinancialAnalysisForm({
         { id: "fa-es", icon: Leaf, label: "Analyse E&S", show: isCorporate || isGroupement },
         { id: "fa-conclusion", icon: Calculator, label: "Conclusion", show: true },
       ].filter((s) => s.show),
-    [isCorporate, isIndividual, isGroupement],
+    [
+      isCorporate,
+      isIndividual,
+      isGroupement,
+      individualProfile,
+      showActivityBlock,
+      showStabilityBlock,
+    ],
   );
 
   const [activeSection, setActiveSection] = useState("fa-params");
@@ -311,9 +375,16 @@ export function FinancialAnalysisForm({
       val("fixed_assets");
     const debts = val("supplier_debt") + val("ongoing_credit_balance");
     // Particulier
-    const income =
+    let income =
       val("salary_income") + val("spouse_income") + val("rental_income") +
       val("other_activity_income") + val("other_income");
+    if (
+      individualProfile === "INDEPENDANT" ||
+      individualProfile === "MIXTE" ||
+      hasSideActivity
+    ) {
+      income += val("activity_turnover") - val("activity_expenses");
+    }
     const charges =
       val("rent_expense") + val("food_expense") + val("utilities_expense") +
       val("transport_expense") + val("education_expense") +
@@ -336,7 +407,7 @@ export function FinancialAnalysisForm({
         val("projected_monthly_inflows") - val("projected_monthly_outflows"),
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [numbers, isCorporate, dependents]);
+  }, [numbers, isCorporate, dependents, individualProfile, hasSideActivity]);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -354,7 +425,14 @@ export function FinancialAnalysisForm({
       if (creditBureauDate) fd.append("credit_bureau_date", creditBureauDate);
       fd.append("has_payment_incidents", String(hasIncidents));
       fd.append("incidents_comment", incidentsComment);
-      fd.append("has_side_activity", String(hasSideActivity));
+      fd.append("has_side_activity", String(
+        individualProfile === "INDEPENDANT" ||
+          individualProfile === "MIXTE" ||
+          hasSideActivity,
+      ));
+      if (isIndividual) {
+        fd.append("individual_profile", individualProfile);
+      }
       fd.append("activity_comment", activityComment);
       fd.append("solidarity_commitment", String(solidarity));
       fd.append("group_comment", groupComment);
@@ -465,6 +543,22 @@ export function FinancialAnalysisForm({
                 : ""}
             </span>
           </div>
+          {isIndividual && (
+            <Select
+              label="Situation professionnelle"
+              value={individualProfile}
+              onChange={(v) => {
+                if (
+                  v === "SALARIE" ||
+                  v === "INDEPENDANT" ||
+                  v === "MIXTE"
+                ) {
+                  setProfile(v);
+                }
+              }}
+              options={INDIVIDUAL_PROFILES}
+            />
+          )}
           <div className="form-grid two-col">
             <Select
               label="Période de référence"
@@ -637,13 +731,31 @@ export function FinancialAnalysisForm({
             id="fa-income"
             icon={Wallet}
             title="Revenus du ménage"
-            description="Ensemble des revenus perçus par le foyer."
+            description={
+              individualProfile === "INDEPENDANT"
+                ? "Revenus du foyer hors activité principale (conjoint, locatif, autres)."
+                : "Ensemble des revenus perçus par le foyer."
+            }
           >
             <div className="form-grid two-col">
-              <Money label="Salaire net (demandeur)" value={numbers.salary_income} onChange={set("salary_income")} cur={cur} />
+              {showSalaryBlock && (
+                <Money
+                  label="Salaire net (demandeur)"
+                  value={numbers.salary_income}
+                  onChange={set("salary_income")}
+                  cur={cur}
+                />
+              )}
               <Money label="Revenus du conjoint" value={numbers.spouse_income} onChange={set("spouse_income")} cur={cur} />
               <Money label="Revenus locatifs / rente" value={numbers.rental_income} onChange={set("rental_income")} cur={cur} />
-              <Money label="Revenus d'activité annexe" value={numbers.other_activity_income} onChange={set("other_activity_income")} cur={cur} />
+              {individualProfile === "SALARIE" && (
+                <Money
+                  label="Revenus d'activité (hors bloc dédié)"
+                  value={numbers.other_activity_income}
+                  onChange={set("other_activity_income")}
+                  cur={cur}
+                />
+              )}
               <Money label="Autres revenus" value={numbers.other_income} onChange={set("other_income")} cur={cur} />
             </div>
             <div className="finance-recap">
@@ -654,18 +766,32 @@ export function FinancialAnalysisForm({
           <FormSection
             id="fa-activity"
             icon={Store}
-            title="Mini-bloc activité annexe"
-            description="Si le demandeur exerce une activité indépendante en plus du ménage."
+            title={
+              individualProfile === "INDEPENDANT"
+                ? "Activité génératrice de revenus"
+                : individualProfile === "MIXTE"
+                  ? "Activité génératrice de revenus"
+                  : "Activité génératrice de revenus (optionnelle)"
+            }
+            description={
+              individualProfile === "INDEPENDANT"
+                ? "Activité principale du demandeur (CA et charges)."
+                : individualProfile === "MIXTE"
+                  ? "Activité exercée en plus du salaire."
+                  : "Si le demandeur exerce une activité indépendante en plus du salaire."
+            }
           >
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={hasSideActivity}
-                onChange={(e) => setHasSideActivity(e.target.checked)}
-              />
-              Exerce une activité annexe
-            </label>
-            {hasSideActivity && (
+            {individualProfile === "SALARIE" && (
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={hasSideActivity}
+                  onChange={(e) => setHasSideActivity(e.target.checked)}
+                />
+                Exerce une activité génératrice de revenus
+              </label>
+            )}
+            {showActivityBlock && (
               <>
                 <div className="form-grid two-col" style={{ marginTop: "0.75rem" }}>
                   <Money
@@ -723,6 +849,7 @@ export function FinancialAnalysisForm({
             </div>
           </FormSection>
 
+          {showStabilityBlock && (
           <FormSection
             id="fa-stability"
             icon={Landmark}
@@ -741,6 +868,7 @@ export function FinancialAnalysisForm({
               épargne). Laisser la pondération vide pour le seuil filiale.
             </p>
           </FormSection>
+          )}
         </>
       )}
 

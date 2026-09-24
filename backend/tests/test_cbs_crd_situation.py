@@ -12,9 +12,13 @@ from apps.corebanking.models import CoreBankingConnector
 from apps.corebanking.services import (
     CoreBankingError,
     RestAdapter,
+    USER_MSG_CBS_GENERIC,
+    USER_MSG_CBS_NOT_CONFIGURED,
+    USER_MSG_CBS_UNAVAILABLE,
     _normalize_credit_schedule,
     compute_cbs_overdue,
     get_loan_status,
+    user_message_for_cbs_error,
 )
 from apps.catalog.defaults import ensure_catalog_defaults
 
@@ -45,6 +49,19 @@ def test_normalize_schedule_partial_outstanding():
     )
     assert settled is False
     assert outstanding == Decimal("42683")
+
+
+def test_normalize_vision_loans_sums_encours():
+    settled, outstanding = _normalize_credit_schedule(
+        {
+            "datas": [
+                {"numeroPret": "P1", "encours": 100, "montantPret": 100},
+                {"numeroPret": "P2", "encours": 50.5, "montantPret": 50.5},
+            ]
+        }
+    )
+    assert settled is False
+    assert outstanding == Decimal("150.5")
 
 
 def test_rest_adapter_crd_situation_maps_settled(tenant_a):
@@ -192,3 +209,27 @@ def test_compute_cbs_overdue_uses_oldest_unpaid_due_date():
     assert result["settled"] is False
     assert result["days_overdue"] == 40
     assert result["overdue_amount"] == Decimal("20000")
+
+
+def test_user_message_for_cbs_error_hides_technical_details():
+    assert (
+        user_message_for_cbs_error(
+            "Impossible de joindre le CBS (situation crédit) "
+            "(HTTPSConnectionPool(host='x', port=443): Max retries exceeded)"
+        )
+        == USER_MSG_CBS_UNAVAILABLE
+    )
+    assert (
+        user_message_for_cbs_error(
+            "Aucun connecteur Core Banking actif pour cette filiale. "
+            "Configurez-en un dans Administration → Connecteurs CBS."
+        )
+        == USER_MSG_CBS_NOT_CONFIGURED
+    )
+    assert user_message_for_cbs_error("Adhérent introuvable !") == (
+        "Adhérent introuvable !"
+    )
+    assert (
+        user_message_for_cbs_error("Échec situation crédit CBS (HTTP 500).")
+        == USER_MSG_CBS_GENERIC
+    )

@@ -36,15 +36,18 @@ export function StatCard({
   hint,
   tone = "default",
   icon: Icon,
+  action,
 }: {
   label: string;
   value: ReactNode;
   hint?: string;
   tone?: "default" | "success" | "warning" | "danger";
   icon?: LucideIcon;
+  /** Lien / action discrète à droite du KPI (la carte elle-même n'est pas cliquable). */
+  action?: ReactNode;
 }) {
   return (
-    <div className={`stat-card tone-${tone}`}>
+    <div className={`stat-card tone-${tone}${action ? " has-action" : ""}`}>
       {Icon && (
         <span className="stat-icon">
           <Icon size={22} />
@@ -55,6 +58,7 @@ export function StatCard({
         <span className="stat-value">{value}</span>
         {hint && <span className="stat-hint">{hint}</span>}
       </span>
+      {action && <div className="stat-card-action">{action}</div>}
     </div>
   );
 }

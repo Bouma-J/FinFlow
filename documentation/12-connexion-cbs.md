@@ -37,7 +37,7 @@ Avant d’appeler le CBS, renseigner les **références croisées** :
 | Utilisateur | `cbs_id` (sinon `employee_id`) | `idGestionnaire` |
 | Périodicité | `LoanPeriodicity.cbs_code` | `idPeriodicite` |
 | Méthode remboursement | `RepaymentMethod.cbs_code` | `idProduitRemb` |
-| Devise | `Currency.cbs_code` | `codeDevise` |
+| Devise | `Currency.cbs_code` (= code Perfect, ex. `FCFA`) | `codeDevise` |
 | Prêt / dossier | `core_banking_reference` (loan) | Réf. prêt CBS (solde, main levée) |
 | Prêt | `cbs_*` (demande, contrat, statut) | Références renvoyées par `crd/simple` |
 | Main levée | `cbs_loan_reference` | Réf. prêt contrôlée au CBS |
@@ -99,7 +99,13 @@ Content-Type: application/json
     "endpoints": {
       "authentification": "gateway-perfect/authentification",
       "adh_situation": "gateway-perfect/adh/situation",
-      "crd_simple": "gateway-perfect/crd/simple"
+      "crd_simple": "gateway-perfect/crd/simple",
+      "ref_devise_list": "gateway-perfect/ref/devise-list",
+      "ref_object_fin_list": "gateway-perfect/ref/object-fin-list",
+      "ref_source_fin_list": "gateway-perfect/ref/source-fin-list",
+      "ref_motif_decision_list": "gateway-perfect/ref/motif-decision-list",
+      "ref_profession_list": "gateway-perfect/ref/profession-list",
+      "ref_gestionnaire_list": "gateway-perfect/ref/gestionnaire-list"
     },
     "simulate": {
       "loan_settled_default": true,
@@ -122,6 +128,17 @@ Notes :
 - `auth_config` est **write-only** (jamais renvoyé en lecture API).
 - Authentification Perfect : `POST {base_url}/gateway-perfect/authentification` en `application/x-www-form-urlencoded` (`username`, `password`, `scope=perfect`) → `accessToken`, puis `Authorization: Bearer …` sur les autres appels.
 - Jeton statique optionnel : `auth_config.access_token` (bypass de `/authentification`).
+- Référentiels Perfect (GET + Bearer) : `ref/devise-list`, `ref/periodicite-list`,
+  `ref/object-fin-list`, `ref/source-fin-list`, `ref/motif-decision-list`,
+  `ref/profession-list`, `ref/point-service-list`, `ref/gestionnaire-list`
+  (+ `type-piece-identite-list` déclaré).
+  Réponses `{ datas: [{ id, code, libelle }] }`.
+  **Source unique** : pas de CRUD manuel sur devises / périodicités / objets /
+  sources / motifs / professions / points de service / gestionnaires.
+  Import : `POST /api/v1/cbs-connectors/{id}/sync-referentials/`
+  (UI **Référentiels CBS → Mettre à jour depuis le CBS**).
+  Association manuelle : agence ↔ point de service, utilisateur ↔ gestionnaire
+  (listes déroulantes sur les IDs syncés).
 - `mapping_rules` est libre (JSON) : simulation, mapping de champs, codes produit CBS, etc.
 - `certificate_reference` : pointeur vers un certificat (coffre / volume monté), pas le certificat lui-même.
 

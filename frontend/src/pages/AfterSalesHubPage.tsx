@@ -7,7 +7,7 @@ import {
   Stamp,
   Unlock,
 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type { AfterSalesHub } from "@/api/types";
@@ -36,6 +36,7 @@ const KIND_LABEL: Record<string, string> = {
 };
 
 export function AfterSalesHubPage() {
+  const navigate = useNavigate();
   const { user, activeTenant } = useAuth();
   const needsTenant = Boolean(user?.is_group_level && !activeTenant);
 
@@ -221,17 +222,14 @@ export function AfterSalesHubPage() {
                           <span className="muted small">{t.extra}</span>
                         )}
                       </div>
-                      <div className="row-actions" style={{ marginTop: 12, gap: 8 }}>
-                        <Link className="btn btn-ghost btn-sm" to={t.to}>
-                          Ouvrir
-                        </Link>
-                        {t.canCreate && t.createTo && (
+                      {t.canCreate && t.createTo && (
+                        <div className="row-actions" style={{ marginTop: 12, gap: 8 }}>
                           <Link className="btn btn-primary btn-sm" to={t.createTo}>
                             <Plus size={14} />
                             Nouvelle
                           </Link>
-                        )}
-                      </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </Card>
@@ -250,12 +248,15 @@ export function AfterSalesHubPage() {
                     <th>Référence</th>
                     <th>Client</th>
                     <th>Statut</th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
                   {recent.map((row) => (
-                    <tr key={`${row.kind}-${row.id}`}>
+                    <tr
+                      key={`${row.kind}-${row.id}`}
+                      className="row-clickable"
+                      onClick={() => navigate(row.detail_path)}
+                    >
                       <td>
                         <Badge
                           value="info"
@@ -264,14 +265,8 @@ export function AfterSalesHubPage() {
                       </td>
                       <td>{row.reference || "—"}</td>
                       <td>{row.client_name}</td>
-                      <td className="small">{row.status_display || row.status}</td>
-                      <td>
-                        <Link
-                          className="btn btn-ghost btn-sm"
-                          to={row.detail_path}
-                        >
-                          Voir
-                        </Link>
+                      <td className="small">
+                        {row.status_display || row.status}
                       </td>
                     </tr>
                   ))}

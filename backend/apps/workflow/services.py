@@ -31,21 +31,46 @@ def get_active_definition(tenant_id, target_type):
     )
 
 
-def select_definition(tenant_id, target_type, amount, risk_level=None):
+def select_definition(
+    tenant_id,
+    target_type,
+    amount,
+    risk_level=None,
+    product=None,
+):
     """Choisit le circuit adapté au dossier parmi les circuits actifs.
 
-    Plusieurs circuits peuvent être actifs simultanément (p. ex. une tranche de
-    montant par circuit). On retient le premier circuit actif dont au moins une
-    étape s'applique au couple (montant, niveau de risque). Les circuits les plus
-    récents (version décroissante) sont prioritaires en cas de recouvrement.
+    Critères de matching (tous optionnels, combinables) :
+    - tranche de montant du circuit (min/max)
+    - produit précis ou famille de produits
+    - au moins une étape applicable au couple (montant, risque)
+
+    Priorité si plusieurs circuits matchent :
+    1. spécificité (montant+produit > produit > famille > montant > générique)
+    2. version la plus récente
     """
-    definitions = WorkflowDefinition.all_tenants.filter(
-        tenant_id=tenant_id, target_type=target_type, is_active=True
-    ).order_by("-version")
+    definitions = list(
+        WorkflowDefinition.all_tenants.filter(
+            tenant_id=tenant_id, target_type=target_type, is_active=True
+        )
+        .select_related("product", "product_category")
+        .prefetch_related("steps")
+        .order_by("-version")
+    )
+    candidates = []
     for definition in definitions:
-        if _applicable_steps(definition, amount, risk_level):
-            return definition
-    return None
+        if not definition.matches(amount, product=product):
+            continue
+        if not _applicable_steps(definition, amount, risk_level):
+            continue
+        candidates.append(definition)
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda d: (d.specificity_score(), d.version),
+        reverse=True,
+    )
+    return candidates[0]
 
 
 def definition_is_used(definition):
@@ -242,16 +267,20 @@ def start_workflow(target, amount, risk_level=None, definition=None, target_type
             target_type = definition.target_type
         else:
             target_type = WorkflowDefinition.TargetType.CREDIT
+    product = None
+    if target_type == WorkflowDefinition.TargetType.CREDIT:
+        product = getattr(target, "product", None)
     if definition is None:
         definition = select_definition(
             tenant_id,
             target_type,
             amount,
             risk_level,
+            product=product,
         )
     if definition is None:
         # On distingue « aucun circuit actif » de « aucun circuit ne couvre le
-        # montant » pour guider le paramétrage.
+        # montant / produit » pour guider le paramétrage.
         has_active = WorkflowDefinition.all_tenants.filter(
             tenant_id=tenant_id,
             target_type=target_type,
@@ -265,8 +294,9 @@ def start_workflow(target, amount, risk_level=None, definition=None, target_type
                 f"Aucun circuit d'approbation actif ({label}) pour cette filiale."
             )
         raise WorkflowError(
-            f"Aucun circuit d'approbation ({label}) ne couvre le montant. "
-            "Vérifiez les tranches de montant des circuits configurés."
+            f"Aucun circuit d'approbation ({label}) ne couvre ce dossier "
+            "(montant et/ou produit). Vérifiez les critères des circuits "
+            "configurés."
         )
 
     steps = _applicable_steps(definition, amount, risk_level)
@@ -442,25 +472,100 @@ def user_can_act(user, step):
 
     Prend en compte les délégations actives : le délégataire peut agir si
     le délégant appartient au groupe requis par l'étape.
+
+    Comité de crédit groupe : un utilisateur Groupe membre du groupe
+    transverse peut statuer sur les étapes « Comité de crédit groupe »
+    même si le ``required_group`` est le TenantRole de la filiale.
     """
     if not (user and user.is_authenticated):
         return False
-    if user.is_superuser or getattr(user, "is_group_level", False):
+    if user.is_superuser:
         return True
     if step.required_group_id is None:
         return False
-    return step.required_group_id in effective_group_ids(user)
+    if step.required_group_id in effective_group_ids(user):
+        return True
+
+    from apps.accounts.services import (
+        CREDIT_COMMITTEE_GROUP_ROLE_NAME,
+        committee_role_name_for_group,
+        user_has_group_credit_committee_role,
+    )
+
+    role_name = committee_role_name_for_group(
+        getattr(step, "required_group", None)
+    )
+    if (
+        getattr(user, "is_group_level", False)
+        and role_name == CREDIT_COMMITTEE_GROUP_ROLE_NAME
+        and user_has_group_credit_committee_role(user)
+    ):
+        return True
+
+    # Admin Groupe (staff) conserve la capacité transverse de supervision.
+    if getattr(user, "is_group_level", False) and user.is_staff:
+        return True
+    return False
+
+
+def is_credit_committee_step(step) -> bool:
+    """Étape dont le rôle habilité est un comité de crédit (filiale ou groupe)."""
+    from apps.accounts.services import (
+        committee_role_name_for_group,
+        is_credit_committee_role_name,
+    )
+
+    return is_credit_committee_role_name(
+        committee_role_name_for_group(getattr(step, "required_group", None))
+    )
+
+
+def application_has_committee_pv(application) -> bool:
+    """True si un PV de comité (catégorie PV_COMITE) est lié au dossier."""
+    from apps.documents.models import Document
+
+    ct = ContentType.objects.get_for_model(application.__class__)
+    return Document.all_tenants.filter(
+        tenant_id=application.tenant_id,
+        content_type=ct,
+        object_id=application.pk,
+        category__code="PV_COMITE",
+        is_deleted=False,
+    ).exists()
+
+
+def _require_committee_pv(task, application, decision):
+    """Impose le dépôt du PV avant validation d'une étape comité."""
+    if decision != ApprovalTask.Status.APPROVED:
+        return
+    if application is None:
+        return
+    if not is_credit_committee_step(task.step):
+        return
+    if application_has_committee_pv(application):
+        return
+    raise WorkflowError(
+        "Le procès-verbal de comité de crédit (catégorie PV_COMITE) doit "
+        "être déposé sur le dossier avant de valider cette étape."
+    )
 
 
 def effective_group_ids(user) -> set[int]:
     """Groupes dont l'utilisateur est membre, ou via délégation active.
 
     Utilisé pour les boîtes de tâches, KPIs et (côté décision) ``user_can_act``.
+
+    Les membres du comité de crédit Groupe (groupe Django transverse) voient
+    aussi les étapes filiales « Comité de crédit groupe ».
     """
     if not (user and getattr(user, "is_authenticated", False)):
         return set()
     ids = set(user.groups.values_list("id", flat=True))
     from apps.accounts.models import Delegation
+    from apps.accounts.services import (
+        CREDIT_COMMITTEE_GROUP_ROLE_NAME,
+        user_has_group_credit_committee_role,
+    )
 
     today = timezone.now().date()
     delegated = Delegation.objects.filter(
@@ -470,6 +575,15 @@ def effective_group_ids(user) -> set[int]:
         end_date__gte=today,
     ).values_list("delegator__groups__id", flat=True)
     ids.update(gid for gid in delegated if gid is not None)
+
+    if user_has_group_credit_committee_role(user):
+        from apps.accounts.models import TenantRole
+
+        ids.update(
+            TenantRole.objects.filter(
+                name=CREDIT_COMMITTEE_GROUP_ROLE_NAME
+            ).values_list("group_id", flat=True)
+        )
     return ids
 
 
@@ -517,6 +631,10 @@ def clone_workflow_definition(source, *, user=None, deactivate_source=True):
         target_type=source.target_type,
         version=max_version + 1,
         is_active=True,
+        min_amount=source.min_amount,
+        max_amount=source.max_amount,
+        product_id=source.product_id,
+        product_category_id=source.product_category_id,
     )
     if deactivate_source and source.is_active:
         source.is_active = False
@@ -813,6 +931,7 @@ def process_decision(
 
     application = _get_credit_application(instance)
     _check_self_validation(user, instance)
+    _require_committee_pv(task, application, decision)
 
     validated_opinion = _validate_opinion(task, decision, opinion, reserves)
     if (

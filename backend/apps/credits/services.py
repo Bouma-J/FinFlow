@@ -1,6 +1,6 @@
 """Services métier des dossiers de crédit (simulation, soumission, décaissement)."""
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 
 from dateutil.relativedelta import relativedelta
@@ -31,6 +31,52 @@ _PERIOD_MONTHS = {
 
 def _q(value):
     return Decimal(value).quantize(CENTS, rounding=ROUND_HALF_UP)
+
+
+def _parse_cbs_operation_date(value):
+    """Parse ``dateOperation`` Perfect (YYYY-MM-DD) → date | None."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    text = str(value).strip()[:10]
+    try:
+        return date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def apply_cbs_disbursement_refs_to_application(application, cbs_result: dict | None):
+    """Copie numDemande / refDemande / numContrat / dateOperation sur le dossier."""
+    if not cbs_result:
+        return []
+    raw = cbs_result.get("raw") if isinstance(cbs_result.get("raw"), dict) else {}
+    updates: dict = {}
+    num_demande = str(
+        cbs_result.get("num_demande") or raw.get("numDemande") or ""
+    ).strip()
+    ref_demande = str(
+        cbs_result.get("ref_demande") or raw.get("refDemande") or ""
+    ).strip()
+    num_contrat = str(
+        cbs_result.get("num_contrat") or raw.get("numContrat") or ""
+    ).strip()
+    op_date = _parse_cbs_operation_date(
+        raw.get("dateOperation") or cbs_result.get("date_operation")
+    )
+    if num_demande:
+        updates["cbs_demande_number"] = num_demande[:100]
+    if ref_demande:
+        updates["cbs_demande_ref"] = ref_demande[:100]
+    if num_contrat:
+        updates["cbs_contract_number"] = num_contrat[:100]
+    if op_date is not None:
+        updates["cbs_operation_date"] = op_date
+    for key, value in updates.items():
+        setattr(application, key, value)
+    return list(updates.keys())
 
 
 def _round_step(value, step=AMOUNT_STEP):
@@ -674,12 +720,14 @@ def disburse_application(application, disburse_date=None, *, skip_cbs=False):
         application.status = CreditApplication.Status.DISBURSED
         application.disbursed_at = timezone.now()
         application.disbursement_previous_status = ""
-        application.save(
-            update_fields=[
-                "status",
-                "disbursed_at",
-                "disbursement_previous_status",
-                "updated_at",
-            ]
+        app_update_fields = [
+            "status",
+            "disbursed_at",
+            "disbursement_previous_status",
+            "updated_at",
+        ]
+        app_update_fields.extend(
+            apply_cbs_disbursement_refs_to_application(application, cbs_result)
         )
+        application.save(update_fields=list(dict.fromkeys(app_update_fields)))
         return loan

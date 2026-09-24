@@ -46,7 +46,6 @@ import {
   Badge,
   Card,
   ErrorState,
-  PageHeader,
   Spinner,
   formatDate,
   formatMoney,
@@ -250,148 +249,185 @@ export function GuaranteeDetailPage({
   }
 
   return (
-    <div>
-      <PageHeader
-        icon={ShieldCheck}
-        title={g.reference || "Garantie"}
-        subtitle={
-          g.type_display +
-          (isPledge && g.pledge_category
-            ? ` — ${lbl(GUARANTEE_LABELS.pledge_category, g.pledge_category)}`
-            : "")
-        }
-        actions={
-          <div className="row-actions">
-            <Link className="btn btn-ghost" to={backTo}>
-              <ArrowLeft />
+    <div className="page-shell detail-banner-page">
+      <div className="client-banner">
+        <div className="client-banner-main">
+          <div className="client-banner-info">
+            <span className="client-banner-icon">
+              <ShieldCheck size={26} />
+            </span>
+            <div className="client-banner-identity">
+              <h2 className="client-banner-name">
+                {g.type_display || "Garantie"}
+              </h2>
+              <p className="client-banner-ref">
+                Garantie <code>{g.reference || g.id.slice(0, 8)}</code>
+                {isPledge && g.pledge_category && (
+                  <span className="muted">
+                    {" "}
+                    · {lbl(GUARANTEE_LABELS.pledge_category, g.pledge_category)}
+                  </span>
+                )}
+                {g.application && canViewCredits && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    className="client-banner-inline-link"
+                    to={`/dossiers/${g.application}`}
+                    fallback={
+                      g.application_reference ? (
+                        <span className="muted">
+                          · Crédit {g.application_reference}
+                        </span>
+                      ) : null
+                    }
+                  >
+                    · Dossier crédit{" "}
+                    {g.application_reference || g.application.slice(0, 8)}
+                  </PermLink>
+                )}
+              </p>
+              <div className="client-banner-meta">
+                <Badge
+                  value={g.status}
+                  label={
+                    g.status_display ||
+                    lbl(GUARANTEE_LABELS.status, g.status)
+                  }
+                />
+                {openFormId && (
+                  <Badge value="IN_PROGRESS" label="Formalisation en cours" />
+                )}
+                {g.formalized_at && <Badge value="OK" label="Formalisée" />}
+                {completedDationId && (
+                  <Badge value="REALIZED" label="Réalisée par dation" />
+                )}
+                {originDationId && (
+                  <Badge value="DATION" label="Issue d'une dation" />
+                )}
+                <span className="muted">
+                  Valeur actualisée : {formatMoney(g.current_value)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="client-banner-actions">
+            <Link className="btn btn-banner" to={backTo}>
+              <ArrowLeft size={15} />
               Retour
             </Link>
-            {(canEdit ||
-              canDelete ||
-              canRelease ||
-              canFormalize ||
-              canProposeDation ||
-              (canViewFormalizations && openFormId) ||
-              (canViewDations &&
-                (openDationId || completedDationId || originDationId)) ||
-              (canViewReleases && openReleaseId) ||
-              (canViewCollections && g.collection_case_id)) && (
-              <>
-                {canEdit && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/garanties/${id}/modifier`}
-                  >
-                    <FilePenLine />
-                    Modifier
-                  </Link>
-                )}
-                {canFormalize && (
-                  <Link
-                    className="btn btn-primary"
-                    to={`/formalisations/nouvelle?client=${g.client}&application=${g.application}&guarantee=${g.id}`}
-                  >
-                    <Stamp />
-                    Formaliser
-                  </Link>
-                )}
-                {canViewFormalizations && openFormId && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/formalisations/${openFormId}`}
-                  >
-                    <Stamp />
-                    Voir formalisation
-                  </Link>
-                )}
-                {canViewCollections && g.collection_case_id && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/recouvrement/${g.collection_case_id}`}
-                  >
-                    <CircleDollarSign />
-                    Recouvrement
-                    {g.collection_stage_display
-                      ? ` · ${g.collection_stage_display}`
-                      : ""}
-                  </Link>
-                )}
-                {canViewDations && openDationId && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/dations/${openDationId}`}
-                  >
-                    <Unlock />
-                    Voir dation
-                  </Link>
-                )}
-                {canViewReleases && openReleaseId && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/mains-levees/${openReleaseId}`}
-                  >
-                    <ShieldOff />
-                    Voir main levée
-                  </Link>
-                )}
-                {canViewDations && completedDationId && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/dations/${completedDationId}`}
-                  >
-                    <Unlock />
-                    Voir la dation de réalisation
-                  </Link>
-                )}
-                {canViewDations && originDationId && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/dations/${originDationId}`}
-                  >
-                    <Unlock />
-                    Dation d&apos;origine
-                  </Link>
-                )}
-                {canProposeDation && (
-                  <Link
-                    className="btn btn-ghost"
-                    to={`/dations/nouvelle?client=${g.client}&guarantee=${g.id}${
-                      g.application ? `&application=${g.application}` : ""
-                    }`}
-                  >
-                    <Unlock />
-                    Proposer dation
-                  </Link>
-                )}
-                {canRelease && (
-                  <Link
-                    className="btn btn-primary"
-                    to={`/mains-levees/nouvelle?client=${g.client}&guarantee=${g.id}${
-                      g.application ? `&application=${g.application}` : ""
-                    }`}
-                  >
-                    <ShieldOff />
-                    Main levée
-                  </Link>
-                )}
-                {canDelete && (
-                  <button
-                    className="btn btn-danger"
-                    onClick={remove}
-                    disabled={deleteMutation.isPending}
-                  >
-                    <Trash2 />
-                    Supprimer
-                  </button>
-                )}
-              </>
+            {canEdit && (
+              <Link
+                className="btn btn-banner"
+                to={`/garanties/${id}/modifier`}
+              >
+                <FilePenLine size={15} />
+                Modifier
+              </Link>
+            )}
+            {canFormalize && (
+              <Link
+                className="btn btn-banner btn-banner-primary"
+                to={`/formalisations/nouvelle?client=${g.client}&application=${g.application}&guarantee=${g.id}`}
+              >
+                <Stamp size={15} />
+                Formaliser
+              </Link>
+            )}
+            {canViewFormalizations && openFormId && (
+              <Link
+                className="btn btn-banner"
+                to={`/formalisations/${openFormId}`}
+              >
+                <Stamp size={15} />
+                Voir formalisation
+              </Link>
+            )}
+            {canViewCollections && g.collection_case_id && (
+              <Link
+                className="btn btn-banner"
+                to={`/recouvrement/${g.collection_case_id}`}
+              >
+                <CircleDollarSign size={15} />
+                Recouvrement
+                {g.collection_stage_display
+                  ? ` · ${g.collection_stage_display}`
+                  : ""}
+              </Link>
+            )}
+            {canViewDations && openDationId && (
+              <Link className="btn btn-banner" to={`/dations/${openDationId}`}>
+                <Unlock size={15} />
+                Voir dation
+              </Link>
+            )}
+            {canViewReleases && openReleaseId && (
+              <Link
+                className="btn btn-banner"
+                to={`/mains-levees/${openReleaseId}`}
+              >
+                <ShieldOff size={15} />
+                Voir main levée
+              </Link>
+            )}
+            {canViewDations && completedDationId && (
+              <Link
+                className="btn btn-banner"
+                to={`/dations/${completedDationId}`}
+              >
+                <Unlock size={15} />
+                Voir la dation de réalisation
+              </Link>
+            )}
+            {canViewDations && originDationId && (
+              <Link
+                className="btn btn-banner"
+                to={`/dations/${originDationId}`}
+              >
+                <Unlock size={15} />
+                Dation d&apos;origine
+              </Link>
+            )}
+            {canProposeDation && (
+              <Link
+                className="btn btn-banner"
+                to={`/dations/nouvelle?client=${g.client}&guarantee=${g.id}${
+                  g.application ? `&application=${g.application}` : ""
+                }`}
+              >
+                <Unlock size={15} />
+                Proposer dation
+              </Link>
+            )}
+            {canRelease && (
+              <Link
+                className="btn btn-banner btn-banner-primary"
+                to={`/mains-levees/nouvelle?client=${g.client}&guarantee=${g.id}${
+                  g.application ? `&application=${g.application}` : ""
+                }`}
+              >
+                <ShieldOff size={15} />
+                Main levée
+              </Link>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                className="btn btn-banner btn-banner-danger"
+                onClick={remove}
+                disabled={deleteMutation.isPending}
+              >
+                <Trash2 size={15} />
+                Supprimer
+              </button>
             )}
           </div>
-        }
-      />
+        </div>
+      </div>
 
       {busy && (
-        <div className="callout" style={{ marginBottom: 12 }}>
+        <div className="callout callout-warning">
           {busy.message}{" "}
           {busy.kind === "DATION" && canViewDations && (
             <Link to={`/dations/${busy.id}`}>Voir la dation</Link>
@@ -404,40 +440,6 @@ export function GuaranteeDetailPage({
           )}
         </div>
       )}
-
-      <div className="client-banner">
-        <div className="client-banner-info">
-          <span className="client-banner-icon">
-            <ShieldCheck size={26} />
-          </span>
-          <div>
-            <h2 className="client-banner-name">{g.type_display}</h2>
-            <div className="client-banner-meta">
-              <code>{g.reference || g.id.slice(0, 8)}</code>
-              <Badge
-                value={g.status}
-                label={
-                  g.status_display ||
-                  lbl(GUARANTEE_LABELS.status, g.status)
-                }
-              />
-              {openFormId && (
-                <Badge value="IN_PROGRESS" label="Formalisation en cours" />
-              )}
-              {g.formalized_at && <Badge value="OK" label="Formalisée" />}
-              {completedDationId && (
-                <Badge value="REALIZED" label="Réalisée par dation" />
-              )}
-              {originDationId && (
-                <Badge value="DATION" label="Issue d'une dation" />
-              )}
-              <span className="muted">
-                Valeur actualisée : {formatMoney(g.current_value)}
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
 
       <div className="detail-row">
         <Section icon={Info} title="Identification">

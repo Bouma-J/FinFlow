@@ -124,6 +124,26 @@ def test_build_payload_uses_catalog_and_user_cbs(approved_app, cbs_connector):
     )
 
 
+def test_build_payload_prefers_financing_object_cbs_id(
+    approved_app, cbs_connector,
+):
+    from apps.catalog.models import FinancingObject
+
+    with tenant_context(approved_app.tenant_id):
+        FinancingObject.objects.create(
+            code="CONSO",
+            label="Crédit conso",
+            cbs_code="30",
+            purpose_type="CONSUMPTION",
+            is_active=True,
+        )
+        payload = build_credit_disbursement_payload(
+            approved_app, connector=cbs_connector
+        )
+    assert payload["idObjetFinancement"] == "30"
+
+
+
 def test_submit_credit_local_success(approved_app, cbs_connector):
     with tenant_context(approved_app.tenant_id):
         result = submit_credit_to_cbs(approved_app, connector=cbs_connector)
@@ -176,6 +196,10 @@ def test_disburse_application_pushes_cbs_then_creates_loan(
     assert loan.core_banking_reference == loan.cbs_contract_number
     approved_app.refresh_from_db()
     assert approved_app.status == CreditApplication.Status.DISBURSED
+    assert approved_app.cbs_demande_number == loan.cbs_demande_number
+    assert approved_app.cbs_demande_ref == loan.cbs_demande_ref
+    assert approved_app.cbs_contract_number == loan.cbs_contract_number
+    assert approved_app.cbs_operation_date is not None
 
 
 def test_disburse_blocks_on_cbs_error(approved_app, cbs_connector):
@@ -229,6 +253,10 @@ def test_cbs_callback_updates_loan(approved_app, cbs_connector):
     assert loan.cbs_contract_number == "CONTRAT-FINAL"
     assert loan.cbs_demande_number == "DEM-FINAL"
     assert loan.cbs_disbursement_status == "DEBLOQUE"
+    approved_app.refresh_from_db()
+    assert approved_app.cbs_contract_number == "CONTRAT-FINAL"
+    assert approved_app.cbs_demande_number == "DEM-FINAL"
+    assert approved_app.cbs_demande_ref == "REF-FINAL"
 
 
 def test_cbs_callback_rejects_missing_secret(approved_app, cbs_connector):

@@ -619,7 +619,11 @@ export function AdminProductsPage() {
             </thead>
             <tbody>
               {(products.data?.results ?? []).map((p) => (
-                <tr key={p.id}>
+                <tr
+                  key={p.id}
+                  className="row-clickable"
+                  onClick={() => openEdit(p)}
+                >
                   <td>
                     <strong>{p.label}</strong>
                     <div className="muted small">
@@ -650,7 +654,10 @@ export function AdminProductsPage() {
                     />
                   </td>
                   <td>
-                    <div className="row-actions">
+                    <div
+                      className="row-actions"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"

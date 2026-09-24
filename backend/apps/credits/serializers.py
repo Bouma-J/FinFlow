@@ -87,10 +87,12 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
         return str(obj.created_by) if obj.created_by_id else ""
 
     def get_can_edit(self, obj):
-        from .access import can_mutate_contribution
+        from .access import ANALYSIS_LOCKED_STATUSES, can_mutate_contribution
 
         request = self.context.get("request")
         if not request or not request.user.is_authenticated:
+            return False
+        if obj.application_id and obj.application.status in ANALYSIS_LOCKED_STATUSES:
             return False
         user = request.user
         if user.is_superuser:
@@ -173,6 +175,7 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
             "created_by_display", "can_edit",
             "is_reference",
             "client_type", "client_type_source",
+            "individual_profile",
             "reference_period", "analysis_date",
             # Particulier
             "salary_income", "spouse_income", "rental_income",
@@ -229,7 +232,7 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
             "jobs_maintained", "jobs_women", "jobs_youth", "workforce_count",
             "es_mitigation_plan",
             "es_action_required", "es_insurance", "es_risk_level", "es_comment",
-            # Personne physique — activité annexe
+            # Personne physique — activité génératrice de revenus
             "has_side_activity", "activity_turnover", "activity_expenses",
             "activity_comment",
             # Groupement
@@ -433,6 +436,8 @@ class CreditApplicationListSerializer(serializers.ModelSerializer):
     client_reference = serializers.CharField(source="client.reference", read_only=True)
     product_label = serializers.CharField(source="product.label", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
+    agency_display = serializers.SerializerMethodField()
+    submitted_by_display = serializers.SerializerMethodField()
     collection_case_id = serializers.SerializerMethodField()
     collection_stage_display = serializers.SerializerMethodField()
 
@@ -440,13 +445,27 @@ class CreditApplicationListSerializer(serializers.ModelSerializer):
         model = CreditApplication
         fields = [
             "id", "reference", "client", "client_display", "client_reference",
-            "product", "product_label", "agency",
+            "product", "product_label", "agency", "agency_display",
             "amount_requested", "amount_proposed", "amount_approved",
             "currency", "status", "status_display", "risk_level",
+            "submitted_by", "submitted_by_display",
             "collection_case_id", "collection_stage_display",
             "created_at", "updated_at", "submitted_at",
         ]
         read_only_fields = fields
+
+    def get_agency_display(self, obj):
+        agency = getattr(obj, "agency", None)
+        if agency is None:
+            return ""
+        return agency.name or agency.code or ""
+
+    def get_submitted_by_display(self, obj):
+        user = getattr(obj, "submitted_by", None)
+        if user is None:
+            return ""
+        full = (user.get_full_name() or "").strip()
+        return full or str(user)
 
     def get_collection_case_id(self, obj):
         return _collection_snapshot(_loan_of_application(obj))[0]
@@ -479,6 +498,7 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
     client_reference = serializers.CharField(source="client.reference", read_only=True)
     client_type = serializers.CharField(source="client.client_type", read_only=True)
     product_label = serializers.CharField(source="product.label", read_only=True)
+    agency_display = serializers.SerializerMethodField()
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     stock_photos = StockPhotoSerializer(many=True, read_only=True)
     documents = CreditDocumentSerializer(many=True, read_only=True)
@@ -500,6 +520,12 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
 
     def get_created_by_display(self, obj):
         return str(obj.created_by) if obj.created_by_id else ""
+
+    def get_agency_display(self, obj):
+        agency = getattr(obj, "agency", None)
+        if agency is None:
+            return ""
+        return agency.name or agency.code or ""
 
     def get_fees_breakdown(self, obj):
         return build_fees_breakdown(obj)
@@ -549,7 +575,7 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
         model = CreditApplication
         fields = [
             "id", "reference", "client", "client_display", "client_reference",
-            "client_type", "product", "product_label", "agency",
+            "client_type", "product", "product_label", "agency", "agency_display",
             # Conditions
             "amount_requested", "amount_proposed", "interest_rate", "fees_rate",
             "mandatory_savings_rate",
@@ -589,6 +615,8 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
             "status", "status_display", "risk_level",
             "amount_approved", "decision_date", "submitted_at", "disbursed_at",
             "disbursement_requested_at", "disbursement_requested_by",
+            "cbs_demande_number", "cbs_demande_ref", "cbs_contract_number",
+            "cbs_operation_date",
             "submitted_by", "submitted_by_display",
             "created_by", "created_by_display",
             "collection_case_id", "collection_stage", "collection_stage_display",
@@ -600,12 +628,14 @@ class CreditApplicationSerializer(serializers.ModelSerializer):
             "risk_level",
             "submitted_at", "disbursed_at",
             "disbursement_requested_at", "disbursement_requested_by",
+            "cbs_demande_number", "cbs_demande_ref", "cbs_contract_number",
+            "cbs_operation_date",
             "submitted_by",
             "submitted_by_display", "created_by", "created_by_display",
             "created_at", "updated_at",
             "extra_fees", "fees_breakdown",
             "cbs_refs", "periodicity_label", "repayment_mechanism_label",
-            "currency_label",
+            "currency_label", "agency_display",
             "collection_case_id", "collection_stage", "collection_stage_display",
             "loan_id",
         ]

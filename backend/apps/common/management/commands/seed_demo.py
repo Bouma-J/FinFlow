@@ -8,9 +8,15 @@ administrateur, des rôles, un produit de crédit, un circuit d'approbation
 Avec --rich (défaut) : clients, dossiers, garanties, formalisations,
 mains levées, dations et dossiers de recouvrement pour usage local.
 
+Avec --volume : dizaines d'enregistrements liés (préfixe BULK-) pour tester
+les listes et le scroll.
+
 Usage :
     python manage.py seed_demo
     python manage.py seed_demo --no-rich
+    python manage.py seed_demo --volume
+    python manage.py seed_demo --volume --count 50
+    python manage.py seed_demo --full
 """
 from decimal import Decimal
 
@@ -21,6 +27,8 @@ from apps.accounts.models import User
 from apps.catalog.models import CreditProduct, ProductCategory
 from apps.clients.models import Client
 from apps.accounts.services import get_or_create_tenant_role
+from apps.common.demo_bulk import seed_bulk_operational_data
+from apps.common.demo_params import seed_demo_parametrage
 from apps.common.demo_rich import seed_rich_operational_data
 from apps.common.tenancy import tenant_context
 from apps.corebanking.models import CoreBankingConnector
@@ -37,6 +45,28 @@ class Command(BaseCommand):
             "--no-rich",
             action="store_true",
             help="Ne crée que le socle minimal (sans dossiers / garanties).",
+        )
+        parser.add_argument(
+            "--volume",
+            action="store_true",
+            help=(
+                "Ajoute un volume bulk lié (clients, dossiers, analyses, "
+                "garanties, cautions, prêts, recouvrement, GED)."
+            ),
+        )
+        parser.add_argument(
+            "--full",
+            action="store_true",
+            help=(
+                "Jeu complet : paramétrage (circuits multi-critères, catalogue) "
+                "+ rich + volume (défaut 80 / module)."
+            ),
+        )
+        parser.add_argument(
+            "--count",
+            type=int,
+            default=40,
+            help="Nombre d'enregistrements par module pour --volume (défaut: 40).",
         )
 
     @transaction.atomic
@@ -78,8 +108,10 @@ class Command(BaseCommand):
         from apps.accounts.services import (
             ANALYSTE_CREDIT_RISQUE_ROLE_NAME,
             CHEF_AGENCE_ROLE_NAME,
-            CREDIT_COMMITTEE_ROLE_NAME,
+            CREDIT_COMMITTEE_FILIALE_ROLE_NAME,
+            CREDIT_COMMITTEE_GROUP_ROLE_NAME,
             ensure_filiale_admin_role,
+            ensure_group_credit_committee_role,
             provision_filiale_admin,
         )
         from apps.tenants.services import bootstrap_tenant
@@ -94,9 +126,13 @@ class Command(BaseCommand):
                 tenant, CHEF_AGENCE_ROLE_NAME
             )
             committee_role, _ = get_or_create_tenant_role(
-                tenant, CREDIT_COMMITTEE_ROLE_NAME
+                tenant, CREDIT_COMMITTEE_FILIALE_ROLE_NAME
+            )
+            committee_group_role, _ = get_or_create_tenant_role(
+                tenant, CREDIT_COMMITTEE_GROUP_ROLE_NAME
             )
             ensure_filiale_admin_role(tenant)
+            ensure_group_credit_committee_role()
 
         # --- Administrateur filiale ---
         with tenant_context(tenant.id):
@@ -123,11 +159,15 @@ class Command(BaseCommand):
             fil_admin.must_change_password = False
             fil_admin.save(update_fields=["must_change_password"])
         # Rôles workflow additionnels (circuits d'approbation)
-        fil_admin.groups.add(analyst_role, manager_role, committee_role)
+        fil_admin.groups.add(
+            analyst_role, manager_role, committee_role, committee_group_role
+        )
         if created:
             self.stdout.write(self.style.SUCCESS("Administrateur filiale créé."))
 
         # Les objets scopés sont créés dans le contexte de la filiale
+        run_volume = False
+        volume_count = options["count"]
         with tenant_context(tenant.id):
 
             category, _ = ProductCategory.objects.get_or_create(
@@ -173,9 +213,8 @@ class Command(BaseCommand):
                     required_group=analyst_role, sla_hours=48,
                     step_kind=ApprovalStep.StepKind.CONSULTATIVE,
                 )
-                # Décisionnelle : c'est l'agence qui décide sous 10 M, le comité
-                # ne s'appliquant qu'au-delà. La laisser consultative priverait
-                # la tranche ]0 ; 10 M[ de tout décideur.
+                # Décisionnelle : agence sous 10 M ; comité filiale dès 10 M ;
+                # comité groupe dès 50 M (en plus du comité filiale).
                 ApprovalStep.objects.create(
                     tenant=tenant, definition=definition, name="Validation agence",
                     order=2, required_group=manager_role, sla_hours=24,
@@ -183,9 +222,23 @@ class Command(BaseCommand):
                     step_kind=ApprovalStep.StepKind.DECISIONAL,
                 )
                 ApprovalStep.objects.create(
-                    tenant=tenant, definition=definition, name="Comité de crédit",
-                    order=3, required_group=committee_role, sla_hours=72,
+                    tenant=tenant,
+                    definition=definition,
+                    name="Comité de crédit filiale",
+                    order=3,
+                    required_group=committee_role,
+                    sla_hours=72,
                     min_amount=Decimal("10000000"),
+                    step_kind=ApprovalStep.StepKind.DECISIONAL,
+                )
+                ApprovalStep.objects.create(
+                    tenant=tenant,
+                    definition=definition,
+                    name="Comité de crédit groupe",
+                    order=4,
+                    required_group=committee_group_role,
+                    sla_hours=96,
+                    min_amount=Decimal("50000000"),
                     step_kind=ApprovalStep.StepKind.DECISIONAL,
                 )
             else:
@@ -254,6 +307,9 @@ class Command(BaseCommand):
             # Complète endpoints Perfect si le connecteur existait déjà.
             ensure_perfect_connector(tenant, demo=True, name="CBS Filiale 01")
 
+            # Paramétrage : produits, motifs, parties, circuits multi-critères
+            seed_demo_parametrage(tenant=tenant, stdout=self.stdout)
+
             Client.objects.get_or_create(
                 tenant=tenant, reference="CLI-0001",
                 defaults={
@@ -264,7 +320,13 @@ class Command(BaseCommand):
                 },
             )
 
-            if not options["no_rich"]:
+            run_rich = not options["no_rich"]
+            run_volume = options["volume"] or options["full"]
+            volume_count = options["count"]
+            if options["full"] and volume_count == 40:
+                volume_count = 80
+
+            if run_rich:
                 seed_rich_operational_data(
                     tenant=tenant,
                     agency=agency,
@@ -273,8 +335,35 @@ class Command(BaseCommand):
                     stdout=self.stdout,
                 )
 
+            if run_volume:
+                seed_bulk_operational_data(
+                    tenant=tenant,
+                    agency=agency,
+                    product=product,
+                    user=fil_admin,
+                    count=volume_count,
+                    stdout=self.stdout,
+                )
+                # Rafraîchir widgets recouvrement après volume
+                from apps.common.demo_bulk import seed_collection_list_widgets
+
+                seed_collection_list_widgets(
+                    tenant=tenant, user=fil_admin, stdout=self.stdout, limit=20
+                )
+
         self.stdout.write(self.style.SUCCESS(
             "Données de démonstration créées.\n"
             "  - Admin Groupe : group_admin / FinFlow2026!\n"
             "  - Admin Filiale : fil01_admin / FinFlow2026!"
+            + (
+                f"\n  - Volume bulk : ~{volume_count if run_volume else 0} "
+                f"enregistrements / module"
+                if run_volume
+                else ""
+            )
+            + (
+                "\n  - Circuits crédit multi-critères + catalogue enrichi"
+                if True
+                else ""
+            )
         ))

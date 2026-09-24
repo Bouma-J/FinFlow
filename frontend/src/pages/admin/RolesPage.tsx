@@ -132,14 +132,21 @@ export function AdminRolesPage() {
               </thead>
               <tbody>
                 {(roles.data?.results ?? []).map((r) => (
-                  <tr key={r.id}>
+                  <tr
+                    key={r.id}
+                    className="row-clickable"
+                    onClick={() => openRole(r)}
+                  >
                     <td>{r.name}</td>
                     <td className="num">{r.permissions.length}</td>
                     <td className="num">{r.user_count}</td>
                     <td>
                       <button
                         className="btn btn-ghost btn-sm"
-                        onClick={() => openRole(r)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openRole(r);
+                        }}
                       >
                         Droits
                       </button>

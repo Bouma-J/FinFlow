@@ -68,13 +68,17 @@ function label(map: Record<string, string>, key: string) {
   return map[key] || key || "—";
 }
 
-/** Ligne d'une liste de définitions ; masquée si la valeur est vide. */
+/** Ligne d'une liste de définitions ; les valeurs vides restent visibles (« — »). */
 function Row({ term, value }: { term: string; value?: ReactNode }) {
-  if (value === null || value === undefined || value === "") return null;
+  const empty =
+    value === null ||
+    value === undefined ||
+    value === "" ||
+    (typeof value === "string" && value.trim() === "");
   return (
     <div>
       <dt>{term}</dt>
-      <dd>{value}</dd>
+      <dd>{empty ? "—" : value}</dd>
     </div>
   );
 }
@@ -112,6 +116,81 @@ function SubSection({
       </div>
       {children}
     </div>
+  );
+}
+
+/** Tous les champs situation CBS mappés sur le client (import Perfect). */
+function CbsFieldsBlock({ client: c }: { client: Client }) {
+  const estValide =
+    c.cbs_est_valide === null || c.cbs_est_valide === undefined
+      ? undefined
+      : c.cbs_est_valide
+        ? "Oui"
+        : "Non";
+
+  return (
+    <SubSection icon={Landmark} title="Core Banking">
+      <dl className="def-list two">
+        <Row term="Matricule Core Banking" value={c.cbs_client_id} />
+        <Row term="N° de compte (n° manuel)" value={c.cbs_account_number} />
+        <Row term="Nom adhérent CBS" value={c.cbs_full_name} />
+        <Row term="N° d'ordre CBS" value={c.cbs_order_number} />
+        <Row term="Code point de service" value={c.cbs_point_of_service_id} />
+        <Row term="Libellé point de service" value={c.cbs_point_of_service_name} />
+        <Row
+          term="Date d'inscription CBS"
+          value={
+            c.cbs_registration_date
+              ? formatDate(c.cbs_registration_date)
+              : undefined
+          }
+        />
+        <Row
+          term="Date de création CBS"
+          value={
+            c.cbs_creation_date ? formatDate(c.cbs_creation_date) : undefined
+          }
+        />
+        <Row
+          term="Limite de crédit CBS"
+          value={
+            c.cbs_credit_limit != null && c.cbs_credit_limit !== ""
+              ? formatMoney(c.cbs_credit_limit)
+              : undefined
+          }
+        />
+        <Row term="Adhérent valide CBS" value={estValide} />
+        <Row term="Identifiant externe CBS" value={c.cbs_external_id} />
+        <Row term="Id profession CBS" value={c.cbs_profession_id} />
+        <Row term="Id nationalité CBS" value={c.cbs_nationality_id} />
+        <Row term="Id secteur d'activité CBS" value={c.cbs_sector_id} />
+        <Row term="Id type client CBS" value={c.cbs_client_type_id} />
+        <Row term="Id zone CBS" value={c.cbs_zone_id} />
+        <Row term="Id produit épargne CBS" value={c.cbs_savings_product_id} />
+        <Row
+          term="Nombre de signatures CBS"
+          value={
+            c.cbs_signature_count != null
+              ? String(c.cbs_signature_count)
+              : undefined
+          }
+        />
+        <Row
+          term="Distance CBS"
+          value={
+            c.cbs_distance != null && c.cbs_distance !== ""
+              ? String(c.cbs_distance)
+              : undefined
+          }
+        />
+        <Row term="Contexte réponse CBS" value={c.cbs_context} />
+        <Row term="Message réponse CBS" value={c.cbs_message} />
+        <Row
+          term="Dernière synchronisation CBS"
+          value={c.cbs_synced_at ? formatDate(c.cbs_synced_at) : undefined}
+        />
+      </dl>
+    </SubSection>
   );
 }
 
@@ -705,16 +784,6 @@ export function ClientDetailPage() {
   const isLegalEntity =
     c.client_type === "CORPORATE" || c.client_type === "PROFESSIONAL";
   const fullName = `${c.first_name} ${c.last_name}`.trim();
-  const hasSpouse =
-    c.spouse_last_name ||
-    c.spouse_first_name ||
-    c.spouse_phone ||
-    c.spouse_profession;
-  const hasParents =
-    c.father_last_name ||
-    c.father_first_name ||
-    c.mother_last_name ||
-    c.mother_first_name;
 
   const bannerName = isLegalEntity
     ? c.company_name || c.display_name
@@ -838,6 +907,7 @@ export function ClientDetailPage() {
             >
               <dl className="def-list two">
                 <Row term="Raison sociale" value={c.company_name} />
+                <Row term="Sigle" value={c.sigle} />
                 <Row
                   term="Statut juridique"
                   value={
@@ -855,27 +925,26 @@ export function ClientDetailPage() {
               )}
             </SubSection>
 
-            <SubSection icon={Phone} title="Coordonnées">
+              <SubSection icon={Phone} title="Coordonnées">
               <dl className="def-list two">
                 <Row term="Téléphone principal" value={c.phone} />
-                {c.phones && c.phones.length > 0 && (
-                  <Row
-                    term="Autres numéros"
-                    value={c.phones.map((p) => p.number).join(" · ")}
-                  />
-                )}
+                <Row
+                  term="Autres numéros"
+                  value={
+                    c.phones && c.phones.length > 0
+                      ? c.phones.map((p) => p.number).join(" · ")
+                      : undefined
+                  }
+                />
                 <Row term="Email" value={c.email} />
                 <Row term="Adresse" value={c.address} />
+                <Row term="Siège social" value={c.head_office} />
                 <Row term="Ville" value={c.city} />
+                <Row term="Boîte postale" value={c.postal_box} />
               </dl>
             </SubSection>
 
-            <SubSection icon={Landmark} title="Core Banking">
-              <dl className="def-list two">
-                <Row term="Matricule Core Banking" value={c.cbs_client_id} />
-                <Row term="N° de compte Core Banking" value={c.cbs_account_number} />
-              </dl>
-            </SubSection>
+            <CbsFieldsBlock client={c} />
 
             <SubSection icon={Contact} title="Gérant">
               <dl className="def-list two">
@@ -917,9 +986,11 @@ export function ClientDetailPage() {
                     term="Civilité"
                     value={c.civility && label(CLIENT_LABELS.civility, c.civility)}
                   />
+                  <Row term="Nom" value={c.last_name} />
+                  <Row term="Prénoms" value={c.first_name} />
                   <Row term="Nom complet" value={fullName} />
                   <Row term="Date de naissance" value={formatDate(c.birth_date)} />
-                  <Row term="Pays de naissance" value={c.birth_country} />
+                  <Row term="Lieu / pays de naissance" value={c.birth_country} />
                   <Row term="Nationalité" value={c.nationality} />
                   <Row
                     term="Situation matrimoniale"
@@ -967,63 +1038,55 @@ export function ClientDetailPage() {
               <SubSection icon={Phone} title="Coordonnées">
                 <dl className="def-list two">
                   <Row term="Téléphone principal" value={c.phone} />
-                  {c.phones && c.phones.length > 0 && (
-                    <Row
-                      term="Autres numéros"
-                      value={c.phones.map((p) => p.number).join(" · ")}
-                    />
-                  )}
+                  <Row
+                    term="Autres numéros"
+                    value={
+                      c.phones && c.phones.length > 0
+                        ? c.phones.map((p) => p.number).join(" · ")
+                        : undefined
+                    }
+                  />
                   <Row term="Email" value={c.email} />
                   <Row term="Adresse" value={c.address} />
+                  <Row term="Siège social" value={c.head_office} />
                   <Row term="Ville" value={c.city} />
+                  <Row term="Boîte postale" value={c.postal_box} />
                   <Row term="Pays" value={c.country} />
                 </dl>
               </SubSection>
 
-              <SubSection icon={Landmark} title="Core Banking">
+              <CbsFieldsBlock client={c} />
+
+              <SubSection icon={Users} title="Parents">
                 <dl className="def-list two">
-                  <Row term="Matricule Core Banking" value={c.cbs_client_id} />
                   <Row
-                    term="N° de compte Core Banking"
-                    value={c.cbs_account_number}
+                    term="Père"
+                    value={`${c.father_first_name} ${c.father_last_name}`.trim()}
+                  />
+                  <Row
+                    term="Mère"
+                    value={`${c.mother_first_name} ${c.mother_last_name}`.trim()}
                   />
                 </dl>
               </SubSection>
-
-              {hasParents && (
-                <SubSection icon={Users} title="Parents">
-                  <dl className="def-list two">
-                    <Row
-                      term="Père"
-                      value={`${c.father_first_name} ${c.father_last_name}`.trim()}
-                    />
-                    <Row
-                      term="Mère"
-                      value={`${c.mother_first_name} ${c.mother_last_name}`.trim()}
-                    />
-                  </dl>
-                </SubSection>
-              )}
             </Card>
 
-            {hasSpouse && (
-              <Card
-                title={
-                  <>
-                    <Heart size={17} /> Conjoint
-                  </>
-                }
-              >
-                <dl className="def-list two">
-                  <Row
-                    term="Nom & prénom"
-                    value={`${c.spouse_first_name} ${c.spouse_last_name}`.trim()}
-                  />
-                  <Row term="Téléphone" value={c.spouse_phone} />
-                  <Row term="Profession" value={c.spouse_profession} />
-                </dl>
-              </Card>
-            )}
+            <Card
+              title={
+                <>
+                  <Heart size={17} /> Conjoint
+                </>
+              }
+            >
+              <dl className="def-list two">
+                <Row
+                  term="Nom & prénom"
+                  value={`${c.spouse_first_name} ${c.spouse_last_name}`.trim()}
+                />
+                <Row term="Téléphone" value={c.spouse_phone} />
+                <Row term="Profession" value={c.spouse_profession} />
+              </dl>
+            </Card>
           </>
         )}
       </div>

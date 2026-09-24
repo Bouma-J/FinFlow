@@ -138,14 +138,38 @@ const PURPOSE_TYPES = [
   { value: "CONSUMPTION", label: "Consommation" },
   { value: "OTHER", label: "Autre" },
 ];
-const PURPOSE_TYPES_CORPORATE = PURPOSE_TYPES.filter(
-  (p) => p.value !== "CONSUMPTION",
+
+/** Vision code → PurposeType FinFlow (aligné backend ref_sync._PURPOSE_HINTS) */
+const PURPOSE_FROM_CBS_CODE: Record<string, string> = {
+  IMMO: "REAL_ESTATE",
+  IMMOBILIER: "REAL_ESTATE",
+  CONSO: "CONSUMPTION",
+  CONSOMMATION: "CONSUMPTION",
+  AUTO: "EQUIPMENT",
+  EQUIPEMENT: "EQUIPMENT",
+  STOCK: "STOCK",
+  TRESORERIE: "TREASURY",
+  FONDS_ROULEMENT: "WORKING_CAPITAL",
+  AUTRE: "OTHER",
+};
+
+const PURPOSE_TYPES_CORPORATE = new Set(
+  PURPOSE_TYPES.filter((p) => p.value !== "CONSUMPTION").map((p) => p.value),
 );
-const PURPOSE_TYPES_INDIVIDUAL = PURPOSE_TYPES.filter((p) =>
-  ["CONSUMPTION", "REAL_ESTATE", "EQUIPMENT", "TREASURY", "OTHER"].includes(
-    p.value,
-  ),
-);
+const PURPOSE_TYPES_INDIVIDUAL = new Set([
+  "CONSUMPTION",
+  "REAL_ESTATE",
+  "EQUIPMENT",
+  "TREASURY",
+  "OTHER",
+]);
+
+function purposeTypeFromCbsObject(row: CbsCatalogItem): string {
+  const linked = (row.purpose_type || "").trim().toUpperCase();
+  if (linked) return linked;
+  const code = (row.code || "").trim().toUpperCase();
+  return PURPOSE_FROM_CBS_CODE[code] || "OTHER";
+}
 
 const CHECKLIST_COMMON = [
   "Pièce d'identité",
@@ -366,6 +390,16 @@ export function CreditApplicationForm({
       ).data,
   });
 
+  const { data: financingObjects } = useQuery({
+    queryKey: ["financing-objects", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/financing-objects/", {
+          params: { is_active: true, page_size: 200 },
+        })
+      ).data,
+  });
+
   const periodicityOptions = useMemo(() => {
     const rows = periodicities?.results ?? [];
     if (!rows.length) return PERIODICITY_FALLBACK;
@@ -413,11 +447,39 @@ export function CreditApplicationForm({
   const isLegalEntity = isCorporate || isGroupement;
   const isIndividual = clientType === "INDIVIDUAL";
   const showTypedSections = !!clientType;
-  const purposeOptions = isLegalEntity
-    ? PURPOSE_TYPES_CORPORATE
-    : isIndividual
-      ? PURPOSE_TYPES_INDIVIDUAL
-      : PURPOSE_TYPES;
+
+  const purposeOptions = useMemo(() => {
+    const rows = financingObjects?.results ?? [];
+    const allowed = isLegalEntity
+      ? PURPOSE_TYPES_CORPORATE
+      : isIndividual
+        ? PURPOSE_TYPES_INDIVIDUAL
+        : null;
+    if (rows.length) {
+      const opts = rows
+        .map((r) => {
+          const value = purposeTypeFromCbsObject(r);
+          if (allowed && !allowed.has(value)) return null;
+          return {
+            value,
+            label: r.cbs_code
+              ? `${r.label} (${r.code} → ${r.cbs_code})`
+              : `${r.label} (${r.code})`,
+          };
+        })
+        .filter(Boolean) as { value: string; label: string }[];
+      // Déduplique par PurposeType (garde le premier = sort CBS)
+      const seen = new Set<string>();
+      return opts.filter((o) => {
+        if (seen.has(o.value)) return false;
+        seen.add(o.value);
+        return true;
+      });
+    }
+    // Fallback local uniquement si aucun objet CBS importé
+    return PURPOSE_TYPES.filter((p) => !allowed || allowed.has(p.value));
+  }, [financingObjects, isLegalEntity, isIndividual]);
+
   const canPickAgency =
     user?.is_group_level || user?.data_scope === "TENANT";
 

@@ -186,6 +186,14 @@ export interface WorkflowDefinition {
   is_used: boolean;
   /** Tranches de montant sans étape décisionnelle, `null` si le circuit est sain. */
   decision_gaps: DecisionGaps | null;
+  /** Critères de sélection du circuit (optionnels, combinables). */
+  min_amount: string | null;
+  max_amount: string | null;
+  product: string | null;
+  product_label: string | null;
+  product_category: string | null;
+  product_category_label: string | null;
+  specificity_score: number;
   steps: WorkflowStep[];
 }
 
@@ -203,9 +211,38 @@ export interface CbsCatalogItem {
   label: string;
   description?: string;
   cbs_code: string;
+  purpose_type?: string;
   periods_per_year?: number;
   sort_order?: number;
   is_active: boolean;
+}
+
+export interface CbsRefSyncBucket {
+  fetched: number;
+  created: number;
+  updated: number;
+  linked: number;
+  unchanged: number;
+  unmatched: Array<{ id: string; code: string; libelle: string }>;
+  error: string | null;
+}
+
+export interface CbsRefSyncReport {
+  connector_id: string;
+  scopes: string[];
+  results: Partial<
+    Record<
+      | "currencies"
+      | "periodicities"
+      | "financing_objects"
+      | "service_points"
+      | "managers"
+      | "financing_sources"
+      | "decision_motifs"
+      | "professions",
+      CbsRefSyncBucket
+    >
+  >;
 }
 
 export interface NotificationSettings {
@@ -629,6 +666,7 @@ export interface Client {
   mother_first_name: string;
   // Personne morale
   company_name: string;
+  sigle: string;
   legal_form: string;
   ifu: string;
   rccm: string;
@@ -653,10 +691,33 @@ export interface Client {
   email: string;
   address: string;
   city: string;
+  postal_box: string;
+  head_office: string;
   phones?: ClientPhone[];
-  // Core Banking
+  // Core Banking (mapping 1:1 situation adhérent)
   cbs_client_id: string;
   cbs_account_number: string;
+  cbs_full_name: string;
+  cbs_order_number: string;
+  cbs_profession_id: string;
+  cbs_nationality_id: string;
+  cbs_sector_id: string;
+  cbs_client_type_id: string;
+  cbs_zone_id: string;
+  cbs_savings_product_id: string;
+  cbs_signature_count: number | null;
+  cbs_distance: string | null;
+  cbs_registration_date: string | null;
+  cbs_creation_date: string | null;
+  cbs_credit_limit: string | null;
+  cbs_est_valide: boolean | null;
+  cbs_point_of_service_id: string;
+  cbs_point_of_service_name: string;
+  cbs_external_id: string;
+  cbs_context: string;
+  cbs_message: string;
+  cbs_synced_at: string | null;
+  cbs_situation?: Record<string, unknown>;
   kyc_status: "PENDING" | "VALIDATED" | "REJECTED" | "EXPIRED";
   kyc_validated_at: string | null;
   is_active: boolean;
@@ -752,6 +813,13 @@ export interface Surety {
   address: string;
   phones?: SuretyPhone[];
   documents?: { id: string; title: string; file: string | null; created_at?: string }[];
+  /** Client cautionné (engagements ouverts) — liste. */
+  client_display?: string | null;
+  /** Montant du crédit lié (dernier engagement ouvert) — liste. */
+  credit_amount?: string | null;
+  credit_currency?: string | null;
+  /** Montant cautionné (engagement ouvert / total engagé) — liste. */
+  guaranteed_amount?: string | null;
   commitment_ceiling: string;
   total_committed: string;
   available_ceiling: string;
@@ -836,6 +904,7 @@ export interface CreditApplication {
   product: string;
   product_label: string;
   agency: string | null;
+  agency_display?: string;
   // Conditions
   amount_requested: string;
   amount_proposed: string | null;
@@ -918,6 +987,10 @@ export interface CreditApplication {
   disbursed_at?: string | null;
   disbursement_requested_at?: string | null;
   disbursement_requested_by?: string | null;
+  cbs_demande_number?: string;
+  cbs_demande_ref?: string;
+  cbs_contract_number?: string;
+  cbs_operation_date?: string | null;
   created_by: string | null;
   created_by_display: string | null;
   collection_case_id?: string | null;
@@ -984,6 +1057,8 @@ export interface FinancialAnalysis {
   can_edit: boolean;
   client_type: string;
   client_type_source: string;
+  /** Profil particulier : salarié / indépendant / mixte. */
+  individual_profile?: "" | "SALARIE" | "INDEPENDANT" | "MIXTE";
   reference_period: string;
   analysis_date: string | null;
   // Endettement consolidé & centrale des risques
@@ -1106,7 +1181,7 @@ export interface FinancialAnalysis {
   projected_monthly_outflows: string;
   projected_monthly_surplus: string | null;
   cashflow_comment: string;
-  // Activité annexe / groupement
+  // Activité génératrice de revenus / groupement
   has_side_activity?: boolean;
   activity_turnover?: string;
   activity_expenses?: string;
@@ -1415,12 +1490,15 @@ export interface MyDossierRow {
   definition_name: string;
   instance_status: string;
   current_step_name: string;
+  current_step_role?: string;
+  current_step_label?: string;
   current_order: number;
   my_task_status: string | null;
   my_step_name: string;
   my_step_order: number | null;
   my_task_due_at: string | null;
   is_actionable: boolean;
+  is_treated?: boolean;
 }
 
 export interface ApprovalCondition {
@@ -1734,6 +1812,16 @@ export interface DashboardData {
       owner?: string;
       agency?: string;
     }[];
+    funnel?: {
+      submitted: number;
+      in_approval: number;
+      approved: number;
+      disbursed: number;
+      rejected: number;
+      returned: number;
+      approval_rate_pct: number | null;
+      disbursement_rate_pct: number | null;
+    };
   };
   portfolio: {
     active_loans: number;
@@ -1761,7 +1849,9 @@ export interface DashboardData {
   };
   workflow?: {
     pending_tasks: number;
+    overdue_tasks?: number;
     my_pending_tasks: number;
+    my_overdue_tasks?: number;
     conditions_pending: number;
   };
   risk: {
@@ -1769,6 +1859,25 @@ export interface DashboardData {
     by_stage?: { stage: string; count: number; amount: string | null }[];
     open_cases?: number;
     total_overdue: string | number;
+    followups_due?: number;
+    pending_promises?: number;
+    broken_promises_30d?: number;
+  };
+  quality?: {
+    kyc_pending: number;
+    kyc_rejected: number;
+    pipeline_without_active_guarantee: number;
+  };
+  after_sales?: {
+    access: {
+      main_levee: boolean;
+      dation: boolean;
+      formalisation: boolean;
+      collection: boolean;
+    };
+    main_levee?: { open: number; in_approval: number };
+    dation?: { open: number; in_approval: number };
+    formalisation?: { open: number; in_approval: number };
   };
   cbs?: {
     failed: number;

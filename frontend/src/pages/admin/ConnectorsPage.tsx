@@ -66,6 +66,7 @@ type ConnectorForm = {
   timeout_seconds: number;
   max_retries: number;
   is_active: boolean;
+  verify_ssl: boolean;
   auth_username: string;
   auth_password: string;
   auth_token: string;
@@ -90,6 +91,7 @@ const EMPTY_FORM: ConnectorForm = {
   timeout_seconds: 30,
   max_retries: 3,
   is_active: true,
+  verify_ssl: true,
   auth_username: "",
   auth_password: "",
   auth_token: "",
@@ -131,6 +133,7 @@ function formFromConnector(c: CbsConnector): ConnectorForm {
     timeout_seconds: c.timeout_seconds ?? 30,
     max_retries: c.max_retries ?? 3,
     is_active: c.is_active,
+    verify_ssl: rules.verify_ssl !== false,
     auth_username: "",
     auth_password: "",
     auth_token: "",
@@ -172,11 +175,22 @@ function formFromConnector(c: CbsConnector): ConnectorForm {
   };
 }
 
-function buildPayload(form: ConnectorForm, opts: { includeAuth: boolean }) {
+function buildPayload(
+  form: ConnectorForm,
+  opts: { includeAuth: boolean; existing?: CbsConnector | null },
+) {
+  const existingRules = asRecord(opts.existing?.mapping_rules);
+  const existingDisb = asRecord(existingRules.disbursement);
+  const existingPurpose = asRecord(existingDisb.purpose_map);
+  const existingPeriod = asRecord(existingDisb.periodicity_map);
+  const existingEndpoints = asRecord(existingRules.endpoints);
+
   const mapping_rules = {
     provider: PERFECT.provider,
     force_simulate: form.disburse_mode === "LOCAL",
+    verify_ssl: form.verify_ssl,
     endpoints: {
+      ...existingEndpoints,
       authentification:
         form.auth_path.trim() || PERFECT.endpoints.authentification,
       adh_situation:
@@ -194,8 +208,15 @@ function buildPayload(form: ConnectorForm, opts: { includeAuth: boolean }) {
         idGestionnaire: form.id_gestionnaire.trim(),
         idProduitRemb: form.id_produit_remb.trim(),
       },
-      periodicity_map: { ...PERFECT.periodicity_map },
-      purpose_map: { ...PERFECT.purpose_map },
+      // Conserve les maps syncées CBS ; ne réinjecte Perfect strings qu'à la création
+      periodicity_map:
+        Object.keys(existingPeriod).length > 0
+          ? existingPeriod
+          : { ...PERFECT.periodicity_map },
+      purpose_map:
+        Object.keys(existingPurpose).length > 0
+          ? existingPurpose
+          : { ...PERFECT.purpose_map },
     },
     simulate: {
       loan_settled_default: form.sim_loan_settled,
@@ -333,7 +354,7 @@ export function AdminConnectorsPage() {
       return (
         await api.patch(
           `/cbs-connectors/${editing.id}/`,
-          buildPayload(form, { includeAuth: hasAuth }),
+          buildPayload(form, { includeAuth: hasAuth, existing: editing }),
         )
       ).data;
     },
@@ -553,6 +574,18 @@ export function AdminConnectorsPage() {
                 }
                 placeholder="https://serveur-api"
               />
+            </label>
+            <label className="field">
+              <span>Vérifier le certificat SSL</span>
+              <select
+                value={form.verify_ssl ? "1" : "0"}
+                onChange={(e) =>
+                  setForm({ ...form, verify_ssl: e.target.value === "1" })
+                }
+              >
+                <option value="1">Oui (recommandé)</option>
+                <option value="0">Non (staging / chaîne incomplète)</option>
+              </select>
             </label>
             <label className="field">
               <span>Timeout (s)</span>
@@ -891,7 +924,11 @@ export function AdminConnectorsPage() {
               const crdPath = str(endpoints.crd_simple, "—");
               const mode = connectorMode(c);
               return (
-                <tr key={c.id}>
+                <tr
+                  key={c.id}
+                  className="row-clickable"
+                  onClick={() => openEdit(c)}
+                >
                   <td>
                     <strong>{c.name}</strong>
                     <div className="muted small">{c.protocol}</div>
@@ -926,6 +963,7 @@ export function AdminConnectorsPage() {
                   <td>
                     <div
                       style={{ display: "flex", gap: 6, flexWrap: "wrap" }}
+                      onClick={(e) => e.stopPropagation()}
                     >
                       <button
                         type="button"

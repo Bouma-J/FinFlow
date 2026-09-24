@@ -34,6 +34,13 @@ def user_role_label(user, max_length=ROLE_LABEL_MAX_LENGTH):
 
 def _role_name(group):
     """Libellé métier du rôle, ou nom du groupe s'il n'est pas rattaché."""
+    from apps.accounts.services import (
+        CREDIT_COMMITTEE_GROUP_ROLE_NAME,
+        GROUP_CREDIT_COMMITTEE_DJANGO_GROUP,
+    )
+
+    if group.name == GROUP_CREDIT_COMMITTEE_DJANGO_GROUP:
+        return CREDIT_COMMITTEE_GROUP_ROLE_NAME
     role = getattr(group, "tenant_role", None)
     return role.name if role is not None else group.name
 

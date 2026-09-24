@@ -45,7 +45,9 @@ class SuretyViewSet(AgencyScopedViewSet):
     def get_queryset(self):
         qs = super().get_queryset()
         if self.action == "list":
-            return qs
+            return qs.prefetch_related(
+                "engagements__application__client",
+            )
         return qs.prefetch_related(
             "engagements__application__client",
             "engagements__generated_contracts",

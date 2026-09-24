@@ -71,6 +71,75 @@ def resolve_currency_cbs(tenant_id, code: str, *, fallback: str = "XOF") -> str:
     return str(code or fallback).strip().upper()
 
 
+def resolve_financing_object_cbs(
+    tenant_id,
+    purpose_type: str,
+    *,
+    purpose_map: dict | None = None,
+    default: str = "",
+) -> str:
+    """Résout ``idObjetFinancement`` : catalogue CBS d'abord, puis purpose_map syncé."""
+    from .models import FinancingObject
+
+    pt = str(purpose_type or "").strip()
+    if tenant_id and pt:
+        row = (
+            FinancingObject.all_tenants.filter(
+                tenant_id=tenant_id,
+                purpose_type=pt,
+                is_active=True,
+            )
+            .exclude(cbs_code="")
+            .order_by("sort_order", "label")
+            .first()
+        )
+        if row is None:
+            row = (
+                FinancingObject.all_tenants.filter(
+                    tenant_id=tenant_id,
+                    code__iexact=pt,
+                    is_active=True,
+                )
+                .exclude(cbs_code="")
+                .order_by("sort_order", "label")
+                .first()
+            )
+        if row is not None:
+            return (row.cbs_code or "").strip()
+
+    mapped = str((purpose_map or {}).get(pt) or "").strip()
+    if mapped and mapped != pt:
+        # Accepte un id Vision déjà syncé dans purpose_map, ignore les libellés legacy
+        # du type CONSOMMATION si un catalogue actif existe pour ce purpose.
+        if tenant_id:
+            if FinancingObject.all_tenants.filter(
+                tenant_id=tenant_id, cbs_code=mapped, is_active=True
+            ).exists():
+                return mapped
+            has_catalog = FinancingObject.all_tenants.filter(
+                tenant_id=tenant_id, is_active=True
+            ).exclude(cbs_code="").exists()
+            if has_catalog and not mapped.isdigit():
+                mapped = ""
+        if mapped:
+            return mapped
+
+    default_val = str(default or "").strip()
+    if default_val:
+        return default_val
+
+    # Dernier recours hors catalogue CBS : map Perfect historique (démo / seeds)
+    if tenant_id:
+        has_catalog = FinancingObject.all_tenants.filter(
+            tenant_id=tenant_id, is_active=True
+        ).exclude(cbs_code="").exists()
+        if has_catalog:
+            return ""
+    from apps.corebanking.perfect_defaults import PURPOSE_CBS
+
+    return str(PURPOSE_CBS.get(pt) or "").strip()
+
+
 def active_codes(model, tenant_id) -> set[str]:
     if not tenant_id:
         return set()
@@ -115,6 +184,29 @@ def application_cbs_refs(application) -> dict:
         (getattr(product, "code", None) or "").strip() if product else ""
     )
 
+    purpose_type = getattr(application, "purpose_type", "") or ""
+    financing = {}
+    if purpose_type:
+        from .models import FinancingObject
+
+        fo = (
+            FinancingObject.all_tenants.filter(
+                tenant_id=tenant_id,
+                purpose_type=purpose_type,
+                is_active=True,
+            )
+            .exclude(cbs_code="")
+            .order_by("sort_order", "label")
+            .first()
+        )
+        if fo is not None:
+            financing = {
+                "code": fo.code,
+                "label": fo.label,
+                "cbs_code": (fo.cbs_code or "").strip(),
+                "purpose_type": fo.purpose_type,
+            }
+
     manager_cbs = ""
     for actor in (
         getattr(application, "submitted_by", None),
@@ -122,11 +214,7 @@ def application_cbs_refs(application) -> dict:
     ):
         if actor is None:
             continue
-        manager_cbs = (
-            getattr(actor, "cbs_id", None)
-            or getattr(actor, "employee_id", None)
-            or ""
-        ).strip()
+        manager_cbs = (getattr(actor, "cbs_id", None) or "").strip()
         if manager_cbs:
             break
 
@@ -172,11 +260,17 @@ def application_cbs_refs(application) -> dict:
             "Point de service CBS manquant sur l'agence "
             "(ou défaut connecteur au décaissement)."
         )
+    if purpose_type and not financing.get("cbs_code"):
+        warnings.append(
+            "Objet de financement CBS manquant "
+            "(importez ref/object-fin-list et liez PurposeType)."
+        )
 
     return {
         "periodicity": period,
         "repayment_method": remb,
         "currency": curr,
+        "financing_object": financing,
         "product_cbs_code": id_produit_crd,
         "product_repayment_cbs_code": id_produit_remb,
         "manager_cbs_id": manager_cbs,

@@ -92,6 +92,9 @@ export const PERM_ADMIN_CBS_REF = [
   "catalog.view_currency",
   "catalog.view_loanperiodicity",
   "catalog.view_repaymentmethod",
+  "catalog.view_financingobject",
+  "catalog.view_servicepoint",
+  "catalog.view_cbsmanager",
 ] as const;
 export const PERM_ADMIN_CONNECTORS = [
   "corebanking.view_corebankingconnector",

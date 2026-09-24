@@ -80,10 +80,7 @@ import { hasAnyPerm, hasPerm } from "@/auth/permissions";
 import { RestructureRequestPanel } from "@/components/FinancialDecisionPanels";
 import {
   PERM_CLIENTS,
-  PERM_DATIONS,
-  PERM_FORMALIZATIONS,
   PERM_GUARANTEES,
-  PERM_RELEASES,
   PERM_SURETIES,
   isControlePermanent,
 } from "@/auth/routePerms";
@@ -93,8 +90,21 @@ import { CollateralSummaryCard } from "@/components/CollateralSummaryCard";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import { RenewGuaranteesPanel } from "@/components/RenewGuaranteesPanel";
 import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
-import { Badge, ErrorState, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
+import { Badge, ErrorState, Spinner, formatDate, formatMoney } from "@/components/ui";
 
+/** Réponse normalisée de POST …/cbs-situation/ (Perfect crd/situation). */
+type CbsCreditSituation = {
+  settled?: boolean;
+  outstanding?: string;
+  days_overdue?: number;
+  overdue_amount?: string;
+  currency?: string;
+  num_demande?: string;
+  ref_demande?: string;
+  num_contrat?: string;
+  schedule?: Array<Record<string, unknown>>;
+  raw?: Record<string, unknown>;
+};
 interface WorkflowInstance {
   id: string;
   object_id: string;
@@ -169,6 +179,34 @@ function extractApiError(e: unknown, fallback: string): string {
     if (parts.length) return parts.join(" ");
   }
   return fallback;
+}
+
+const CBS_SITUATION_FALLBACK =
+  "Impossible de consulter la situation du crédit pour le moment. Veuillez réessayer ultérieurement.";
+
+/** Masque les détails techniques (HTTP, stack, URL…) côté UI. */
+function friendlyCbsSituationError(e: unknown): string {
+  const response = (e as { response?: { status?: number } })?.response;
+  const status = response?.status;
+  if (
+    !response ||
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    (typeof status === "number" && status >= 500)
+  ) {
+    return "Le système bancaire est temporairement inaccessible. Veuillez réessayer dans quelques instants.";
+  }
+  const raw = extractApiError(e, CBS_SITUATION_FALLBACK).trim();
+  const low = raw.toLowerCase();
+  const technical =
+    /https?:\/\//i.test(raw) ||
+    /\bhttp\s*\d{3}\b/i.test(raw) ||
+    /traceback|exception|stack|timeout|ssl|socket|errno|crd\/|adh\/|gateway|bearer|oauth|client_secret|requests\.|urllib/i.test(
+      low,
+    );
+  if (!raw || technical) return CBS_SITUATION_FALLBACK;
+  return raw;
 }
 
 function describeGuarantee(g: Guarantee): string {
@@ -815,6 +853,18 @@ function AnalysisDetail({
           </>
         ) : (
           <>
+            <Metric
+              label="Profil"
+              value={
+                analysis.individual_profile === "SALARIE"
+                  ? "Salarié"
+                  : analysis.individual_profile === "INDEPENDANT"
+                    ? "Indépendant"
+                    : analysis.individual_profile === "MIXTE"
+                      ? "Mixte"
+                      : "—"
+              }
+            />
             <Metric label="Total revenus" value={formatMoney(analysis.total_income, cur)} />
             <Metric label="Total charges" value={formatMoney(analysis.total_household_charges, cur)} />
             <Metric label="Reste à vivre" value={formatMoney(analysis.disposable_income, cur)} />
@@ -1707,6 +1757,13 @@ export function CreditApplicationDetailPage() {
   const { user } = useAuth();
   const [showSchedule, setShowSchedule] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [cbsSituationOpen, setCbsSituationOpen] = useState(false);
+  const [cbsSituation, setCbsSituation] = useState<CbsCreditSituation | null>(
+    null,
+  );
+  const [cbsSituationError, setCbsSituationError] = useState<string | null>(
+    null,
+  );
 
   const { data: app, isLoading, isError, refetch } = useQuery({
     queryKey: ["credit-application", id],
@@ -1943,6 +2000,34 @@ export function CreditApplicationDetailPage() {
       ),
   });
 
+  const cbsSituationMutation = useMutation({
+    mutationFn: async () =>
+      (
+        await api.post<CbsCreditSituation>(
+          `/credit-applications/${id}/cbs-situation/`,
+        )
+      ).data,
+    onSuccess: (data) => {
+      setCbsSituation(data);
+      setCbsSituationError(null);
+      setActionError(null);
+    },
+    onError: (e) => {
+      setCbsSituationError(friendlyCbsSituationError(e));
+    },
+  });
+
+  function openCbsSituationModal() {
+    setCbsSituationOpen(true);
+    setCbsSituationError(null);
+    cbsSituationMutation.mutate();
+  }
+
+  function closeCbsSituationModal() {
+    setCbsSituationOpen(false);
+    setCbsSituationError(null);
+  }
+
   const deleteMutation = useMutation({
     mutationFn: async () => api.delete(`/credit-applications/${id}/`),
     onSuccess: () => {
@@ -2013,15 +2098,6 @@ export function CreditApplicationDetailPage() {
   const canViewSureties = hasAnyPerm(user, PERM_SURETIES);
   const canManageSuretyEng = hasPerm(user, "sureties.change_suretyengagement");
   const canViewCollections = hasPerm(user, "collections.view_collectioncase");
-  const canInitiateDation = hasPerm(user, "guarantees.initiate_dationrequest");
-  const canInitiateFormalization = hasPerm(
-    user,
-    "guarantees.initiate_guaranteeformalizationrequest",
-  );
-  const canInitiateRelease = hasPerm(
-    user,
-    "guarantees.initiate_guaranteereleaserequest",
-  );
   const canProposeRestructure = hasPerm(user, "collections.add_loanrestructure");
   const canDecideRestructure = hasPerm(
     user,
@@ -2033,11 +2109,10 @@ export function CreditApplicationDetailPage() {
         canDecideRestructure ||
         (loan.restructures?.length ?? 0) > 0),
   );
-  const showAfterSales = hasAnyPerm(user, [
-    ...PERM_DATIONS,
-    ...PERM_FORMALIZATIONS,
-    ...PERM_RELEASES,
-  ]);
+  const showAfterSales =
+    (dations?.results.length ?? 0) > 0 ||
+    (formalizations?.results.length ?? 0) > 0 ||
+    (releases?.results.length ?? 0) > 0;
   const isOwner =
     !!uid && (app.created_by === uid || app.submitted_by === uid);
   // Soumission et suppression : réservées au créateur du dossier (ou super-admin),
@@ -2122,7 +2197,15 @@ export function CreditApplicationDetailPage() {
   ].includes(app.status);
   const canContributeWindow =
     isSuper || ((isOwner && openForContribution) || !!myTask);
-  const canContributeAnalysis = canContributeWindow && canAddAnalysis;
+  // Après décaissement : plus d'ajout d'analyse financière (lecture seule).
+  const analysisLocked = [
+    "DISBURSED",
+    "CLOSED",
+    "CANCELLED",
+    "REJECTED",
+  ].includes(app.status);
+  const canContributeAnalysis =
+    canContributeWindow && canAddAnalysis && !analysisLocked;
   const canContributeVisit =
     canAddVisit && (canContributeWindow || isControlePermanent(user));
   const cur = app.currency;
@@ -2279,219 +2362,381 @@ export function CreditApplicationDetailPage() {
   }
 
   return (
-    <div className="page-shell dossier-page">
-      <PageHeader
-        icon={FileText}
-        title={`Dossier ${app.reference || app.id.slice(0, 8)}`}
-        subtitle={`${app.client_display} · ${app.product_label}`}
-        actions={
-          <div className="row-actions">
-            <Link className="btn btn-ghost" to="/dossiers">
-              <ArrowLeft />
-              Retour
-            </Link>
-            {canViewCollections && app.collection_case_id && (
-              <Link
-                className="btn btn-ghost"
-                to={`/recouvrement/${app.collection_case_id}`}
-              >
-                <CircleDollarSign />
-                Recouvrement
-                {app.collection_stage_display
-                  ? ` · ${app.collection_stage_display}`
-                  : ""}
-              </Link>
-            )}
-            {canEdit && (
-              <Link className="btn btn-ghost" to={`/dossiers/${id}/modifier`}>
-                <FilePenLine />
-                Modifier
-              </Link>
-            )}
-            {canContributeAnalysis && (
-              <Link
-                className="btn btn-ghost"
-                to={`/dossiers/${id}/analyse-financiere`}
-              >
-                <LineChart />
-                Ajouter une analyse
-              </Link>
-            )}
-            {canCancel && (
-              <button
-                className="btn btn-danger"
-                onClick={cancelSubmission}
-                disabled={cancelMutation.isPending}
-              >
-                <Ban />
-                Annuler la soumission
-              </button>
-            )}
-            {canSubmit && (
-              <button
-                className="btn btn-primary"
-                onClick={() => submitMutation.mutate()}
-                disabled={
-                  submitMutation.isPending ||
-                  (readiness?.show_checklist === true &&
-                    readiness.ready === false)
-                }
-                title={
-                  readiness?.show_checklist && !readiness.ready
-                    ? "Complétez la checklist de readiness avant de soumettre"
-                    : undefined
-                }
-              >
-                <Send />
-                Soumettre à validation
-              </button>
-            )}
-            {canCancelDossier && (
-              <button
-                className="btn btn-danger"
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Annuler définitivement ce dossier (statut Annulé) ?",
-                    )
-                  ) {
-                    cancelDossierMutation.mutate();
-                  }
-                }}
-                disabled={cancelDossierMutation.isPending}
-              >
-                <Ban />
-                Annuler le dossier
-              </button>
-            )}
-            {canRequestDisburse && (
-              <button
-                className="btn btn-success"
-                onClick={() => requestDisburseMutation.mutate()}
-                disabled={requestDisburseMutation.isPending}
-              >
-                <Wallet />
-                Demander le décaissement
-              </button>
-            )}
-            {canDisburse && (
-              <button
-                className="btn btn-success"
-                onClick={() => disburseMutation.mutate()}
-                disabled={disburseMutation.isPending}
-              >
-                <Wallet />
-                {app.status === "DISBURSEMENT_PENDING"
-                  ? "Valider le décaissement"
-                  : "Décaisser"}
-              </button>
-            )}
-            {canCancelDisburseRequest && (
-              <button
-                className="btn btn-ghost"
-                onClick={() => cancelDisburseRequestMutation.mutate()}
-                disabled={cancelDisburseRequestMutation.isPending}
-              >
-                Annuler la demande
-              </button>
-            )}
-            {canDelete && (
-              <button
-                className="btn btn-danger"
-                onClick={deleteApplication}
-                disabled={deleteMutation.isPending}
-              >
-                <Trash2 />
-                Supprimer
-              </button>
-            )}
-          </div>
-        }
-      />
-
+    <div className="page-shell dossier-page detail-banner-page">
       <div className="credit-hero">
         <div className="credit-hero-main">
-          <span className="credit-hero-icon">
-            <FileText size={26} />
-          </span>
-          <div className="credit-hero-text">
-            <p className="credit-hero-kicker">Fiche dossier</p>
-            <h2 className="credit-hero-name">
-              <PermLink
-                user={user}
-                anyOf={PERM_CLIENTS}
-                className="link-inline"
-                to={`/clients/${app.client}`}
-              >
-                {app.client_display}
-              </PermLink>
-            </h2>
-            <div className="credit-hero-meta">
-              <code>{app.reference || "—"}</code>
-              <Badge value={app.status} label={app.status_display} />
-              <span className="muted">{app.product_label}</span>
-            </div>
-          </div>
-        </div>
-        <div className="credit-hero-metrics">
-          <div className="hero-metric">
-            <span className="hero-metric-label">
-              Montant{" "}
-              {[
-                "APPROVED",
-                "CONTRACT_GENERATED",
-                "DISBURSEMENT_PENDING",
-                "DISBURSED",
-                "CLOSED",
-              ].includes(app.status) && app.amount_approved
-                ? "accordé"
-                : app.amount_proposed
-                  ? "proposé"
-                  : "demandé"}
-            </span>
-            <span className="hero-metric-value">
-              {formatMoney(
-                (["APPROVED", "CONTRACT_GENERATED", "DISBURSED", "CLOSED"].includes(
-                  app.status,
-                ) &&
-                  app.amount_approved) ||
-                  app.amount_proposed ||
-                  app.amount_requested,
-                cur,
-              )}
-            </span>
-          </div>
-          <div className="hero-metric">
-            <span className="hero-metric-label">Durée</span>
-            <span className="hero-metric-value">{app.duration_months} mois</span>
-          </div>
-          {app.interest_rate && (
-            <div className="hero-metric">
-              <span className="hero-metric-label">Taux d'intérêt</span>
-              <span className="hero-metric-value">{app.interest_rate} %</span>
-            </div>
-          )}
-          <div className="hero-metric">
-            <span className="hero-metric-label">Périodicité</span>
-            <span className="hero-metric-value">
-              {app.periodicity_label ||
-                lbl(CREDIT_LABELS.periodicity, app.periodicity)}
-            </span>
-          </div>
-          {coveragePct !== null && (
-            <div className={`hero-metric${coveragePct >= 100 ? " ok" : ""}`}>
-              <span className="hero-metric-label">Couverture garanties</span>
-              <span className="hero-metric-value">
-                {coveragePct.toFixed(0)} %
+          <div className="credit-hero-top">
+            <div className="credit-hero-info">
+              <span className="credit-hero-icon">
+                <FileText size={26} />
               </span>
+              <div className="credit-hero-text">
+                <h2 className="credit-hero-name">
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CLIENTS}
+                    className="link-inline"
+                    to={`/clients/${app.client}`}
+                  >
+                    {app.client_display}
+                  </PermLink>
+                </h2>
+                <p className="credit-hero-ref">
+                  Dossier <code>{app.reference || app.id.slice(0, 8)}</code>
+                  {app.product_label && (
+                    <span className="muted"> · {app.product_label}</span>
+                  )}
+                </p>
+                <div className="credit-hero-meta">
+                  <Badge value={app.status} label={app.status_display} />
+                  {app.agency_display && (
+                    <span className="muted">{app.agency_display}</span>
+                  )}
+                </div>
+              </div>
             </div>
-          )}
+
+            <div className="credit-hero-actions">
+              <Link className="btn btn-banner" to="/dossiers">
+                <ArrowLeft size={15} />
+                Retour
+              </Link>
+              {(app.cbs_demande_ref ||
+                app.cbs_contract_number ||
+                app.status === "DISBURSED" ||
+                app.status === "CLOSED") && (
+                <button
+                  type="button"
+                  className="btn btn-banner"
+                  onClick={openCbsSituationModal}
+                  title="Consulter la situation crédit via Perfect crd/situation"
+                >
+                  <Landmark size={15} />
+                  Situation crédit CBS
+                </button>
+              )}
+              {canViewCollections && app.collection_case_id && (
+                <Link
+                  className="btn btn-banner"
+                  to={`/recouvrement/${app.collection_case_id}`}
+                >
+                  <CircleDollarSign size={15} />
+                  Recouvrement
+                  {app.collection_stage_display
+                    ? ` · ${app.collection_stage_display}`
+                    : ""}
+                </Link>
+              )}
+              {canEdit && (
+                <Link
+                  className="btn btn-banner"
+                  to={`/dossiers/${id}/modifier`}
+                >
+                  <FilePenLine size={15} />
+                  Modifier
+                </Link>
+              )}
+              {canContributeAnalysis && (
+                <Link
+                  className="btn btn-banner"
+                  to={`/dossiers/${id}/analyse-financiere`}
+                >
+                  <LineChart size={15} />
+                  Ajouter une analyse
+                </Link>
+              )}
+              {canCancel && (
+                <button
+                  type="button"
+                  className="btn btn-banner btn-banner-danger"
+                  onClick={cancelSubmission}
+                  disabled={cancelMutation.isPending}
+                >
+                  <Ban size={15} />
+                  Annuler la soumission
+                </button>
+              )}
+              {canSubmit && (
+                <button
+                  type="button"
+                  className="btn btn-banner btn-banner-primary"
+                  onClick={() => submitMutation.mutate()}
+                  disabled={
+                    submitMutation.isPending ||
+                    (readiness?.show_checklist === true &&
+                      readiness.ready === false)
+                  }
+                  title={
+                    readiness?.show_checklist && !readiness.ready
+                      ? "Complétez la checklist de readiness avant de soumettre"
+                      : undefined
+                  }
+                >
+                  <Send size={15} />
+                  Soumettre à validation
+                </button>
+              )}
+              {canCancelDossier && (
+                <button
+                  type="button"
+                  className="btn btn-banner btn-banner-danger"
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        "Annuler définitivement ce dossier (statut Annulé) ?",
+                      )
+                    ) {
+                      cancelDossierMutation.mutate();
+                    }
+                  }}
+                  disabled={cancelDossierMutation.isPending}
+                >
+                  <Ban size={15} />
+                  Annuler le dossier
+                </button>
+              )}
+              {canRequestDisburse && (
+                <button
+                  type="button"
+                  className="btn btn-banner btn-banner-primary"
+                  onClick={() => requestDisburseMutation.mutate()}
+                  disabled={requestDisburseMutation.isPending}
+                >
+                  <Wallet size={15} />
+                  Demander le décaissement
+                </button>
+              )}
+              {canDisburse && (
+                <button
+                  type="button"
+                  className="btn btn-banner btn-banner-primary"
+                  onClick={() => disburseMutation.mutate()}
+                  disabled={disburseMutation.isPending}
+                >
+                  <Wallet size={15} />
+                  {app.status === "DISBURSEMENT_PENDING"
+                    ? "Valider le décaissement"
+                    : "Décaisser"}
+                </button>
+              )}
+              {canCancelDisburseRequest && (
+                <button
+                  type="button"
+                  className="btn btn-banner"
+                  onClick={() => cancelDisburseRequestMutation.mutate()}
+                  disabled={cancelDisburseRequestMutation.isPending}
+                >
+                  Annuler la demande
+                </button>
+              )}
+              {canDelete && (
+                <button
+                  type="button"
+                  className="btn btn-banner btn-banner-danger"
+                  onClick={deleteApplication}
+                  disabled={deleteMutation.isPending}
+                >
+                  <Trash2 size={15} />
+                  Supprimer
+                </button>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
       {actionError && (
         <div className="form-error" style={{ marginBottom: 0 }}>
           {actionError}
+        </div>
+      )}
+
+      {cbsSituationOpen && (
+        <div
+          className="modal-backdrop modal-backdrop--top"
+          role="presentation"
+          onClick={closeCbsSituationModal}
+        >
+          <div
+            className="modal-card modal-card--xl cbs-situation-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cbs-situation-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <header className="cbs-situation-modal__header">
+              <div>
+                <h3 id="cbs-situation-title">
+                  <Landmark size={18} />
+                  Situation du crédit
+                </h3>
+                <p className="muted small" style={{ margin: "4px 0 0" }}>
+                  Dossier <code>{app.reference}</code>
+                  {app.client_display ? ` · ${app.client_display}` : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={closeCbsSituationModal}
+                aria-label="Fermer"
+              >
+                Fermer
+              </button>
+            </header>
+
+            <div className="cbs-situation-modal__body">
+              {cbsSituationMutation.isPending && !cbsSituation && (
+                <div className="cbs-situation-modal__loading">
+                  <Spinner />
+                  <p className="muted">Chargement de la situation du crédit…</p>
+                </div>
+              )}
+
+              {cbsSituationError && (
+                <div className="form-error" style={{ marginBottom: 12 }}>
+                  {cbsSituationError}
+                </div>
+              )}
+
+              {cbsSituation && (
+                <>
+                  <dl className="def-list two">
+                    <Row
+                      term="N° demande (numDemande)"
+                      value={cbsSituation.num_demande || "—"}
+                    />
+                    <Row
+                      term="Réf. demande (refDemande)"
+                      value={cbsSituation.ref_demande || "—"}
+                    />
+                    <Row
+                      term="N° contrat (numContrat)"
+                      value={cbsSituation.num_contrat || "—"}
+                    />
+                    <Row
+                      term="Soldé"
+                      value={
+                        cbsSituation.settled === true
+                          ? "Oui"
+                          : cbsSituation.settled === false
+                            ? "Non"
+                            : "—"
+                      }
+                    />
+                    <Row
+                      term="Encours"
+                      value={formatMoney(
+                        cbsSituation.outstanding ?? null,
+                        cbsSituation.currency || app.currency || "XOF",
+                      )}
+                    />
+                    <Row
+                      term="Retard (jours)"
+                      value={
+                        cbsSituation.days_overdue != null
+                          ? String(cbsSituation.days_overdue)
+                          : "—"
+                      }
+                    />
+                    <Row
+                      term="Montant en retard"
+                      value={formatMoney(
+                        cbsSituation.overdue_amount ?? null,
+                        cbsSituation.currency || app.currency || "XOF",
+                      )}
+                    />
+                    <Row
+                      term="Devise CBS"
+                      value={cbsSituation.currency || "—"}
+                    />
+                  </dl>
+
+                  <h4 className="section-subtitle" style={{ marginTop: 16 }}>
+                    Échéancier CBS
+                  </h4>
+                  {(cbsSituation.schedule?.length ?? 0) === 0 ? (
+                    <p className="muted small">
+                      Aucune échéance renvoyée par le CBS.
+                    </p>
+                  ) : (
+                    <div className="table-scroll table-scroll--rows-20">
+                      <table className="table">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Date</th>
+                            <th className="num">Capital</th>
+                            <th className="num">Intérêt</th>
+                            <th className="num">Total</th>
+                            <th>Statut</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(cbsSituation.schedule ?? []).map((row, idx) => {
+                            const cur =
+                              cbsSituation.currency || app.currency || "XOF";
+                            return (
+                              <tr key={idx}>
+                                <td>{String(row.echeance ?? idx + 1)}</td>
+                                <td>{String(row.date ?? "—")}</td>
+                                <td className="num">
+                                  {formatMoney(
+                                    row.montantCapital != null
+                                      ? String(row.montantCapital)
+                                      : null,
+                                    cur,
+                                  )}
+                                </td>
+                                <td className="num">
+                                  {formatMoney(
+                                    row.montantInteret != null
+                                      ? String(row.montantInteret)
+                                      : null,
+                                    cur,
+                                  )}
+                                </td>
+                                <td className="num">
+                                  {formatMoney(
+                                    row.montantTotal != null
+                                      ? String(row.montantTotal)
+                                      : null,
+                                    cur,
+                                  )}
+                                </td>
+                                <td>{String(row.statut ?? "—")}</td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+
+            <footer className="cbs-situation-modal__footer">
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={closeCbsSituationModal}
+              >
+                Fermer
+              </button>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                disabled={cbsSituationMutation.isPending}
+                onClick={() => cbsSituationMutation.mutate()}
+              >
+                <RefreshCw size={14} />
+                {cbsSituationMutation.isPending
+                  ? "Actualisation…"
+                  : "Actualiser"}
+              </button>
+            </footer>
+          </div>
         </div>
       )}
 
@@ -2644,16 +2889,24 @@ export function CreditApplicationDetailPage() {
             <SubSection icon={Cable} title="Mapping CBS (décaissement)">
               <dl className="def-list two">
                 <Row
-                  term="idPeriodicite"
-                  value={app.cbs_refs.periodicity?.cbs_code || "—"}
+                  term="Périodicité"
+                  value={
+                    app.cbs_refs.periodicity?.label ||
+                    app.periodicity_label ||
+                    "—"
+                  }
                 />
                 <Row
-                  term="idProduitCrd"
-                  value={app.cbs_refs.product_cbs_code || "—"}
+                  term="Type de crédit"
+                  value={app.product_label || "—"}
                 />
                 <Row
-                  term="idProduitRemb"
-                  value={app.cbs_refs.product_repayment_cbs_code || "—"}
+                  term="Mécanisme de remboursement"
+                  value={
+                    app.cbs_refs.repayment_method?.label ||
+                    app.repayment_mechanism_label ||
+                    "—"
+                  }
                 />
                 <Row
                   term="codeDevise"
@@ -2662,24 +2915,51 @@ export function CreditApplicationDetailPage() {
                   }
                 />
                 <Row
-                  term="idGestionnaire"
-                  value={app.cbs_refs.manager_cbs_id || "—"}
+                  term="Gestionnaire"
+                  value={
+                    app.submitted_by_display ||
+                    app.created_by_display ||
+                    "—"
+                  }
                 />
                 <Row
                   term="Adhérent CBS"
                   value={app.cbs_refs.client_adherent_id || "—"}
                 />
                 <Row
-                  term="idPointService"
-                  value={app.cbs_refs.point_of_service_id || "—"}
+                  term="Agence"
+                  value={app.agency_display || "—"}
                 />
               </dl>
-              {app.cbs_refs.warnings && app.cbs_refs.warnings.length > 0 && (
-                <p className="muted small" style={{ marginTop: 8 }}>
-                  À compléter avant décaissement :{" "}
-                  {app.cbs_refs.warnings.join(" · ")}
-                </p>
-              )}
+            </SubSection>
+          )}
+          {(app.cbs_demande_number ||
+            app.cbs_demande_ref ||
+            app.cbs_contract_number ||
+            app.cbs_operation_date) && (
+            <SubSection icon={Cable} title="Références CBS (décaissement)">
+              <dl className="def-list two">
+                <Row
+                  term="N° demande (numDemande)"
+                  value={app.cbs_demande_number || "—"}
+                />
+                <Row
+                  term="Réf. demande (refDemande)"
+                  value={app.cbs_demande_ref || "—"}
+                />
+                <Row
+                  term="N° contrat (numContrat)"
+                  value={app.cbs_contract_number || "—"}
+                />
+                <Row
+                  term="Date opération"
+                  value={
+                    app.cbs_operation_date
+                      ? formatDate(app.cbs_operation_date)
+                      : "—"
+                  }
+                />
+              </dl>
             </SubSection>
           )}
           {app.fees_breakdown && app.fees_breakdown.lines.length > 0 && (
@@ -2999,135 +3279,94 @@ export function CreditApplicationDetailPage() {
             title="Après-vente"
             description="Dations, formalisations et mains levées rattachées à ce dossier."
           >
-            {canViewDations && (
+            {canViewDations && dations && dations.results.length > 0 && (
               <SubSection icon={CircleDollarSign} title="Dations">
-                {dations && dations.results.length > 0 ? (
-                  <ul className="link-list">
-                    {dations.results.map((d) => (
-                      <li
-                        key={d.id}
-                        className="row-clickable"
-                        onClick={() => navigate(`/dations/${d.id}`)}
-                      >
-                        <span>
-                          <CircleDollarSign size={14} />{" "}
-                          {d.reference || "Dation"}
-                        </span>
-                        <span className="muted small">
-                          {formatDate(d.created_at)}
-                        </span>
-                        <Badge
-                          value={d.status}
-                          label={d.status_display || d.status}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted small">Aucune dation sur ce dossier.</p>
-                )}
-                {canInitiateDation && (
-                  <Link
-                    className="btn btn-ghost btn-sm"
-                    to={`/dations/nouvelle?application=${id}&client=${app.client}`}
-                  >
-                    <Plus size={15} />
-                    Nouvelle dation
-                  </Link>
-                )}
+                <ul className="link-list">
+                  {dations.results.map((d) => (
+                    <li
+                      key={d.id}
+                      className="row-clickable"
+                      onClick={() => navigate(`/dations/${d.id}`)}
+                    >
+                      <span>
+                        <CircleDollarSign size={14} />{" "}
+                        {d.reference || "Dation"}
+                      </span>
+                      <span className="muted small">
+                        {formatDate(d.created_at)}
+                      </span>
+                      <Badge
+                        value={d.status}
+                        label={d.status_display || d.status}
+                      />
+                    </li>
+                  ))}
+                </ul>
               </SubSection>
             )}
 
-            {canViewFormalizations && (
+            {canViewFormalizations &&
+              formalizations &&
+              formalizations.results.length > 0 && (
               <SubSection icon={FileSignature} title="Formalisations">
-                {formalizations && formalizations.results.length > 0 ? (
-                  <ul className="link-list">
-                    {formalizations.results.map((f) => (
-                      <li
-                        key={f.id}
-                        className="row-clickable"
-                        onClick={() => navigate(`/formalisations/${f.id}`)}
-                      >
-                        <span>
-                          <FileSignature size={14} />{" "}
-                          {f.reference || "Formalisation"}
-                          {f.guarantee_reference ? (
-                            <em className="muted small">
-                              {" "}
-                              · {f.guarantee_reference}
-                            </em>
-                          ) : null}
-                        </span>
-                        <span className="muted small">
-                          {f.legal_stage_display || f.legal_stage}
-                        </span>
-                        <Badge
-                          value={f.status}
-                          label={f.status_display || f.status}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted small">
-                    Aucune formalisation sur ce dossier.
-                  </p>
-                )}
-                {canInitiateFormalization && (
-                  <Link
-                    className="btn btn-ghost btn-sm"
-                    to={`/formalisations/nouvelle?application=${id}&client=${app.client}`}
-                  >
-                    <Plus size={15} />
-                    Nouvelle formalisation
-                  </Link>
-                )}
+                <ul className="link-list">
+                  {formalizations.results.map((f) => (
+                    <li
+                      key={f.id}
+                      className="row-clickable"
+                      onClick={() => navigate(`/formalisations/${f.id}`)}
+                    >
+                      <span>
+                        <FileSignature size={14} />{" "}
+                        {f.reference || "Formalisation"}
+                        {f.guarantee_reference ? (
+                          <em className="muted small">
+                            {" "}
+                            · {f.guarantee_reference}
+                          </em>
+                        ) : null}
+                      </span>
+                      <span className="muted small">
+                        {f.legal_stage_display || f.legal_stage}
+                      </span>
+                      <Badge
+                        value={f.status}
+                        label={f.status_display || f.status}
+                      />
+                    </li>
+                  ))}
+                </ul>
               </SubSection>
             )}
 
-            {canViewReleases && (
+            {canViewReleases && releases && releases.results.length > 0 && (
               <SubSection icon={Unlock} title="Mains levées">
-                {releases && releases.results.length > 0 ? (
-                  <ul className="link-list">
-                    {releases.results.map((r) => (
-                      <li
-                        key={r.id}
-                        className="row-clickable"
-                        onClick={() => navigate(`/mains-levees/${r.id}`)}
-                      >
-                        <span>
-                          <Unlock size={14} /> {r.reference || "Main levée"}
-                          {r.guarantee_reference ? (
-                            <em className="muted small">
-                              {" "}
-                              · {r.guarantee_reference}
-                            </em>
-                          ) : null}
-                        </span>
-                        <span className="muted small">
-                          {formatDate(r.created_at)}
-                        </span>
-                        <Badge
-                          value={r.status}
-                          label={r.status_display || r.status}
-                        />
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="muted small">
-                    Aucune main levée sur ce dossier.
-                  </p>
-                )}
-                {canInitiateRelease && (
-                  <Link
-                    className="btn btn-ghost btn-sm"
-                    to={`/mains-levees/nouvelle?application=${id}&client=${app.client}`}
-                  >
-                    <Plus size={15} />
-                    Nouvelle main levée
-                  </Link>
-                )}
+                <ul className="link-list">
+                  {releases.results.map((r) => (
+                    <li
+                      key={r.id}
+                      className="row-clickable"
+                      onClick={() => navigate(`/mains-levees/${r.id}`)}
+                    >
+                      <span>
+                        <Unlock size={14} /> {r.reference || "Main levée"}
+                        {r.guarantee_reference ? (
+                          <em className="muted small">
+                            {" "}
+                            · {r.guarantee_reference}
+                          </em>
+                        ) : null}
+                      </span>
+                      <span className="muted small">
+                        {formatDate(r.created_at)}
+                      </span>
+                      <Badge
+                        value={r.status}
+                        label={r.status_display || r.status}
+                      />
+                    </li>
+                  ))}
+                </ul>
               </SubSection>
             )}
           </ViewSection>

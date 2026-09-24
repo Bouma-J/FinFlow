@@ -53,16 +53,29 @@ CORE_DOCUMENT_CATEGORIES = (
     ("GARANTIE_PIECE", "Pièce de garantie", False),
 )
 
+COMMITTEE_DOCUMENT_CATEGORIES = (
+    (
+        "PV_COMITE",
+        "Procès-verbal de comité de crédit",
+        False,
+    ),
+)
+
 
 def ensure_core_document_categories(tenant) -> int:
     """Catégories KYC / crédit / collatéral génériques."""
     return ensure_document_categories(tenant, CORE_DOCUMENT_CATEGORIES)
 
 
+def ensure_committee_document_categories(tenant) -> int:
+    """Catégorie GED pour le PV de comité de crédit."""
+    return ensure_document_categories(tenant, COMMITTEE_DOCUMENT_CATEGORIES)
+
+
 def ensure_all_process_document_categories(tenant) -> int:
     """
     Seed complet des catégories GED pour une filiale :
-    cœur + main levée + dation + formalisation + contentieux.
+    cœur + comité + main levée + dation + formalisation + contentieux.
     """
     from apps.collections.services import ensure_litigation_document_categories
     from apps.guarantees.formalization_services import (
@@ -75,6 +88,7 @@ def ensure_all_process_document_categories(tenant) -> int:
 
     total = 0
     total += ensure_core_document_categories(tenant)
+    total += ensure_committee_document_categories(tenant)
     total += ensure_release_document_categories(tenant)
     total += ensure_dation_document_categories(tenant)
     total += ensure_formalization_document_categories(tenant)

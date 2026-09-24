@@ -35,7 +35,6 @@ import {
   Badge,
   Card,
   ErrorState,
-  PageHeader,
   Spinner,
   formatMoney,
 } from "@/components/ui";
@@ -493,19 +492,74 @@ export function CollectionCaseDetailPage() {
   );
 
   return (
-    <div className="page-shell">
-      <PageHeader
-        icon={CircleDollarSign}
-        title={`Recouvrement — ${c.application_reference || c.client_name}`}
-        subtitle={`${c.client_name} · ${c.agency_name}${
-          c.product_name ? ` · ${c.product_name}` : ""
-        }`}
-        actions={
-          <>
+    <div className="page-shell detail-banner-page">
+      <div className="client-banner">
+        <div className="client-banner-main">
+          <div className="client-banner-info">
+            <span className="client-banner-icon">
+              <CircleDollarSign size={26} />
+            </span>
+            <div className="client-banner-identity">
+              <h2 className="client-banner-name">
+                {c.client_name || "Recouvrement"}
+              </h2>
+              <p className="client-banner-ref">
+                Recouvrement{" "}
+                <code>{c.application_reference || c.id.slice(0, 8)}</code>
+                {c.application_id && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    className="client-banner-inline-link"
+                    to={`/dossiers/${c.application_id}`}
+                    fallback={
+                      c.application_reference ? (
+                        <span className="muted">
+                          · Crédit {c.application_reference}
+                        </span>
+                      ) : null
+                    }
+                  >
+                    · Dossier crédit{" "}
+                    {c.application_reference || c.application_id.slice(0, 8)}
+                  </PermLink>
+                )}
+              </p>
+              <div className="client-banner-meta">
+                <Badge value={c.stage} label={c.stage_display} />
+                {c.par_class_display && (
+                  <Badge value={c.par_class} label={c.par_class_display} />
+                )}
+                <span className="muted">
+                  {c.days_overdue} j · Impayé {formatMoney(c.overdue_amount)}
+                </span>
+                {c.agency_name && (
+                  <span className="muted">{c.agency_name}</span>
+                )}
+                {c.product_name && (
+                  <span className="muted">{c.product_name}</span>
+                )}
+              </div>
+            </div>
+          </div>
+
+          <div className="client-banner-actions">
+            <Link className="btn btn-banner" to="/recouvrement">
+              <ArrowLeft size={15} />
+              Retour
+            </Link>
+            <button
+              type="button"
+              className="btn btn-banner"
+              onClick={() => exportCollectionCasePdf(c)}
+            >
+              <Download size={15} />
+              PDF
+            </button>
             {(canOperate || canManageCase) && (
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
+                className="btn btn-banner"
                 disabled={refreshCbsMutation.isPending}
                 onClick={() => {
                   setSuccess(null);
@@ -514,22 +568,12 @@ export function CollectionCaseDetailPage() {
               >
                 {refreshCbsMutation.isPending
                   ? "Lecture CBS…"
-                  : "Actualiser depuis le CBS"}
+                  : "Actualiser CBS"}
               </button>
             )}
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => exportCollectionCasePdf(c)}
-            >
-              <Download size={14} /> PDF
-            </button>
-            <Link to="/recouvrement" className="btn btn-ghost btn-sm">
-              <ArrowLeft size={14} /> Retour
-            </Link>
-          </>
-        }
-      />
+          </div>
+        </div>
+      </div>
 
       {success && (
         <div className="form-success" style={{ marginBottom: 12 }}>
@@ -543,7 +587,7 @@ export function CollectionCaseDetailPage() {
         </p>
       )}
       {financeFrozen && (
-        <div className="notice-warning" style={{ marginBottom: 12 }}>
+        <div className="callout callout-warning">
           {c.financial_ops_frozen_reason}
           {c.blocking_dation?.id && canViewDations && (
             <>
@@ -815,11 +859,16 @@ export function CollectionCaseDetailPage() {
           {!!c.guarantees?.length && (
             <ul className="timeline-list" style={{ marginBottom: 12 }}>
               {c.guarantees.map((g) => (
-                <li key={g.id}>
+                <li
+                  key={g.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/garanties/${g.id}`)}
+                >
                   <PermLink
                     user={user}
                     anyOf={PERM_GUARANTEES}
                     to={`/garanties/${g.id}`}
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {g.guarantee_type_display}
                   </PermLink>
@@ -835,11 +884,16 @@ export function CollectionCaseDetailPage() {
           {!!c.surety_engagements?.length && (
             <ul className="timeline-list" style={{ marginBottom: 12 }}>
               {c.surety_engagements.map((e) => (
-                <li key={e.id}>
+                <li
+                  key={e.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/cautions/${e.surety}`)}
+                >
                   <PermLink
                     user={user}
                     anyOf={PERM_SURETIES}
                     to={`/cautions/${e.surety}`}
+                    onClick={(ev) => ev.stopPropagation()}
                   >
                     {e.surety_display}
                   </PermLink>
@@ -852,12 +906,14 @@ export function CollectionCaseDetailPage() {
                     </span>
                   ) : null}
                   {canWrite && canCallSurety && (
-                    <SuretyEngagementActions
-                      engagement={e}
-                      canManage
-                      canContracts={false}
-                      invalidateKeys={[["collection-case", id]]}
-                    />
+                    <div onClick={(ev) => ev.stopPropagation()}>
+                      <SuretyEngagementActions
+                        engagement={e}
+                        canManage
+                        canContracts={false}
+                        invalidateKeys={[["collection-case", id]]}
+                      />
+                    </div>
                   )}
                 </li>
               ))}
@@ -866,11 +922,16 @@ export function CollectionCaseDetailPage() {
           {!!c.dation_requests?.length && (
             <ul className="timeline-list">
               {c.dation_requests.map((d) => (
-                <li key={d.id}>
+                <li
+                  key={d.id}
+                  className="row-clickable"
+                  onClick={() => navigate(`/dations/${d.id}`)}
+                >
                   <PermLink
                     user={user}
                     anyOf={PERM_DATIONS}
                     to={`/dations/${d.id}`}
+                    onClick={(e) => e.stopPropagation()}
                   >
                     {d.reference ? `Dation ${d.reference}` : "Dation"}
                   </PermLink>

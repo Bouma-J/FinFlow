@@ -3,7 +3,7 @@ import { MapPin, Plus, Save, X } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
-import type { Agency, Paginated } from "@/api/types";
+import type { Agency, CbsCatalogItem, Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
   Card,
@@ -40,6 +40,17 @@ export function AdminAgenciesPage() {
     queryFn: async () =>
       (await api.get<Paginated<Agency>>("/agencies/", { params: { page_size: 200 } }))
         .data,
+    enabled: !needsTenant,
+  });
+
+  const servicePoints = useQuery({
+    queryKey: ["service-points", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/service-points/", {
+          params: { page_size: 200, is_active: true },
+        })
+      ).data,
     enabled: !needsTenant,
   });
 
@@ -198,14 +209,25 @@ export function AdminAgenciesPage() {
               />
             </label>
             <label className="field">
-              <span>Point de service CBS (idPointService)</span>
-              <input
+              <span>Point de service CBS</span>
+              <select
                 value={form.cbs_point_of_service_id}
                 onChange={(e) =>
                   setForm({ ...form, cbs_point_of_service_id: e.target.value })
                 }
-                placeholder="PS01"
-              />
+              >
+                <option value="">— Aucun —</option>
+                {(servicePoints.data?.results ?? []).map((sp) => (
+                  <option key={sp.id} value={sp.cbs_code}>
+                    {sp.code} — {sp.label} ({sp.cbs_code})
+                  </option>
+                ))}
+              </select>
+              {!servicePoints.data?.results?.length && (
+                <span className="field-hint">
+                  Importez les référentiels CBS pour peupler la liste.
+                </span>
+              )}
             </label>
           </div>
           {error && <div className="form-error">{error}</div>}
@@ -273,8 +295,8 @@ export function AdminAgenciesPage() {
                 />
               </label>
               <label className="field">
-                <span>Point de service CBS (idPointService)</span>
-                <input
+                <span>Point de service CBS</span>
+                <select
                   value={form.cbs_point_of_service_id}
                   onChange={(e) =>
                     setForm({
@@ -282,8 +304,14 @@ export function AdminAgenciesPage() {
                       cbs_point_of_service_id: e.target.value,
                     })
                   }
-                  placeholder="PS01"
-                />
+                >
+                  <option value="">— Aucun —</option>
+                  {(servicePoints.data?.results ?? []).map((sp) => (
+                    <option key={sp.id} value={sp.cbs_code}>
+                      {sp.code} — {sp.label} ({sp.cbs_code})
+                    </option>
+                  ))}
+                </select>
               </label>
               <label className="field checkbox">
                 <input
@@ -332,7 +360,11 @@ export function AdminAgenciesPage() {
           </thead>
           <tbody>
             {(agencies.data?.results ?? []).map((a) => (
-              <tr key={a.id}>
+              <tr
+                key={a.id}
+                className="row-clickable"
+                onClick={() => startEdit(a)}
+              >
                 <td>{a.code}</td>
                 <td>{a.name}</td>
                 <td>{a.region || "—"}</td>
@@ -352,7 +384,10 @@ export function AdminAgenciesPage() {
                 <td>
                   <button
                     className="btn btn-ghost btn-sm"
-                    onClick={() => startEdit(a)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      startEdit(a);
+                    }}
                   >
                     Modifier
                   </button>

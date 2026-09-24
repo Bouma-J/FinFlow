@@ -23,7 +23,7 @@ import { hasAnyPerm, hasPerm } from "@/auth/permissions";
 import { PERM_CREDITS } from "@/auth/routePerms";
 import { PermLink } from "@/components/PermLink";
 import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
-import { Badge, Card, ErrorState, PageHeader, Spinner, formatDate, formatMoney } from "@/components/ui";
+import { Badge, Card, ErrorState, Spinner, formatDate, formatMoney } from "@/components/ui";
 
 function label(map: Record<string, string>, key: string) {
   return map[key] || key || "—";
@@ -115,39 +115,7 @@ export function SuretyDetailPage({
   const BannerIcon = isMoral ? Building2 : UserRound;
 
   return (
-    <div>
-      <PageHeader
-        icon={BannerIcon}
-        title={s.display_name}
-        subtitle={`Caution — ${typeLabel}`}
-        actions={
-          <div className="row-actions">
-            <Link className="btn btn-ghost" to={backTo}>
-              <ArrowLeft />
-              Retour
-            </Link>
-            {canEdit && (
-              <Link
-                className="btn btn-primary"
-                to={`/cautions/${s.id}/modifier`}
-              >
-                <Pencil />
-                Modifier
-              </Link>
-            )}
-            {canDelete && (
-              <button
-                className="btn btn-danger"
-                onClick={() => setConfirmDelete(true)}
-              >
-                <Trash2 />
-                Supprimer
-              </button>
-            )}
-          </div>
-        }
-      />
-
+    <div className="page-shell detail-banner-page">
       {confirmDelete && (
         <div className="confirm-bar">
           <span>
@@ -174,24 +142,66 @@ export function SuretyDetailPage({
       )}
 
       <div className="client-banner">
-        <div className="client-banner-info">
-          <span className="client-banner-icon">
-            <BannerIcon size={26} />
-          </span>
-          <div>
-            <h2 className="client-banner-name">{s.display_name}</h2>
-            <div className="client-banner-meta">
-              <Badge value="ACTIVE" label={isMoral ? "Entreprise" : "Caution"} />
-              {s.activity && <code>{s.activity}</code>}
-              <span className={`dot-status ${s.is_active ? "on" : "off"}`}>
-                {s.is_active ? "Active" : "Inactive"}
-              </span>
-              <span className="muted">
-                Plafond {formatMoney(s.commitment_ceiling)} · Engagé{" "}
-                {formatMoney(s.total_committed)} · Dispo{" "}
-                {formatMoney(s.available_ceiling)}
-              </span>
+        <div className="client-banner-main">
+          <div className="client-banner-info">
+            <span className="client-banner-icon">
+              <BannerIcon size={26} />
+            </span>
+            <div className="client-banner-identity">
+              <h2 className="client-banner-name">{s.display_name}</h2>
+              <p className="client-banner-ref">
+                Caution <code>{typeLabel}</code>
+                {appId && canViewCredits && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    className="client-banner-inline-link"
+                    to={`/dossiers/${appId}`}
+                    fallback={null}
+                  >
+                    · Dossier crédit
+                  </PermLink>
+                )}
+              </p>
+              <div className="client-banner-meta">
+                <Badge value="ACTIVE" label={isMoral ? "Entreprise" : "Caution"} />
+                {s.activity && <code>{s.activity}</code>}
+                <span className={`dot-status ${s.is_active ? "on" : "off"}`}>
+                  {s.is_active ? "Active" : "Inactive"}
+                </span>
+                <span className="muted">
+                  Plafond {formatMoney(s.commitment_ceiling)} · Engagé{" "}
+                  {formatMoney(s.total_committed)} · Dispo{" "}
+                  {formatMoney(s.available_ceiling)}
+                </span>
+              </div>
             </div>
+          </div>
+
+          <div className="client-banner-actions">
+            <Link className="btn btn-banner" to={backTo}>
+              <ArrowLeft size={15} />
+              Retour
+            </Link>
+            {canEdit && (
+              <Link
+                className="btn btn-banner btn-banner-primary"
+                to={`/cautions/${s.id}/modifier`}
+              >
+                <Pencil size={15} />
+                Modifier
+              </Link>
+            )}
+            {canDelete && (
+              <button
+                type="button"
+                className="btn btn-banner btn-banner-danger"
+                onClick={() => setConfirmDelete(true)}
+              >
+                <Trash2 size={15} />
+                Supprimer
+              </button>
+            )}
           </div>
         </div>
 
@@ -253,13 +263,19 @@ export function SuretyDetailPage({
             ) : (
               <ul className="link-list stacked">
                 {(s.engagements ?? []).map((e) => (
-                  <li key={e.id} style={{ flexDirection: "column", alignItems: "stretch" }}>
+                  <li
+                    key={e.id}
+                    className="row-clickable"
+                    style={{ flexDirection: "column", alignItems: "stretch" }}
+                    onClick={() => navigate(`/dossiers/${e.application}`)}
+                  >
                     <div className="row-actions" style={{ width: "100%" }}>
                       <span>
                         <PermLink
                           user={user}
                           anyOf={PERM_CREDITS}
                           to={`/dossiers/${e.application}`}
+                          onClick={(ev) => ev.stopPropagation()}
                         >
                           {e.application_reference || e.application.slice(0, 8)}
                         </PermLink>
@@ -271,12 +287,14 @@ export function SuretyDetailPage({
                         {formatDate(e.created_at)}
                       </span>
                     </div>
-                    <SuretyEngagementActions
-                      engagement={e}
-                      canManage={canManageEng}
-                      canContracts={canContracts}
-                      invalidateKeys={[["surety", id]]}
-                    />
+                    <div onClick={(ev) => ev.stopPropagation()}>
+                      <SuretyEngagementActions
+                        engagement={e}
+                        canManage={canManageEng}
+                        canContracts={canContracts}
+                        invalidateKeys={[["surety", id]]}
+                      />
+                    </div>
                   </li>
                 ))}
               </ul>

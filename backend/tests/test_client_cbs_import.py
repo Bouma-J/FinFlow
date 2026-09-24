@@ -65,6 +65,16 @@ def test_import_individual_maps_identity_fields(tenant_a, cbs_connector):
     assert client.national_id == "CI1234567890"
     assert client.client_type == Client.ClientType.INDIVIDUAL
     assert client.kyc_status == Client.KycStatus.PENDING
+    assert client.cbs_full_name == "Traoré Aminata"
+    assert client.cbs_situation.get("code_adherent") == "A00999"
+    assert client.cbs_situation.get("raw", {}).get("codeAdherent") == "A00999"
+    assert client.cbs_synced_at is not None
+    assert client.cbs_registration_date == date(2020, 1, 15)
+    assert client.cbs_point_of_service_id == "PS01"
+    assert client.cbs_point_of_service_name == "Agence Principale"
+    assert client.cbs_context == "ADHERENT SITUATION"
+    assert client.cbs_est_valide is False
+    assert client.cbs_credit_limit is not None
     assert preview["kyc_alert"] is True
     assert preview["can_import"] is True
     assert preview["missing_required"] == []

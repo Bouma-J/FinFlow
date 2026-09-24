@@ -101,6 +101,7 @@ import { AdminCreditPolicyPage } from "@/pages/admin/CreditPolicyPage";
 import { AdminDelegationsPage } from "@/pages/admin/DelegationsPage";
 import { AdminProductsPage } from "@/pages/admin/ProductsAdminPage";
 import { AdminCbsReferentialsPage } from "@/pages/admin/CbsReferentialsPage";
+import { AdminCbsSituationProbePage } from "@/pages/admin/CbsSituationProbePage";
 import { AdminRolesPage } from "@/pages/admin/RolesPage";
 import { AdminUsersPage } from "@/pages/admin/UsersPage";
 import { AdminWorkflowPage } from "@/pages/admin/WorkflowPage";
@@ -567,6 +568,14 @@ export default function App() {
               <PermissionRoute anyOf={PERM_ADMIN_CONNECTORS}>
                 <AdminConnectorsPage />
               </PermissionRoute>
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/verification-situation"
+          element={
+            <AdminRoute>
+              <AdminCbsSituationProbePage />
             </AdminRoute>
           }
         />

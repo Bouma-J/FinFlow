@@ -76,6 +76,7 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
             "credits.change_creditapplication",
             "guarantees.add_guarantee",
         ],
+        "cbs_situation": ["credits.view_creditapplication"],
     }
     filterset_fields = [
         "status", "client", "product", "agency", "currency", "risk_level",
@@ -94,7 +95,7 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
                 "client", "product", "agency", "created_by", "submitted_by"
             )
         return qs.select_related(
-            "client", "product", "agency", "created_by", "submitted_by"
+            "client", "product", "agency", "created_by", "submitted_by", "loan"
         ).prefetch_related("stock_photos", "documents", "extra_fees")
 
     def get_serializer_class(self):
@@ -361,6 +362,88 @@ class CreditApplicationViewSet(AgencyScopedViewSet):
             loan.save(update_fields=["core_banking_reference"])
         return Response(LoanSerializer(loan).data)
 
+    @action(detail=True, methods=["post"], url_path="cbs-situation")
+    def cbs_situation(self, request, pk=None):
+        """Consulte la situation crédit CBS (Perfect ``crd/situation``)."""
+        import logging
+        from decimal import Decimal
+
+        from apps.corebanking.services import (
+            CoreBankingError,
+            get_loan_status,
+            user_message_for_cbs_error,
+        )
+
+        logger = logging.getLogger("finflow")
+        application = self.get_object()
+        loan = getattr(application, "loan", None)
+        loan_ref = ""
+        for value in (
+            application.cbs_demande_ref,
+            getattr(loan, "cbs_demande_ref", None) if loan else None,
+            application.cbs_contract_number,
+            getattr(loan, "cbs_contract_number", None) if loan else None,
+            getattr(loan, "core_banking_reference", None) if loan else None,
+            application.reference,
+        ):
+            if value and str(value).strip():
+                loan_ref = str(value).strip()
+                break
+        if not loan_ref:
+            raise ValidationError(
+                {
+                    "detail": (
+                        "Aucune référence de crédit n'est enregistrée sur ce "
+                        "dossier. Un décaissement est requis avant de "
+                        "consulter la situation."
+                    )
+                }
+            )
+
+        client = application.client
+        try:
+            result = get_loan_status(
+                application.tenant_id,
+                loan_ref,
+                currency=application.currency or None,
+                code_adherent=getattr(client, "cbs_client_id", None) or None,
+                num_manuel=getattr(client, "cbs_account_number", None) or None,
+                num_piece_identite=getattr(client, "national_id", None) or None,
+            )
+        except CoreBankingError as exc:
+            logger.warning(
+                "Échec consultation situation crédit CBS dossier=%s "
+                "ref=%s : %s",
+                application.reference,
+                loan_ref,
+                exc,
+                exc_info=True,
+            )
+            raise ValidationError(
+                {"detail": user_message_for_cbs_error(exc)}
+            ) from exc
+        except Exception as exc:  # noqa: BLE001 — filet UI non technique
+            logger.exception(
+                "Erreur inattendue consultation situation crédit CBS "
+                "dossier=%s ref=%s",
+                application.reference,
+                loan_ref,
+            )
+            raise ValidationError(
+                {"detail": user_message_for_cbs_error(exc)}
+            ) from exc
+
+        def _jsonable(value):
+            if isinstance(value, Decimal):
+                return str(value)
+            if isinstance(value, dict):
+                return {k: _jsonable(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_jsonable(v) for v in value]
+            return value
+
+        return Response(_jsonable(result))
+
     @action(detail=True, methods=["get"], url_path="renewable-guarantees")
     def renewable_guarantees(self, request, pk=None):
         """Garanties du client détectées comme reconductibles sur ce dossier."""
@@ -570,7 +653,7 @@ class FinancialAnalysisViewSet(TenantScopedViewSet):
         from apps.accounts.utils import user_role_label
         from apps.common.tenancy import get_current_tenant_id
 
-        from .access import can_contribute
+        from .access import can_add_financial_analysis
 
         if get_current_tenant_id() is None:
             raise ValidationError({
@@ -579,11 +662,12 @@ class FinancialAnalysisViewSet(TenantScopedViewSet):
                           "enregistrement."
             })
         application = serializer.validated_data.get("application")
-        if application is not None and not can_contribute(
+        if application is not None and not can_add_financial_analysis(
             application, self.request.user
         ):
             raise PermissionDenied(
-                "Vous n'êtes pas autorisé à ajouter une analyse sur ce dossier."
+                "Vous n'êtes pas autorisé à ajouter une analyse sur ce dossier "
+                "(dossier décaissé ou fenêtre de contribution fermée)."
             )
         serializer.save(
             created_by=self.request.user,
@@ -599,9 +683,14 @@ class FinancialAnalysisViewSet(TenantScopedViewSet):
             )
 
     def _assert_mutable(self, instance):
-        from .access import can_mutate_contribution
+        from .access import ANALYSIS_LOCKED_STATUSES, can_mutate_contribution
 
         self._assert_author(instance)
+        if instance.application.status in ANALYSIS_LOCKED_STATUSES:
+            raise PermissionDenied(
+                "Cette analyse ne peut plus être modifiée : le dossier est "
+                "décaissé ou clôturé."
+            )
         if not can_mutate_contribution(instance.application, self.request.user):
             raise PermissionDenied(
                 "Cette analyse ne peut plus être modifiée : la fenêtre de "

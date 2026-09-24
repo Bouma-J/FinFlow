@@ -7,7 +7,7 @@ from decimal import Decimal
 from django.conf import settings
 
 from .models import CoreBankingConnector, IntegrationLog
-from .perfect_defaults import PERIODICITY_CBS, PURPOSE_CBS
+from .perfect_defaults import PERIODICITY_CBS
 from .services import (
     CoreBankingError,
     OP_SUBMIT_CREDIT,
@@ -70,8 +70,11 @@ def build_credit_disbursement_payload(application, *, connector=None) -> dict:
     connector = connector or resolve_active_connector(application.tenant_id)
     rules = _disbursement_rules(connector)
     defaults = rules.get("defaults") or {}
-    purpose_map = {**PURPOSE_CBS, **(rules.get("purpose_map") or {})}
-    periodicity_map = {**PERIODICITY_CBS, **(rules.get("periodicity_map") or {})}
+    # Maps syncées du connecteur uniquement (pas de re-fusion PURPOSE_CBS legacy)
+    purpose_map = dict(rules.get("purpose_map") or {})
+    periodicity_map = dict(rules.get("periodicity_map") or {})
+    if not periodicity_map:
+        periodicity_map = dict(PERIODICITY_CBS)
 
     code_adherent = (client.cbs_client_id or "").strip()
     num_manuel = (client.cbs_account_number or "").strip()
@@ -131,11 +134,8 @@ def build_credit_disbursement_payload(application, *, connector=None) -> dict:
     ):
         if actor is None:
             continue
-        id_gestionnaire = (
-            getattr(actor, "cbs_id", None)
-            or getattr(actor, "employee_id", None)
-            or ""
-        ).strip()
+        # Uniquement l'id gestionnaire CBS (pas le matricule RH)
+        id_gestionnaire = (getattr(actor, "cbs_id", None) or "").strip()
         if id_gestionnaire:
             break
     if not id_gestionnaire:
@@ -143,22 +143,31 @@ def build_credit_disbursement_payload(application, *, connector=None) -> dict:
     if not id_gestionnaire:
         raise CoreBankingError(
             "Identifiant gestionnaire CBS (idGestionnaire) manquant : "
-            "renseignez l'ID CBS de l'utilisateur soumissionnaire, "
+            "associez un gestionnaire CBS à l'utilisateur soumissionnaire, "
             "ou mapping_rules.disbursement.defaults.idGestionnaire."
         )
 
     periodicity = application.periodicity or "MONTHLY"
-    merged_periodicity_map = {**PERIODICITY_CBS, **periodicity_map}
     id_periodicite = resolve_periodicity_cbs(
         application.tenant_id,
         periodicity,
-        fallback_map=merged_periodicity_map,
+        fallback_map=periodicity_map,
     )
     purpose_type = application.purpose_type or "OTHER"
-    id_objet = (
-        purpose_map.get(purpose_type)
-        or str(defaults.get("idObjetFinancement") or purpose_type)
+    from apps.catalog.cbs_resolve import resolve_financing_object_cbs
+
+    id_objet = resolve_financing_object_cbs(
+        application.tenant_id,
+        purpose_type,
+        purpose_map=purpose_map,
+        default=str(defaults.get("idObjetFinancement") or ""),
     )
+    if not id_objet:
+        raise CoreBankingError(
+            "Objet de financement CBS (idObjetFinancement) manquant : "
+            "importez les objets Perfect et associez un PurposeType, "
+            "ou renseignez purpose_map / defaults.idObjetFinancement."
+        )
 
     amount = reference_amount(application) or application.amount_requested
     if amount is None:
@@ -394,6 +403,29 @@ def apply_cbs_callback(application_id, body: dict, *, secret: str | None = None)
             for k, v in updates.items():
                 setattr(loan, k, v)
             loan.save(update_fields=[*updates.keys(), "updated_at"])
+
+        app_updates = {}
+        if body.get("numDemande"):
+            app_updates["cbs_demande_number"] = str(body["numDemande"])[:100]
+        if body.get("refDemande"):
+            app_updates["cbs_demande_ref"] = str(body["refDemande"])[:100]
+        if body.get("numContrat"):
+            app_updates["cbs_contract_number"] = str(body["numContrat"])[:100]
+        op_date = None
+        raw_date = body.get("dateOperation")
+        if raw_date:
+            from datetime import date as date_cls
+
+            try:
+                op_date = date_cls.fromisoformat(str(raw_date).strip()[:10])
+            except ValueError:
+                op_date = None
+        if op_date is not None:
+            app_updates["cbs_operation_date"] = op_date
+        if app_updates:
+            for k, v in app_updates.items():
+                setattr(app, k, v)
+            app.save(update_fields=[*app_updates.keys(), "updated_at"])
 
         loan_id = str(loan.pk) if loan else None
 

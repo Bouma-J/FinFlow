@@ -575,7 +575,16 @@ export function AdminContractsPage() {
             </thead>
             <tbody>
               {(templates.data?.results ?? []).map((t) => (
-                <tr key={t.id}>
+                <tr
+                  key={t.id}
+                  className={t.file ? "row-clickable" : undefined}
+                  onClick={
+                    t.file
+                      ? () =>
+                          window.open(t.file!, "_blank", "noopener,noreferrer")
+                      : undefined
+                  }
+                >
                   <td>
                     <strong>{t.name}</strong>
                     {t.engine && (
@@ -599,7 +608,10 @@ export function AdminContractsPage() {
                     />
                   </td>
                   <td>
-                    <div className="row-actions">
+                    <div
+                      className="row-actions"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       {t.file && (
                         <a
                           className="btn btn-ghost btn-sm"

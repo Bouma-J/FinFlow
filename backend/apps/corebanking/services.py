@@ -27,6 +27,132 @@ class CoreBankingError(Exception):
     """Erreur métier d'accès au Core Banking (blocage strict)."""
 
 
+# Messages exposés à l'utilisateur (jamais de détail technique / HTTP / stack).
+USER_MSG_CBS_UNAVAILABLE = (
+    "Le système bancaire est temporairement inaccessible. "
+    "Veuillez réessayer dans quelques instants."
+)
+USER_MSG_CBS_AUTH = (
+    "La connexion au système bancaire a échoué. "
+    "Contactez l'administrateur si le problème persiste."
+)
+USER_MSG_CBS_NOT_CONFIGURED = (
+    "La consultation n'est pas disponible pour votre filiale. "
+    "Contactez l'administrateur."
+)
+USER_MSG_CBS_GENERIC = (
+    "Impossible de consulter la situation du crédit pour le moment. "
+    "Veuillez réessayer ultérieurement. Si le problème persiste, "
+    "contactez le support."
+)
+
+_CBS_TECHNICAL_MARKERS = (
+    "http ",
+    "traceback",
+    "exception",
+    "stack",
+    "sslerror",
+    "connectionerror",
+    "timeout",
+    "timed out",
+    "status_code",
+    "requests.",
+    "urllib",
+    "socket",
+    "errno",
+    "json.decode",
+    "at 0x",
+    "/gateway",
+    "/api/",
+    "crd/",
+    "adh/",
+    "bearer",
+    "oauth",
+    "client_secret",
+    "bad credentials",
+    "max retries",
+    "connection refused",
+    "name or service not known",
+    "temporary failure",
+)
+
+
+def _cbs_message_looks_technical(message: str) -> bool:
+    low = (message or "").strip().lower()
+    if not low:
+        return True
+    if any(marker in low for marker in _CBS_TECHNICAL_MARKERS):
+        return True
+    if "://" in low:
+        return True
+    # Codes HTTP explicites (ex. « HTTP 502 », « (HTTP 500) »)
+    compact = low.replace(" ", "")
+    for code in ("http400", "http401", "http403", "http404", "http500", "http502", "http503", "http504"):
+        if code in compact:
+            return True
+    return False
+
+
+def user_message_for_cbs_error(exc: BaseException | str | None) -> str:
+    """
+    Traduit une erreur CBS en message sûr pour l'UI.
+
+    Les détails techniques restent dans les logs applicatifs et
+    ``IntegrationLog`` ; ne jamais renvoyer ``str(exc)`` tel quel.
+    """
+    raw = str(exc or "").strip()
+    low = raw.lower()
+
+    connectivity = (
+        "joindre",
+        "timeout",
+        "timed out",
+        "connection",
+        "connect refused",
+        "unreachable",
+        "name or service",
+        "max retries",
+        "network",
+        "ssl",
+        "gateway",
+        "temporairement",
+        "indisponible",
+    )
+    if any(m in low for m in connectivity) or any(
+        code in low.replace(" ", "")
+        for code in ("http502", "http503", "http504")
+    ):
+        return USER_MSG_CBS_UNAVAILABLE
+
+    auth = (
+        "authentif",
+        "token",
+        "credentials",
+        "unauthorized",
+        "jeton",
+        "bad credentials",
+        "401",
+        "403",
+    )
+    if any(m in low for m in auth):
+        return USER_MSG_CBS_AUTH
+
+    config = (
+        "aucun connecteur",
+        "aucune filiale",
+        "configurez",
+        "connecteur core banking",
+    )
+    if any(m in low for m in config):
+        return USER_MSG_CBS_NOT_CONFIGURED
+
+    # Court message métier CBS déjà lisible (ex. « Adhérent introuvable ! »)
+    if raw and len(raw) <= 160 and not _cbs_message_looks_technical(raw):
+        return raw
+
+    return USER_MSG_CBS_GENERIC
+
+
 # Opérations normalisées
 OP_PING = "PING"
 OP_GET_LOAN_STATUS = "GET_LOAN_STATUS"
@@ -376,9 +502,13 @@ class RestAdapter(BaseAdapter):
 
     def send(self, operation: str, payload: dict) -> dict:
         if operation == OP_PING:
+            # Ping réel : obtient un jeton (prouve URL + auth + SSL).
+            token = self._resolve_bearer_token()
             return {
                 "status": "ACK",
                 "external_reference": f"CBS-PING-{self.connector.id}",
+                "auth": "ok",
+                "token_len": len(token),
             }
         if operation == OP_GET_CLIENT_SITUATION:
             return self._adh_situation(payload)
@@ -390,6 +520,108 @@ class RestAdapter(BaseAdapter):
             return self._crd_impayes(payload)
         # Autres ops REST : non encore branchées → simulation locale.
         return SimulatedAdapter(self.connector).send(operation, payload)
+
+    def _ssl_verify(self) -> bool:
+        """Vérification TLS (défaut True). Désactivable via mapping_rules.verify_ssl."""
+        rules = self.connector.mapping_rules or {}
+        if "verify_ssl" in rules:
+            return bool(rules.get("verify_ssl"))
+        return True
+
+    def _http_post(self, url: str, *, timeout: int, headers: dict, json=None, data=None, auth=None):
+        import requests
+
+        kwargs = {
+            "url": url,
+            "headers": headers,
+            "timeout": timeout,
+            "verify": self._ssl_verify(),
+        }
+        if json is not None:
+            kwargs["json"] = json
+        if data is not None:
+            kwargs["data"] = data
+        if auth is not None:
+            kwargs["auth"] = auth
+        return requests.post(**kwargs)
+
+    def _http_get(self, url: str, *, timeout: int, headers: dict):
+        import requests
+
+        return requests.get(
+            url,
+            headers=headers,
+            timeout=timeout,
+            verify=self._ssl_verify(),
+        )
+
+    def fetch_ref_list(self, endpoint_key: str, *, default_path: str = "") -> list[dict]:
+        """GET Perfect ``ref/*`` → liste ``[{id, code, libelle}, …]``."""
+        import requests
+
+        path = self._endpoint(endpoint_key, default_path or endpoint_key)
+        url = self._build_url(path)
+        token = self._resolve_bearer_token()
+        timeout = self.connector.timeout_seconds or 30
+        try:
+            resp = self._http_get(
+                url,
+                timeout=timeout,
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+        except requests.RequestException as exc:
+            raise CoreBankingError(
+                f"Impossible de joindre le référentiel CBS ({endpoint_key}) ({exc})."
+            ) from exc
+
+        payload: dict = {}
+        if resp.content:
+            try:
+                parsed = resp.json()
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except ValueError as exc:
+                raise CoreBankingError(
+                    f"Réponse référentiel CBS non JSON ({endpoint_key}, "
+                    f"HTTP {resp.status_code})."
+                ) from exc
+
+        if resp.status_code >= 400:
+            raise CoreBankingError(
+                str(
+                    payload.get("message")
+                    or payload.get("error")
+                    or f"Échec référentiel CBS {endpoint_key} (HTTP {resp.status_code})."
+                )
+            )
+
+        datas = payload.get("datas")
+        if datas is None and isinstance(payload.get("data"), list):
+            datas = payload.get("data")
+        # Vision renvoie parfois datas: null (liste vide côté CBS)
+        if datas is None:
+            datas = []
+        if not isinstance(datas, list):
+            raise CoreBankingError(
+                f"Référentiel CBS {endpoint_key} : champ datas manquant ou invalide."
+            )
+
+        rows: list[dict] = []
+        for item in datas:
+            if not isinstance(item, dict):
+                continue
+            rid = str(item.get("id") or "").strip()
+            code = str(item.get("code") or "").strip()
+            label = str(
+                item.get("libelle") or item.get("label") or item.get("name") or ""
+            ).strip()
+            if not rid and not code:
+                continue
+            rows.append({"id": rid or code, "code": code or rid, "libelle": label})
+        return rows
 
     def _crd_situation(self, payload: dict) -> dict:
         """POST Perfect ``crd/situation`` → solde / échéancier crédit."""
@@ -423,14 +655,16 @@ class RestAdapter(BaseAdapter):
         token = self._resolve_bearer_token()
         timeout = self.connector.timeout_seconds or 30
         try:
-            resp = requests.post(
+            import requests
+
+            resp = self._http_post(
                 url,
+                timeout=timeout,
                 json=body,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}",
                 },
-                timeout=timeout,
             )
         except requests.RequestException as exc:
             raise CoreBankingError(
@@ -504,14 +738,16 @@ class RestAdapter(BaseAdapter):
         token = self._resolve_bearer_token()
         timeout = self.connector.timeout_seconds or 30
         try:
-            resp = requests.post(
+            import requests
+
+            resp = self._http_post(
                 url,
+                timeout=timeout,
                 json=body,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}",
                 },
-                timeout=timeout,
             )
         except requests.RequestException as exc:
             raise CoreBankingError(
@@ -599,14 +835,16 @@ class RestAdapter(BaseAdapter):
         token = self._resolve_bearer_token()
         timeout = self.connector.timeout_seconds or 30
         try:
-            resp = requests.post(
+            import requests
+
+            resp = self._http_post(
                 url,
+                timeout=timeout,
                 json=payload,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}",
                 },
-                timeout=timeout,
             )
         except requests.RequestException as exc:
             raise CoreBankingError(
@@ -680,14 +918,16 @@ class RestAdapter(BaseAdapter):
         token = self._resolve_bearer_token()
         timeout = self.connector.timeout_seconds or 30
         try:
-            resp = requests.post(
+            import requests
+
+            resp = self._http_post(
                 url,
+                timeout=timeout,
                 json=body,
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": f"Bearer {token}",
                 },
-                timeout=timeout,
             )
         except requests.RequestException as exc:
             raise CoreBankingError(
@@ -771,8 +1011,9 @@ class RestAdapter(BaseAdapter):
         url = self._auth_url()
         timeout = self.connector.timeout_seconds or 30
         try:
-            resp = requests.post(
+            resp = self._http_post(
                 url,
+                timeout=timeout,
                 data={
                     "username": username,
                     "password": password,
@@ -781,16 +1022,20 @@ class RestAdapter(BaseAdapter):
                 headers={
                     "Content-Type": "application/x-www-form-urlencoded",
                 },
-                timeout=timeout,
             )
-            payload = resp.json() if resp.content else {}
-        except (requests.RequestException, ValueError) as exc:
+        except requests.RequestException as exc:
             raise CoreBankingError(
                 f"Échec d'authentification Perfect ({exc})."
             ) from exc
 
-        if not isinstance(payload, dict):
-            raise CoreBankingError("Réponse d'authentification Perfect invalide.")
+        payload: dict = {}
+        if resp.content:
+            try:
+                parsed = resp.json()
+                if isinstance(parsed, dict):
+                    payload = parsed
+            except ValueError:
+                payload = {}
 
         token = str(
             payload.get("accessToken")
@@ -799,14 +1044,19 @@ class RestAdapter(BaseAdapter):
             or ""
         ).strip()
         if resp.status_code >= 400 or not token:
-            raise CoreBankingError(
-                str(
-                    payload.get("error_description")
-                    or payload.get("error")
-                    or payload.get("message")
-                    or "Impossible d'obtenir un jeton Perfect (Bad credentials ?)."
-                )
+            detail = (
+                payload.get("error_description")
+                or payload.get("error")
+                or payload.get("message")
+                or ""
             )
+            if not detail:
+                detail = (
+                    f"HTTP {resp.status_code} sur {url}"
+                    if resp.status_code >= 400
+                    else "Impossible d'obtenir un jeton Perfect (Bad credentials ?)."
+                )
+            raise CoreBankingError(str(detail))
         return token
 
     def _fetch_oauth_access_token(self, token_url: str) -> str:
@@ -824,11 +1074,12 @@ class RestAdapter(BaseAdapter):
         client_secret = auth.get("client_secret")
         try:
             if client_id and client_secret:
-                resp = requests.post(
+                resp = self._http_post(
                     token_url,
-                    data=data,
-                    auth=(str(client_id), str(client_secret)),
                     timeout=timeout,
+                    data=data,
+                    headers={},
+                    auth=(str(client_id), str(client_secret)),
                 )
             else:
                 if auth.get("username"):
@@ -839,7 +1090,12 @@ class RestAdapter(BaseAdapter):
                     data["client_id"] = client_id
                 if client_secret:
                     data["client_secret"] = client_secret
-                resp = requests.post(token_url, data=data, timeout=timeout)
+                resp = self._http_post(
+                    token_url,
+                    timeout=timeout,
+                    data=data,
+                    headers={},
+                )
             payload = resp.json() if resp.content else {}
         except (requests.RequestException, ValueError) as exc:
             raise CoreBankingError(
@@ -1009,12 +1265,30 @@ def _is_paid_schedule_status(statut: str) -> bool:
     return any(p in token for p in ("paye", "solde", "regle", "paid", "settled"))
 
 
+def _datas_looks_like_schedule(rows: list) -> bool:
+    if not rows or not isinstance(rows[0], dict):
+        return False
+    row = rows[0]
+    return any(k in row for k in ("echeance", "statut", "montantTotal", "montantCapital"))
+
+
+def _datas_looks_like_loans(rows: list) -> bool:
+    if not rows or not isinstance(rows[0], dict):
+        return False
+    row = rows[0]
+    return any(
+        k in row
+        for k in ("encours", "numeroPret", "numeroDemande", "montantPret", "impaye")
+    )
+
+
 def _normalize_credit_schedule(data: dict) -> tuple[bool, Decimal]:
     """
     Déduit soldé / encours depuis la réponse Perfect ``crd/situation``.
 
-    Une échéance est soldée si ``statut`` indique payée / soldée / réglée.
-    Encours = somme des ``montantTotal`` (ou capital+intérêt) non payés.
+    Formats supportés :
+    - échéancier doc Perfect : ``statut`` / ``montantTotal`` / capital+intérêt
+    - liste de prêts Vision : somme des ``encours``
     """
     rows = data.get("datas")
     if not isinstance(rows, list) or not rows:
@@ -1024,6 +1298,24 @@ def _normalize_credit_schedule(data: dict) -> tuple[bool, Decimal]:
         except (InvalidOperation, TypeError, ValueError):
             montant = Decimal("0")
         return False, montant
+
+    if _datas_looks_like_loans(rows) and not _datas_looks_like_schedule(rows):
+        outstanding = Decimal("0")
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                outstanding += Decimal(
+                    str(
+                        row.get("encours")
+                        if row.get("encours") not in (None, "")
+                        else row.get("montantPret")
+                        or "0"
+                    )
+                )
+            except (InvalidOperation, TypeError, ValueError):
+                continue
+        return outstanding <= 0, outstanding
 
     outstanding = Decimal("0")
     for row in rows:
@@ -1432,6 +1724,131 @@ def get_loan_status(
         "num_demande": payload.get("num_demande") or "",
         "ref_demande": payload.get("ref_demande") or loan_ref,
         "num_contrat": payload.get("num_contrat") or "",
+    }
+
+
+def probe_credit_situation(
+    tenant_id,
+    *,
+    ref_demande: str,
+    code_adherent: str,
+    connector=None,
+) -> dict:
+    """
+    Appel diagnostic ``crd/situation`` (admin) : requête minimale doc Perfect
+    + résultat classé pour affichage (échéancier ou liste de prêts Vision).
+    """
+    ref = (ref_demande or "").strip()
+    code = (code_adherent or "").strip()
+    if not ref:
+        raise CoreBankingError("La référence de demande (refDemande) est obligatoire.")
+    if not code:
+        raise CoreBankingError("Le code adhérent est obligatoire.")
+
+    result = get_loan_status(
+        tenant_id,
+        ref,
+        code_adherent=code,
+        connector=connector,
+    )
+    raw = result.get("raw") if isinstance(result.get("raw"), dict) else {}
+    rows = result.get("schedule") or raw.get("datas") or []
+    if not isinstance(rows, list):
+        rows = []
+
+    if _datas_looks_like_schedule(rows):
+        kind = "schedule"
+    elif _datas_looks_like_loans(rows):
+        kind = "loans"
+    elif rows:
+        kind = "unknown"
+    else:
+        kind = "empty"
+
+    def _dec(value) -> str:
+        try:
+            return str(_to_decimal(value if value not in (None, "") else "0", "v"))
+        except CoreBankingError:
+            return "0"
+
+    display_rows: list[dict] = []
+    if kind == "schedule":
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            total = row.get("montantTotal")
+            if total in (None, ""):
+                try:
+                    total = Decimal(str(row.get("montantCapital") or 0)) + Decimal(
+                        str(row.get("montantInteret") or 0)
+                    )
+                except (InvalidOperation, TypeError, ValueError):
+                    total = "0"
+            display_rows.append(
+                {
+                    "echeance": row.get("echeance"),
+                    "date": row.get("date"),
+                    "montant_capital": _dec(row.get("montantCapital")),
+                    "montant_interet": _dec(row.get("montantInteret")),
+                    "montant_total": _dec(total),
+                    "statut": str(row.get("statut") or ""),
+                    "raw": row,
+                }
+            )
+    elif kind == "loans":
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            display_rows.append(
+                {
+                    "numero_demande": str(row.get("numeroDemande") or ""),
+                    "numero_pret": str(row.get("numeroPret") or ""),
+                    "compte_pret": str(row.get("comptePret") or ""),
+                    "nom_adherent": str(row.get("nomAdherent") or ""),
+                    "date_demande": row.get("dateDemande"),
+                    "date_effet": row.get("dateEffet"),
+                    "date_solde": row.get("dateSolde"),
+                    "montant_pret": _dec(row.get("montantPret")),
+                    "encours": _dec(row.get("encours")),
+                    "impaye": _dec(row.get("impaye")),
+                    "impaye_interet": _dec(row.get("impayeInteret")),
+                    "penalite": _dec(row.get("penalite")),
+                    "jours_retard": int(row.get("nbreJrsRetard") or 0),
+                    "observations": str(row.get("observations") or ""),
+                    "raw": row,
+                }
+            )
+    else:
+        for row in rows:
+            if isinstance(row, dict):
+                display_rows.append({"raw": row})
+
+    outstanding = result.get("outstanding")
+    return {
+        "request": {"refDemande": ref, "codeAdherent": code},
+        "kind": kind,
+        "kind_label": {
+            "schedule": "Échéancier (format documentation Perfect)",
+            "loans": "Liste de prêts (format Vision)",
+            "empty": "Aucune ligne dans datas",
+            "unknown": "Format datas non reconnu",
+        }.get(kind, kind),
+        "message": str(raw.get("message") or ""),
+        "response_code": raw.get("responseCode"),
+        "num_demande": result.get("num_demande") or raw.get("numDemande") or "",
+        "ref_demande": result.get("ref_demande") or raw.get("refDemande") or ref,
+        "num_contrat": result.get("num_contrat") or raw.get("numContrat") or "",
+        "montant": _dec(raw.get("montant") if raw.get("montant") not in (None, "") else outstanding),
+        "currency": result.get("currency") or raw.get("codeDevise") or "",
+        "settled": bool(result.get("settled")),
+        "outstanding": _dec(outstanding),
+        "days_overdue": int(result.get("days_overdue") or 0),
+        "overdue_amount": _dec(result.get("overdue_amount")),
+        "rows_count": len(display_rows),
+        "rows": display_rows,
+        "log_id": result.get("log_id"),
+        "external_reference": result.get("external_reference") or "",
+        "raw": raw,
     }
 
 

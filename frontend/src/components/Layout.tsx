@@ -245,6 +245,12 @@ const ADMIN_GROUPS: AdminGroup[] = [
         anyOf: PERM_ADMIN_CBS_REF,
       },
       {
+        to: "/admin/verification-situation",
+        label: "Vérification de situation",
+        icon: ClipboardCheck,
+        finflowAdmin: true,
+      },
+      {
         to: "/admin/referentiels-metier",
         label: "Référentiels métier",
         icon: Library,

@@ -41,7 +41,9 @@ from .services import (
 
 
 class WorkflowDefinitionViewSet(TenantScopedViewSet):
-    queryset = WorkflowDefinition.objects.prefetch_related("steps").all()
+    queryset = WorkflowDefinition.objects.select_related(
+        "product", "product_category"
+    ).prefetch_related("steps").all()
     serializer_class = WorkflowDefinitionSerializer
     filterset_fields = ["target_type", "is_active"]
     search_fields = ["code", "name"]
@@ -54,8 +56,22 @@ class WorkflowDefinitionViewSet(TenantScopedViewSet):
 
         L'activation est le moment où le circuit devient opposable aux
         dossiers : c'est là que le contrôle a un sens. Un circuit inactif reste
-        librement modifiable pendant sa construction.
+        librement modifiable pendant sa construction. Les critères de
+        sélection (montant / produit) ne sont modifiables que si le circuit
+        n'a pas encore servi.
         """
+        criteria_keys = {
+            "min_amount",
+            "max_amount",
+            "product",
+            "product_category",
+        }
+        if criteria_keys.intersection(serializer.validated_data.keys()):
+            try:
+                ensure_definition_editable(serializer.instance)
+            except WorkflowError as exc:
+                raise ValidationError(str(exc))
+
         activating = (
             serializer.validated_data.get("is_active") is True
             and not serializer.instance.is_active
@@ -245,12 +261,29 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
 
     @action(detail=False, methods=["get"])
     def my_dossiers(self, request):
-        """Tous les dossiers / processus en circuit concernant l'utilisateur.
+        """Dossiers / processus en circuit visibles pour l'utilisateur.
 
-        Inclut les dossiers de crédit, les demandes de main levée et les
-        dations en paiement. Un enregistrement concerne l'utilisateur dès
-        lors qu'une étape du circuit implique l'un de ses groupes.
+        Périmètre :
+        - Chargé d'affaire : dossiers qu'il a soumis
+        - Chef d'agence : dossiers de son / ses agences
+        - Autres rôles : circuits dont une étape implique l'un de ses groupes
+        - Hors brouillon
+
+        Filtres query :
+        - ``queue`` : ``actionable`` (à traiter), ``treated`` (déjà traités),
+          ``all`` (tous les visibles)
+        - ``actionable=1`` : alias de queue=actionable
+        - ``step_role`` / ``step`` : étape courante (rôle ou nom d'étape)
         """
+        from apps.accounts.services import (
+            CHARGE_AFFAIRE_ROLE_NAME,
+            CHEF_AGENCE_ROLE_NAME,
+        )
+        from apps.collections.access import user_role_names
+        from apps.common.access import get_user_agency_ids
+        from apps.common.list_filters import query_param
+        from apps.common.pagination import DefaultPagination
+        from apps.common.tenancy import get_current_tenant_id
         from apps.credits.models import CreditApplication
         from apps.guarantees.models import (
             DationRequest,
@@ -258,11 +291,18 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
             GuaranteeReleaseRequest,
         )
 
-        from apps.common.tenancy import get_current_tenant_id
-
         user = request.user
         group_ids = effective_group_ids(user)
         see_all = user.is_superuser or getattr(user, "is_group_level", False)
+        role_names = user_role_names(user)
+        is_chef = CHEF_AGENCE_ROLE_NAME in role_names
+        is_ca = (
+            CHARGE_AFFAIRE_ROLE_NAME in role_names
+            and not is_chef
+            and not see_all
+        )
+        agency_ids = set(get_user_agency_ids(user)) if is_chef and not see_all else set()
+
         tenant_id = get_current_tenant_id()
         if not tenant_id:
             instances = WorkflowInstance.objects.none()
@@ -270,12 +310,59 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
             instances = (
                 WorkflowInstance.all_tenants.filter(tenant_id=tenant_id)
                 .select_related("definition")
-                .prefetch_related("definition__steps", "tasks", "tasks__step")
+                .prefetch_related(
+                    "definition__steps",
+                    "definition__steps__required_group",
+                    "definition__steps__required_group__tenant_role",
+                    "tasks",
+                    "tasks__step",
+                    "tasks__step__required_group",
+                )
                 .order_by("-created_at")
             )
 
+        def _target_agency_id(target):
+            agency_id = getattr(target, "agency_id", None)
+            if agency_id:
+                return agency_id
+            application = getattr(target, "application", None)
+            if application is not None:
+                return getattr(application, "agency_id", None)
+            guarantee = getattr(target, "guarantee", None)
+            if guarantee is not None:
+                agency_id = getattr(guarantee, "agency_id", None)
+                if agency_id:
+                    return agency_id
+                app = getattr(guarantee, "application", None)
+                if app is not None:
+                    return getattr(app, "agency_id", None)
+            return None
+
+        def _step_role_name(step):
+            if step is None:
+                return ""
+            group = getattr(step, "required_group", None)
+            if group is None:
+                return ""
+            role = getattr(group, "tenant_role", None)
+            if role is not None and getattr(role, "name", None):
+                return str(role.name)
+            return str(getattr(group, "name", "") or "")
+
+        def _visible(target, steps):
+            if see_all:
+                return True
+            if is_chef:
+                aid = _target_agency_id(target)
+                return bool(aid and aid in agency_ids)
+            if is_ca:
+                return getattr(target, "submitted_by_id", None) == user.id
+            step_group_ids = {s.required_group_id for s in steps}
+            return not group_ids.isdisjoint(step_group_ids)
+
         rows = []
         seen_keys = set()
+        step_options = {}
         for inst in instances:
             target = inst.target
             if target is None:
@@ -360,19 +447,28 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
             else:
                 continue
 
+            if status == "DRAFT":
+                continue
+
             seen_key = f"{target_kind}:{row_id}"
             if seen_key in seen_keys:
                 continue
 
             steps = list(inst.definition.steps.all())
-            step_group_ids = {s.required_group_id for s in steps}
-            if not see_all and group_ids.isdisjoint(step_group_ids):
+            if not _visible(target, steps):
                 continue
 
             seen_keys.add(seen_key)
 
             my_task = None
             for t in inst.tasks.all():
+                if see_all:
+                    if t.status == ApprovalTask.Status.PENDING:
+                        my_task = t
+                        break
+                    if my_task is None and t.status != ApprovalTask.Status.SKIPPED:
+                        my_task = t
+                    continue
                 if not t.step or t.step.required_group_id not in group_ids:
                     continue
                 if t.status == ApprovalTask.Status.PENDING:
@@ -387,6 +483,32 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
             current_step = next(
                 (s for s in steps if s.order == inst.current_order), None
             )
+            step_role = _step_role_name(current_step)
+            step_name = current_step.name if current_step else ""
+            if step_role or step_name:
+                key = step_role or step_name
+                step_options[key] = {
+                    "value": key,
+                    "label": step_role or step_name,
+                    "step_name": step_name,
+                    "step_role": step_role,
+                    "order": getattr(current_step, "order", None),
+                }
+
+            is_actionable = bool(
+                my_task and my_task.status == ApprovalTask.Status.PENDING
+            )
+            treated = bool(
+                my_task
+                and my_task.status
+                in (
+                    ApprovalTask.Status.APPROVED,
+                    ApprovalTask.Status.REJECTED,
+                    ApprovalTask.Status.RETURNED,
+                )
+                and not is_actionable
+            )
+
             rows.append(
                 {
                     "id": row_id,
@@ -420,9 +542,9 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
                     "created_at": created_at.isoformat() if created_at else None,
                     "definition_name": inst.definition.name,
                     "instance_status": inst.status,
-                    "current_step_name": (
-                        current_step.name if current_step else ""
-                    ),
+                    "current_step_name": step_name,
+                    "current_step_role": step_role,
+                    "current_step_label": step_role or step_name,
                     "current_order": inst.current_order,
                     "my_task_status": my_task.status if my_task else None,
                     "my_step_name": (
@@ -436,20 +558,26 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
                         if my_task and my_task.due_at
                         else None
                     ),
-                    "is_actionable": bool(
-                        my_task
-                        and my_task.status == ApprovalTask.Status.PENDING
-                    ),
+                    "is_actionable": is_actionable,
+                    "is_treated": treated,
                 }
             )
-
-        from apps.common.list_filters import query_param
-        from apps.common.pagination import DefaultPagination
 
         search = query_param(request, "search").lower()
         status_f = query_param(request, "status")
         kind = query_param(request, "target_kind")
+        queue = (query_param(request, "queue") or "").strip().lower()
         actionable = query_param(request, "actionable")
+        if not queue:
+            if actionable == "1":
+                queue = "actionable"
+            else:
+                queue = "all"
+        step_f = (
+            query_param(request, "step_role")
+            or query_param(request, "step")
+            or query_param(request, "current_step")
+        )
         client_type = query_param(request, "client_type")
         initiator = (
             query_param(request, "gestionnaire")
@@ -463,8 +591,19 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
                 return False
             if status_f and row["status"] != status_f:
                 return False
-            if actionable == "1" and not row["is_actionable"]:
+            if queue == "actionable" and not row["is_actionable"]:
                 return False
+            if queue == "treated" and not row.get("is_treated"):
+                return False
+            if step_f:
+                needle = step_f.casefold()
+                labels = {
+                    str(row.get("current_step_role") or "").casefold(),
+                    str(row.get("current_step_name") or "").casefold(),
+                    str(row.get("current_step_label") or "").casefold(),
+                }
+                if needle not in labels:
+                    return False
             if client_type == "particulier" and row["client_type"] != "INDIVIDUAL":
                 return False
             if client_type == "entreprise" and row["client_type"] != "CORPORATE":
@@ -495,6 +634,8 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
                         "created_by_display",
                         "definition_name",
                         "current_step_name",
+                        "current_step_role",
+                        "current_step_label",
                         "my_step_name",
                     )
                 ).lower()
@@ -503,11 +644,19 @@ class ApprovalTaskViewSet(TenantScopedReadOnlyViewSet):
             return True
 
         actionable_count = sum(1 for row in rows if row["is_actionable"])
+        treated_count = sum(1 for row in rows if row.get("is_treated"))
         filtered = [row for row in rows if _match(row)]
         paginator = DefaultPagination()
         page = paginator.paginate_queryset(filtered, request)
         response = paginator.get_paginated_response(page)
         response.data["actionable_count"] = actionable_count
+        response.data["treated_count"] = treated_count
+        response.data["visible_count"] = len(rows)
+        response.data["step_options"] = sorted(
+            step_options.values(),
+            key=lambda s: (s.get("order") is None, s.get("order") or 0, s["label"]),
+        )
+        response.data["queue"] = queue
         return response
 
     @action(detail=True, methods=["post"])

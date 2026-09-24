@@ -48,7 +48,9 @@ export type CbsPreview = {
   spouse_name?: string;
   id_document_issue_date?: string;
   id_document_expiry_date?: string;
+  id_profession?: string;
   profession?: string;
+  id_nationalite?: string;
   nationality?: string;
   date_creation?: string;
   head_office?: string;
@@ -68,9 +70,97 @@ export type CbsPreview = {
   est_valide: boolean;
   id_point_service: string;
   nom_point_service: string;
-  kyc_alert: boolean;
+  context?: string;
   message?: string;
+  kyc_alert: boolean;
 };
+
+function apiError(err: unknown): string {
+  const data = (err as { response?: { data?: Record<string, unknown> } })
+    ?.response?.data;
+  if (!data) return "Échec de l'appel CBS.";
+  const nested = data.errors as
+    | { detail?: unknown; client_type?: unknown }
+    | undefined;
+  const detail = nested?.detail ?? data.detail ?? nested?.client_type;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map(String).join(" ");
+  for (const v of Object.values(data)) {
+    if (typeof v === "string") return v;
+    if (Array.isArray(v)) return v.map(String).join(" ");
+  }
+  return "Échec de l'appel CBS.";
+}
+
+function isBlankPreview(value: string | number | null | undefined) {
+  if (value === 0) return false;
+  const text = String(value ?? "").trim();
+  if (!text) return true;
+  return ["N/A", "NA", "EMPTY"].includes(text.toUpperCase());
+}
+
+function PreviewFields({
+  rows,
+  missingKeys,
+}: {
+  rows: ReadonlyArray<
+    readonly [string, string, string | number | null | undefined]
+  >;
+  missingKeys: Set<string>;
+}) {
+  return (
+    <div className="cbs-preview-grid">
+      {rows.map(([key, label, value]) => {
+        const missing = missingKeys.has(key);
+        const empty = isBlankPreview(value);
+        return (
+          <div
+            className={`cbs-preview-item${missing ? " is-missing" : ""}`}
+            key={key}
+          >
+            <span>{label}</span>
+            <strong>{empty ? "—" : String(value)}</strong>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function commonCbsRows(preview: CbsPreview) {
+  return [
+    ["code_adherent", "Code adhérent", preview.code_adherent],
+    ["num_manuel", "N° de compte (n° manuel)", preview.num_manuel],
+    ["full_name", "Nom adhérent CBS", preview.full_name],
+    ["num_ordre", "N° d'ordre CBS", preview.num_ordre],
+    ["id_point_service", "Code point de service", preview.id_point_service],
+    ["nom_point_service", "Libellé point de service", preview.nom_point_service],
+    ["date_inscription", "Date d'inscription CBS", preview.date_inscription],
+    ["date_creation", "Date de création CBS", preview.date_creation],
+    ["limit_credit", "Limite de crédit CBS", preview.limit_credit],
+    [
+      "est_valide",
+      "Adhérent valide CBS",
+      preview.est_valide ? "Oui" : "Non",
+    ],
+    ["id_profession", "Id profession CBS", preview.id_profession],
+    ["id_nationalite", "Id nationalité CBS", preview.id_nationalite],
+    ["id_secteur_activite", "Id secteur d'activité CBS", preview.id_secteur_activite],
+    ["id_type_client", "Id type client CBS", preview.id_type_client],
+    ["id_zone", "Id zone CBS", preview.id_zone],
+    ["id_produit_epg", "Id produit épargne CBS", preview.id_produit_epg],
+    ["nbre_signature", "Nombre de signatures CBS", preview.nbre_signature],
+    ["distance", "Distance CBS", preview.distance],
+    ["phone", "Téléphone", preview.phone],
+    ["email", "E-mail", preview.email],
+    ["address", "Adresse", preview.address],
+    ["head_office", "Siège social", preview.head_office],
+    ["city", "Ville", preview.city],
+    ["boite_postale", "Boîte postale", preview.boite_postale],
+    ["context", "Contexte réponse CBS", preview.context],
+    ["message", "Message réponse CBS", preview.message],
+  ] as const;
+}
 
 const PHYSICAL_CRITERIA: { value: Criterion; label: string; placeholder: string }[] =
   [
@@ -98,60 +188,6 @@ const CORPORATE_CRITERIA: { value: Criterion; label: string; placeholder: string
       placeholder: "RCCM…",
     },
   ];
-
-function apiError(err: unknown): string {
-  const data = (err as { response?: { data?: Record<string, unknown> } })
-    ?.response?.data;
-  if (!data) return "Échec de l'appel CBS.";
-  const nested = data.errors as
-    | { detail?: unknown; client_type?: unknown }
-    | undefined;
-  const detail = nested?.detail ?? data.detail ?? nested?.client_type;
-  if (typeof detail === "string") return detail;
-  if (Array.isArray(detail)) return detail.map(String).join(" ");
-  for (const v of Object.values(data)) {
-    if (typeof v === "string") return v;
-    if (Array.isArray(v)) return v.map(String).join(" ");
-  }
-  return "Échec de l'appel CBS.";
-}
-
-function isBlankPreview(value: string | number | null | undefined) {
-  if (value === 0) return false;
-  const text = String(value ?? "").trim();
-  if (!text) return true;
-  return ["N/A", "NA", "EMPTY", "—"].includes(text.toUpperCase());
-}
-
-function PreviewFields({
-  rows,
-  missingKeys,
-}: {
-  rows: ReadonlyArray<
-    readonly [string, string, string | number | null | undefined]
-  >;
-  missingKeys: Set<string>;
-}) {
-  return (
-    <div className="cbs-preview-grid">
-      {rows.map(([key, label, value]) => {
-        const missing = missingKeys.has(key);
-        const empty = isBlankPreview(value);
-        return (
-          <div
-            className={`cbs-preview-item${missing ? " is-missing" : ""}`}
-            key={key}
-          >
-            <span>{label}</span>
-            <strong>
-              {empty ? (missing ? "Manquant" : "—") : String(value)}
-            </strong>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 export function ClientCbsImportForm({
   onSuccess,
@@ -255,7 +291,7 @@ export function ClientCbsImportForm({
 
   const physicalRows = preview
     ? ([
-        ["last_name", "Nom", preview.last_name || preview.full_name],
+        ["last_name", "Nom", preview.last_name],
         ["first_name", "Prénoms", preview.first_name],
         ["civility", "Civilité", preview.civility],
         ["birth_date", "Date de naissance", preview.birth_date],
@@ -275,41 +311,17 @@ export function ClientCbsImportForm({
         ],
         ["profession", "Profession", preview.profession],
         ["nationality", "Nationalité", preview.nationality],
-        ["code_adherent", "Code adhérent", preview.code_adherent],
-        ["num_manuel", "N° manuel", preview.num_manuel],
-        ["phone", "Téléphone", preview.phone],
-        ["email", "E-mail", preview.email],
-        ["city", "Ville", preview.city],
-        ["address", "Adresse", preview.address],
-        ["boite_postale", "Boîte postale", preview.boite_postale],
-        ["date_inscription", "Date d'inscription", preview.date_inscription],
-        ["limit_credit", "Limite de crédit", preview.limit_credit],
-        ["est_valide", "Compte valide", preview.est_valide ? "Oui" : "Non"],
-        [
-          "id_point_service",
-          "Point de service",
-          preview.nom_point_service
-            ? `${preview.nom_point_service}${
-                preview.id_point_service
-                  ? ` (${preview.id_point_service})`
-                  : ""
-              }`
-            : preview.id_point_service,
-        ],
+        ...commonCbsRows(preview),
       ] as const)
     : [];
 
   const corporateRows = preview
     ? ([
-        [
-          "company_name",
-          "Raison sociale",
-          preview.company_name || preview.full_name,
-        ],
+        ["company_name", "Raison sociale", preview.company_name],
         ["sigle", "Sigle", preview.sigle],
         [
           "identification_nationale",
-          "Identification nationale",
+          "Identification nationale (IFU)",
           preview.identification_nationale,
         ],
         [
@@ -317,36 +329,7 @@ export function ClientCbsImportForm({
           "N° carte / RCCM",
           preview.num_carte_operateur,
         ],
-        ["num_ordre", "N° d'ordre", preview.num_ordre],
-        ["date_creation", "Date de création", preview.date_creation],
-        ["head_office", "Siège social", preview.head_office],
-        ["code_adherent", "Code adhérent", preview.code_adherent],
-        ["num_manuel", "N° manuel", preview.num_manuel],
-        ["phone", "Téléphone", preview.phone],
-        ["email", "E-mail", preview.email],
-        ["city", "Ville", preview.city],
-        ["address", "Adresse", preview.address],
-        ["boite_postale", "Boîte postale", preview.boite_postale],
-        ["id_secteur_activite", "Secteur d'activité", preview.id_secteur_activite],
-        ["id_type_client", "Type client CBS", preview.id_type_client],
-        ["id_zone", "Zone", preview.id_zone],
-        ["id_produit_epg", "Produit épargne", preview.id_produit_epg],
-        ["nbre_signature", "Nb. signatures", preview.nbre_signature],
-        ["distance", "Distance (km)", preview.distance],
-        ["date_inscription", "Date d'inscription", preview.date_inscription],
-        ["limit_credit", "Limite de crédit", preview.limit_credit],
-        ["est_valide", "Compte valide", preview.est_valide ? "Oui" : "Non"],
-        [
-          "id_point_service",
-          "Point de service",
-          preview.nom_point_service
-            ? `${preview.nom_point_service}${
-                preview.id_point_service
-                  ? ` (${preview.id_point_service})`
-                  : ""
-              }`
-            : preview.id_point_service,
-        ],
+        ...commonCbsRows(preview),
       ] as const)
     : [];
 

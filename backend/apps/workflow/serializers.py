@@ -26,19 +26,83 @@ class WorkflowDefinitionSerializer(serializers.ModelSerializer):
     steps = ApprovalStepSerializer(many=True, read_only=True)
     is_used = serializers.SerializerMethodField()
     decision_gaps = serializers.SerializerMethodField()
+    product_label = serializers.SerializerMethodField()
+    product_category_label = serializers.SerializerMethodField()
+    specificity_score = serializers.SerializerMethodField()
 
     class Meta:
         model = WorkflowDefinition
         fields = [
-            "id", "code", "name", "target_type", "version",
-            "is_active", "is_used", "decision_gaps", "steps",
+            "id",
+            "code",
+            "name",
+            "target_type",
+            "version",
+            "is_active",
+            "is_used",
+            "decision_gaps",
+            "min_amount",
+            "max_amount",
+            "product",
+            "product_label",
+            "product_category",
+            "product_category_label",
+            "specificity_score",
+            "steps",
         ]
-        read_only_fields = ["id", "is_used", "decision_gaps"]
+        read_only_fields = [
+            "id",
+            "is_used",
+            "decision_gaps",
+            "product_label",
+            "product_category_label",
+            "specificity_score",
+        ]
 
     def get_is_used(self, obj):
         from .services import definition_is_used
 
         return definition_is_used(obj)
+
+    def get_product_label(self, obj):
+        return obj.product.label if obj.product_id else None
+
+    def get_product_category_label(self, obj):
+        return obj.product_category.label if obj.product_category_id else None
+
+    def get_specificity_score(self, obj):
+        return obj.specificity_score()
+
+    def validate(self, attrs):
+        min_amount = attrs.get(
+            "min_amount", getattr(self.instance, "min_amount", None)
+        )
+        max_amount = attrs.get(
+            "max_amount", getattr(self.instance, "max_amount", None)
+        )
+        if (
+            min_amount is not None
+            and max_amount is not None
+            and min_amount > max_amount
+        ):
+            raise serializers.ValidationError(
+                {"max_amount": "Le plafond doit être supérieur ou égal au plancher."}
+            )
+
+        product = attrs.get("product", getattr(self.instance, "product", None))
+        category = attrs.get(
+            "product_category", getattr(self.instance, "product_category", None)
+        )
+        if product is not None and category is not None:
+            if product.category_id != category.id:
+                raise serializers.ValidationError(
+                    {
+                        "product": (
+                            "Le produit n'appartient pas à la famille sélectionnée."
+                        )
+                    }
+                )
+        return attrs
 
     def get_decision_gaps(self, obj):
         """Tranches de montant sans décideur, ou `null` si le circuit est sain.

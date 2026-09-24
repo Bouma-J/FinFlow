@@ -110,8 +110,9 @@ class UserGroupSerializer(serializers.ModelSerializer):
         fields = ["id", "name"]
 
     def get_name(self, obj):
-        tr = getattr(obj, "tenant_role", None)
-        return tr.name if tr else obj.name
+        from apps.accounts.utils import _role_name
+
+        return _role_name(obj)
 
 
 class AgencySummarySerializer(serializers.ModelSerializer):
@@ -150,6 +151,20 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id", "date_joined", "last_login", "is_staff", "must_change_password",
         ]
+
+    def validate_cbs_id(self, value):
+        from apps.catalog.cbs_validation import validate_manager_cbs_id
+
+        tenant_id = None
+        if self.instance is not None:
+            tenant_id = self.instance.tenant_id
+        elif self.initial_data.get("tenant"):
+            tenant_id = self.initial_data.get("tenant")
+        else:
+            from apps.common.tenancy import get_current_tenant_id
+
+            tenant_id = get_current_tenant_id()
+        return validate_manager_cbs_id(value, tenant_id=tenant_id)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -302,6 +317,13 @@ class UserCreateSerializer(serializers.ModelSerializer):
 
     def get_password_delivery_mode(self, obj):
         return getattr(obj, "_password_delivery", "email")
+
+    def validate_cbs_id(self, value):
+        from apps.catalog.cbs_validation import validate_manager_cbs_id
+        from apps.common.tenancy import get_current_tenant_id
+
+        tenant_id = self.initial_data.get("tenant") or get_current_tenant_id()
+        return validate_manager_cbs_id(value, tenant_id=tenant_id)
 
     def validate(self, attrs):
         from .password_services import validate_password_delivery
@@ -509,6 +531,13 @@ class ProvisionFilialeAdminSerializer(serializers.Serializer):
     password_confirm = serializers.CharField(
         write_only=True, required=False, allow_blank=True, min_length=10
     )
+
+    def validate_cbs_id(self, value):
+        from apps.catalog.cbs_validation import validate_manager_cbs_id
+        from apps.common.tenancy import get_current_tenant_id
+
+        tenant_id = self.initial_data.get("tenant") or get_current_tenant_id()
+        return validate_manager_cbs_id(value, tenant_id=tenant_id)
 
     def validate(self, attrs):
         from apps.tenants.models import Agency, Tenant

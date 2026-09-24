@@ -22,6 +22,14 @@ _OPEN_STATUSES = {
     CreditApplication.Status.RETURNED,
 }
 
+# Plus d'ajout / modification d'analyse financière après décaissement.
+ANALYSIS_LOCKED_STATUSES = {
+    CreditApplication.Status.DISBURSED,
+    CreditApplication.Status.CLOSED,
+    CreditApplication.Status.CANCELLED,
+    CreditApplication.Status.REJECTED,
+}
+
 # Statuts autorisant le rattachement / modification de garanties & cautions.
 COLLATERAL_ATTACH_STATUSES = {
     CreditApplication.Status.DRAFT,
@@ -62,6 +70,13 @@ def can_contribute(application, user):
     if is_initiator and application.status in _OPEN_STATUSES:
         return True
     return has_pending_task(application, user)
+
+
+def can_add_financial_analysis(application, user):
+    """Droit d'ajouter une analyse financière (fermé après décaissement)."""
+    if application is not None and application.status in ANALYSIS_LOCKED_STATUSES:
+        return False
+    return can_contribute(application, user)
 
 
 def is_controle_permanent(user):

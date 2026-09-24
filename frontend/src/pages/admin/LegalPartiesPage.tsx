@@ -442,7 +442,11 @@ export function LegalPartiesPage() {
           </thead>
           <tbody>
             {(list.data?.results ?? []).map((p) => (
-              <tr key={p.id}>
+              <tr
+                key={p.id}
+                className={canChange ? "row-clickable" : undefined}
+                onClick={canChange ? () => openEdit(p) : undefined}
+              >
                 <td>
                   <strong>{p.name}</strong>
                   {p.registration_no && (
@@ -462,7 +466,10 @@ export function LegalPartiesPage() {
                   />
                 </td>
                 <td>
-                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <div
+                    style={{ display: "flex", gap: 6, flexWrap: "wrap" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {canChange && (
                       <button
                         type="button"

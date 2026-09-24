@@ -10,6 +10,7 @@ from apps.catalog.models import CreditProduct, ProductCategory
 from apps.clients.models import Client, IdDocumentType, LegalForm
 from apps.collections.models import CollectionAction, CollectionActionType, CollectionCase
 from apps.collections.services import refresh_loan_overdue
+from apps.common.demo_bulk import seed_collection_list_widgets
 from apps.credits.models import (
     ActivitySector,
     CreditApplication,
@@ -518,24 +519,32 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
             "recommendation": FinancialAnalysis.Recommendation.FAVORABLE,
             "salary": "380000",
             "other_act": "80000",
-            "comment": "Profil salarié + activité annexe.",
+            "profile": "MIXTE",
+            "side_turnover": "180000",
+            "side_expenses": "60000",
+            "comment": "Profil mixte salarié + activité génératrice de revenus.",
         },
         "DEMO-CR-CONTRACT": {
             "kind": "individual",
             "recommendation": FinancialAnalysis.Recommendation.FAVORABLE,
             "salary": "310000",
+            "profile": "SALARIE",
             "comment": "Analyse validée — passage contrat.",
         },
         "DEMO-CR-PENDING": {
             "kind": "individual",
             "recommendation": FinancialAnalysis.Recommendation.FAVORABLE,
             "salary": "290000",
-            "comment": "Prêt pour décaissement.",
+            "profile": "INDEPENDANT",
+            "side_turnover": "420000",
+            "side_expenses": "160000",
+            "comment": "Indépendant — prêt pour décaissement.",
         },
         "DEMO-CR-DISB-1": {
             "kind": "individual",
             "recommendation": FinancialAnalysis.Recommendation.FAVORABLE,
             "salary": "350000",
+            "profile": "SALARIE",
             "comment": "Analyse historique du prêt décaissé.",
         },
         "DEMO-CR-DISB-2": {
@@ -543,6 +552,7 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
             "recommendation": FinancialAnalysis.Recommendation.FAVORABLE,
             "salary": "600000",
             "spouse": "250000",
+            "profile": "SALARIE",
             "comment": "Investissement immobilier — couverture hypothécaire.",
         },
         "DEMO-CR-DISB-3": {
@@ -619,9 +629,11 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
             )
         else:
             salary = Decimal(spec.get("salary", "0"))
+            profile = spec.get("profile", "SALARIE")
             base.update(
                 {
                     "reference_period": FinancialAnalysis.ReferencePeriod.MONTHLY,
+                    "individual_profile": profile,
                     "salary_income": salary,
                     "net_salary": salary,
                     "spouse_income": Decimal(spec.get("spouse", "0")),
@@ -642,6 +654,19 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
                     "projected_monthly_outflows": Decimal("350000"),
                 }
             )
+            if profile in ("INDEPENDANT", "MIXTE") or spec.get("side_turnover"):
+                base["has_side_activity"] = True
+                base["activity_turnover"] = Decimal(
+                    spec.get("side_turnover", "200000")
+                )
+                base["activity_expenses"] = Decimal(
+                    spec.get("side_expenses", "70000")
+                )
+                base["activity_comment"] = "Activité génératrice de revenus (démo)"
+            if profile == "INDEPENDANT":
+                base["salary_income"] = Decimal("0")
+                base["net_salary"] = Decimal("0")
+                base["projected_monthly_inflows"] = base["activity_turnover"]
         # Deuxième analyse non-référence sur quelques dossiers
         FinancialAnalysis.objects.create(**base)
         if app_ref in ("DEMO-CR-APPROVAL", "DEMO-CR-DISB-3"):
@@ -859,8 +884,9 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
                 else:
                     case.stage = CollectionCase.Stage.AMICABLE
                 case.assigned_to = user
-                case.next_action_date = date.today() + timedelta(days=3)
+                case.next_action_date = date.today() + timedelta(days=-1 if days_overdue >= 30 else 2)
                 case.next_action_type = CollectionActionType.CALL
+                case.next_action_note = "Relance démo — promesse à confirmer"
                 case.save()
                 CollectionAction.objects.get_or_create(
                     tenant=tenant,
@@ -869,6 +895,8 @@ def seed_rich_operational_data(*, tenant, agency, product, user, stdout=None):
                     action_date=date.today() - timedelta(days=2),
                     defaults={"comment": "Relance téléphonique démo"},
                 )
+
+    seed_collection_list_widgets(tenant=tenant, user=user, stdout=stdout, limit=8)
 
     log(
         "Données riches : "

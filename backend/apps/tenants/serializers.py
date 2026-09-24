@@ -162,3 +162,11 @@ class AgencySerializer(serializers.ModelSerializer):
         read_only_fields = [
             "id", "tenant", "manager_display_name", "created_at", "updated_at",
         ]
+
+    def validate_cbs_point_of_service_id(self, value):
+        from apps.catalog.cbs_validation import validate_service_point_id
+
+        tenant_id = None
+        if self.instance is not None:
+            tenant_id = self.instance.tenant_id
+        return validate_service_point_id(value, tenant_id=tenant_id)

@@ -30,6 +30,7 @@ import {
 } from "@/components/ListFilters";
 import {
   Badge,
+  DEFAULT_PAGE_SIZE,
   PageHeader,
   PaginationBar,
   QueryStatus,
@@ -37,6 +38,8 @@ import {
   formatMoney,
 } from "@/components/ui";
 import { apiErrorMessage } from "@/utils/apiError";
+
+const LIST_PAGE_SIZE = Math.max(15, DEFAULT_PAGE_SIZE);
 
 const PAR_OPTIONS: { value: "" | ParClass; label: string }[] = [
   { value: "", label: "Toutes classes PAR" },
@@ -120,7 +123,11 @@ export function CollectionsPage() {
       (location.state as { followupDue?: boolean } | null)?.followupDue,
     ),
   );
-  const [brokenPromises, setBrokenPromises] = useState(false);
+  const [brokenPromises, setBrokenPromises] = useState(() =>
+    Boolean(
+      (location.state as { brokenPromises?: boolean } | null)?.brokenPromises,
+    ),
+  );
   const [search, setSearch] = useState("");
   const [dashScope, setDashScope] = useState<"mine" | "team">(
     canSeeTeamDash ? "team" : "mine",
@@ -135,10 +142,18 @@ export function CollectionsPage() {
   }
 
   useEffect(() => {
-    const fromHub = (location.state as { followupDue?: boolean } | null)
-      ?.followupDue;
-    if (fromHub) {
+    const st = location.state as {
+      followupDue?: boolean;
+      brokenPromises?: boolean;
+    } | null;
+    if (st?.followupDue) {
       setFollowupDue(true);
+      setBrokenPromises(false);
+      setPage(1);
+    }
+    if (st?.brokenPromises) {
+      setBrokenPromises(true);
+      setFollowupDue(false);
       setPage(1);
     }
   }, [location.state]);
@@ -183,6 +198,7 @@ export function CollectionsPage() {
       "collection-cases",
       activeTenant,
       page,
+      LIST_PAGE_SIZE,
       parClass,
       trancheId,
       stage,
@@ -205,6 +221,7 @@ export function CollectionsPage() {
         await api.get<Paginated<CollectionCase>>("/collection-cases/", {
           params: {
             page,
+            page_size: LIST_PAGE_SIZE,
             ...(parClass ? { par_class: parClass } : {}),
             ...(trancheId ? { tranche: trancheId } : {}),
             ...(stage ? { stage } : {}),
@@ -326,431 +343,478 @@ export function CollectionsPage() {
   }
 
   const dash = dashboard.data;
+  const showHearingsPanel = canViewLitigation;
+  const showFollowupsPanel = Boolean(dash) && !clientFilter;
+  const showCollectionsAside = showHearingsPanel || showFollowupsPanel;
 
   return (
-    <div className="page-shell">
-      <PageHeader
-        icon={CircleDollarSign}
-        title="Recouvrement"
-        subtitle="Impayés lus depuis le CBS — suivi terrain, pas de saisie d'encaissement"
-        actions={
-          <div className="row-actions" style={{ gap: 8 }}>
-            {canRefreshCbs && (
+    <div className="page-shell page-shell--list collections-page">
+      <div className="list-page-chrome">
+        <PageHeader
+          icon={CircleDollarSign}
+          title="Recouvrement"
+          subtitle="Impayés lus depuis le CBS — suivi terrain, pas de saisie d'encaissement"
+          actions={
+            <div className="row-actions" style={{ gap: 8 }}>
+              {canRefreshCbs && (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={refreshOverdue.isPending}
+                  onClick={() => refreshOverdue.mutate()}
+                >
+                  {refreshOverdue.isPending
+                    ? "Lancement…"
+                    : "Recalculer depuis le CBS"}
+                </button>
+              )}
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"
-                disabled={refreshOverdue.isPending}
-                onClick={() => refreshOverdue.mutate()}
+                onClick={exportCsv}
               >
-                {refreshOverdue.isPending
-                  ? "Lancement…"
-                  : "Recalculer depuis le CBS"}
+                <Download size={14} /> Export CSV
+              </button>
+            </div>
+          }
+        />
+        {needsTenant && <TenantScopeNotice />}
+
+        {refreshNotice && (
+          <p
+            className={
+              refreshNotice.includes("Échec") ||
+              refreshNotice.includes("Impossible") ||
+              refreshNotice.includes("Délai")
+                ? "form-error"
+                : "muted"
+            }
+            style={{ marginBottom: 10 }}
+          >
+            {refreshNotice}
+          </p>
+        )}
+
+        {canSeeTeamDash && (
+          <div className="row-actions" style={{ marginBottom: 10, gap: 8 }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${dashScope === "mine" ? "btn-primary" : "btn-ghost"}`}
+              onClick={() => setDashScope("mine")}
+            >
+              Mes indicateurs
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${dashScope === "team" ? "btn-primary" : "btn-ghost"}`}
+              onClick={() => setDashScope("team")}
+            >
+              Équipe / filiale
+            </button>
+          </div>
+        )}
+
+        {dash && (
+          <div className="mini-kpis" style={{ marginBottom: 16 }}>
+            <button
+              type="button"
+              className="mini-kpi"
+              onClick={() => {
+                setPage(1);
+                setFollowupDue(false);
+                setBrokenPromises(false);
+                setUnassigned(false);
+                setMine(dashScope === "mine");
+              }}
+              title="Filtrer le portefeuille"
+            >
+              <span className="mk-value">{dash.assigned_open}</span>
+              <span className="mk-label">
+                {dashScope === "team" ? "Dossiers ouverts" : "Mon portefeuille"}
+              </span>
+            </button>
+            {dashScope === "team" && (
+              <button
+                type="button"
+                className="mini-kpi"
+                onClick={() => applyKpiFilter("unassigned")}
+              >
+                <span className="mk-value">{dash.unassigned_open ?? 0}</span>
+                <span className="mk-label">Non affectés</span>
               </button>
             )}
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={exportCsv}
+              className="mini-kpi"
+              onClick={() => applyKpiFilter("followups")}
             >
-              <Download size={14} /> Export CSV
+              <span className="mk-value">{dash.followups_due}</span>
+              <span className="mk-label">Actions dues</span>
             </button>
-          </div>
-        }
-      />
-      {needsTenant && <TenantScopeNotice />}
-
-      {refreshNotice && (
-        <p
-          className={
-            refreshNotice.includes("Échec") ||
-            refreshNotice.includes("Impossible") ||
-            refreshNotice.includes("Délai")
-              ? "form-error"
-              : "muted"
-          }
-          style={{ marginBottom: 10 }}
-        >
-          {refreshNotice}
-        </p>
-      )}
-
-      {canSeeTeamDash && (
-        <div className="row-actions" style={{ marginBottom: 10, gap: 8 }}>
-          <button
-            type="button"
-            className={`btn btn-sm ${dashScope === "mine" ? "btn-primary" : "btn-ghost"}`}
-            onClick={() => setDashScope("mine")}
-          >
-            Mes indicateurs
-          </button>
-          <button
-            type="button"
-            className={`btn btn-sm ${dashScope === "team" ? "btn-primary" : "btn-ghost"}`}
-            onClick={() => setDashScope("team")}
-          >
-            Équipe / filiale
-          </button>
-        </div>
-      )}
-
-      {dash && (
-        <div className="mini-kpis" style={{ marginBottom: 16 }}>
-          <button
-            type="button"
-            className="mini-kpi"
-            onClick={() => {
-              setPage(1);
-              setFollowupDue(false);
-              setBrokenPromises(false);
-              setUnassigned(false);
-              setMine(dashScope === "mine");
-            }}
-            title="Filtrer le portefeuille"
-          >
-            <span className="mk-value">{dash.assigned_open}</span>
-            <span className="mk-label">
-              {dashScope === "team" ? "Dossiers ouverts" : "Mon portefeuille"}
-            </span>
-          </button>
-          {dashScope === "team" && (
+            <div className="mini-kpi">
+              <span className="mk-value">{dash.pending_promises}</span>
+              <span className="mk-label">Promesses en cours</span>
+            </div>
             <button
               type="button"
               className="mini-kpi"
-              onClick={() => applyKpiFilter("unassigned")}
+              onClick={() => applyKpiFilter("broken")}
             >
-              <span className="mk-value">{dash.unassigned_open ?? 0}</span>
-              <span className="mk-label">Non affectés</span>
+              <span className="mk-value">{dash.broken_promises_30d}</span>
+              <span className="mk-label">Promesses rompues (30 j)</span>
             </button>
-          )}
-          <button
-            type="button"
-            className="mini-kpi"
-            onClick={() => applyKpiFilter("followups")}
-          >
-            <span className="mk-value">{dash.followups_due}</span>
-            <span className="mk-label">Actions dues</span>
-          </button>
-          <div className="mini-kpi">
-            <span className="mk-value">{dash.pending_promises}</span>
-            <span className="mk-label">Promesses en cours</span>
+            <div className="mini-kpi">
+              <span className="mk-value">{dash.settled_this_month ?? 0}</span>
+              <span className="mk-label">Soldés CBS ce mois</span>
+            </div>
           </div>
-          <button
-            type="button"
-            className="mini-kpi"
-            onClick={() => applyKpiFilter("broken")}
-          >
-            <span className="mk-value">{dash.broken_promises_30d}</span>
-            <span className="mk-label">Promesses rompues (30 j)</span>
-          </button>
-          <div className="mini-kpi">
-            <span className="mk-value">{dash.settled_this_month ?? 0}</span>
-            <span className="mk-label">Soldés CBS ce mois</span>
-          </div>
-        </div>
-      )}
+        )}
 
-      {canViewLitigation && !!hearings.data?.length && (
-        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
-          <strong style={{ display: "block", marginBottom: 8 }}>
-            Agenda audiences (30 j)
-          </strong>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Client</th>
-                <th>Juridiction</th>
-                <th>Cabinet</th>
-              </tr>
-            </thead>
-            <tbody>
-              {hearings.data.map((h) => (
-                <tr
-                  key={h.id}
-                  className="row-clickable"
-                  onClick={() => {
-                    if (!canViewLitigation) return;
-                    navigate(`/recouvrement/${h.case_id}/contentieux/${h.id}`);
-                  }}
-                >
-                  <td>
-                    {h.hearing_date}
-                    {h.hearing_time
-                      ? ` ${String(h.hearing_time).slice(0, 5)}`
-                      : ""}
-                  </td>
-                  <td>{h.client_name}</td>
-                  <td className="small">{h.court_name || "—"}</td>
-                  <td className="small">{h.law_firm_name || "—"}</td>
-                </tr>
+        <ListFilters
+          search={
+            <SearchInput
+              value={search}
+              onChange={(value) => {
+                setPage(1);
+                setSearch(value);
+              }}
+              placeholder="Référence, client, CBS…"
+            />
+          }
+          activeCount={
+            countActive(
+              search,
+              parClass,
+              trancheId,
+              stage,
+              agency,
+              product,
+              gestionnaire,
+              assignedTo,
+              ownerKind,
+              cbsError,
+              unassigned,
+              followupDue,
+              brokenPromises,
+              clientFilter,
+            ) +
+            (openOnly ? 0 : 1) +
+            (mine ? 1 : 0)
+          }
+          onReset={() => {
+            setSearch("");
+            setParClass("");
+            setTrancheId("");
+            setStage("");
+            setAgency("");
+            setProduct("");
+            setGestionnaire("");
+            setAssignedTo("");
+            setOwnerKind("");
+            setCbsError(false);
+            setOpenOnly(true);
+            setMine(false);
+            setUnassigned(false);
+            setFollowupDue(false);
+            setBrokenPromises(false);
+            setPage(1);
+            if (clientFilter) clearClientFilter();
+          }}
+          extra={
+            <>
+              <FilterToggle
+                label="Ouverts seulement"
+                checked={openOnly}
+                onChange={setFilter(setOpenOnly)}
+              />
+              <FilterToggle
+                label="Mon portefeuille"
+                checked={mine}
+                onChange={(checked) => {
+                  setPage(1);
+                  setMine(checked);
+                  if (checked) {
+                    setUnassigned(false);
+                    setAssignedTo("");
+                  }
+                }}
+              />
+              <FilterToggle
+                label="Non affectés"
+                checked={unassigned}
+                onChange={(checked) => {
+                  setPage(1);
+                  setUnassigned(checked);
+                  if (checked) {
+                    setMine(false);
+                    setAssignedTo("");
+                  }
+                }}
+              />
+              <FilterToggle
+                label="Actions dues"
+                checked={followupDue}
+                onChange={setFilter(setFollowupDue)}
+              />
+              <FilterToggle
+                label="Promesses rompues"
+                checked={brokenPromises}
+                onChange={setFilter(setBrokenPromises)}
+              />
+              <FilterToggle
+                label="Erreur synchro CBS"
+                checked={cbsError}
+                onChange={setFilter(setCbsError)}
+              />
+            </>
+          }
+        >
+          <FilterField label="Classe PAR" active={!!parClass}>
+            <FilterSelect value={parClass} onChange={setFilter(setParClass)}>
+              {PAR_OPTIONS.map((o) => (
+                <option key={o.value || "all"} value={o.value}>
+                  {o.label}
+                </option>
               ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <ListFilters
-        search={
-          <SearchInput
-            value={search}
+            </FilterSelect>
+          </FilterField>
+          <FilterField label="Tranche" active={!!trancheId}>
+            <FilterSelect value={trancheId} onChange={setFilter(setTrancheId)}>
+              <option value="">Toutes les tranches</option>
+              {(tranches.data?.results ?? []).map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name} ({t.days_label})
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <FilterField label="Stade" active={!!stage}>
+            <FilterSelect value={stage} onChange={setFilter(setStage)}>
+              {STAGE_OPTIONS.map((o) => (
+                <option key={o.value || "all"} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <FilterField label="Responsable" active={!!ownerKind}>
+            <FilterSelect value={ownerKind} onChange={setFilter(setOwnerKind)}>
+              {OWNER_OPTIONS.map((o) => (
+                <option key={o.value || "all"} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+          <ProductFilter value={product} onChange={setFilter(setProduct)} />
+          <OfficerFilter
+            value={gestionnaire}
+            onChange={setFilter(setGestionnaire)}
+          />
+          <OfficerFilter
+            value={assignedTo}
             onChange={(value) => {
               setPage(1);
-              setSearch(value);
+              setAssignedTo(value);
+              if (value) {
+                setMine(false);
+                setUnassigned(false);
+              }
             }}
-            placeholder="Référence, client, CBS…"
+            label="Agent"
+            emptyLabel="Tous les agents"
           />
-        }
-        activeCount={
-          countActive(
-            search,
-            parClass,
-            trancheId,
-            stage,
-            agency,
-            product,
-            gestionnaire,
-            assignedTo,
-            ownerKind,
-            cbsError,
-            unassigned,
-            followupDue,
-            brokenPromises,
-            clientFilter,
-          ) +
-          (openOnly ? 0 : 1) +
-          (mine ? 1 : 0)
-        }
-        onReset={() => {
-          setSearch("");
-          setParClass("");
-          setTrancheId("");
-          setStage("");
-          setAgency("");
-          setProduct("");
-          setGestionnaire("");
-          setAssignedTo("");
-          setOwnerKind("");
-          setCbsError(false);
-          setOpenOnly(true);
-          setMine(false);
-          setUnassigned(false);
-          setFollowupDue(false);
-          setBrokenPromises(false);
-          setPage(1);
-          if (clientFilter) clearClientFilter();
-        }}
-        extra={
-          <>
-            <FilterToggle
-              label="Ouverts seulement"
-              checked={openOnly}
-              onChange={setFilter(setOpenOnly)}
-            />
-            <FilterToggle
-              label="Mon portefeuille"
-              checked={mine}
-              onChange={(checked) => {
-                setPage(1);
-                setMine(checked);
-                if (checked) {
-                  setUnassigned(false);
-                  setAssignedTo("");
-                }
-              }}
-            />
-            <FilterToggle
-              label="Non affectés"
-              checked={unassigned}
-              onChange={(checked) => {
-                setPage(1);
-                setUnassigned(checked);
-                if (checked) {
-                  setMine(false);
-                  setAssignedTo("");
-                }
-              }}
-            />
-            <FilterToggle
-              label="Actions dues"
-              checked={followupDue}
-              onChange={setFilter(setFollowupDue)}
-            />
-            <FilterToggle
-              label="Promesses rompues"
-              checked={brokenPromises}
-              onChange={setFilter(setBrokenPromises)}
-            />
-            <FilterToggle
-              label="Erreur synchro CBS"
-              checked={cbsError}
-              onChange={setFilter(setCbsError)}
-            />
-          </>
-        }
-      >
-        <FilterField label="Classe PAR" active={!!parClass}>
-          <FilterSelect value={parClass} onChange={setFilter(setParClass)}>
-            {PAR_OPTIONS.map((o) => (
-              <option key={o.value || "all"} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <FilterField label="Tranche" active={!!trancheId}>
-          <FilterSelect value={trancheId} onChange={setFilter(setTrancheId)}>
-            <option value="">Toutes les tranches</option>
-            {(tranches.data?.results ?? []).map((t) => (
-              <option key={t.id} value={t.id}>
-                {t.name} ({t.days_label})
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <FilterField label="Stade" active={!!stage}>
-          <FilterSelect value={stage} onChange={setFilter(setStage)}>
-            {STAGE_OPTIONS.map((o) => (
-              <option key={o.value || "all"} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <FilterField label="Responsable" active={!!ownerKind}>
-          <FilterSelect value={ownerKind} onChange={setFilter(setOwnerKind)}>
-            {OWNER_OPTIONS.map((o) => (
-              <option key={o.value || "all"} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
-        <ProductFilter value={product} onChange={setFilter(setProduct)} />
-        <OfficerFilter
-          value={gestionnaire}
-          onChange={setFilter(setGestionnaire)}
-        />
-        <OfficerFilter
-          value={assignedTo}
-          onChange={(value) => {
+        </ListFilters>
+        <ClientFilterBanner
+          clientId={clientFilter}
+          onClear={() => {
+            clearClientFilter();
             setPage(1);
-            setAssignedTo(value);
-            if (value) {
-              setMine(false);
-              setUnassigned(false);
-            }
           }}
-          label="Agent"
-          emptyLabel="Tous les agents"
         />
-      </ListFilters>
-      <ClientFilterBanner
-        clientId={clientFilter}
-        onClear={() => {
-          clearClientFilter();
-          setPage(1);
-        }}
-      />
+      </div>
 
-      {dash && !clientFilter && dash.due_followups.length > 0 && (
-        <div className="card" style={{ marginBottom: 16, padding: 14 }}>
-          <strong style={{ display: "block", marginBottom: 8 }}>
-            Prochaines actions
-          </strong>
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Date</th>
-                <th>Dossier</th>
-                <th>Client</th>
-                <th>Type</th>
-                <th className="num">Impayé</th>
-              </tr>
-            </thead>
-            <tbody>
-              {dash.due_followups.map((f) => (
-                <tr
-                  key={f.id}
-                  className="row-clickable"
-                  onClick={() => navigate(`/recouvrement/${f.id}`)}
-                >
-                  <td>{f.next_action_date || "—"}</td>
-                  <td>{f.application_reference || f.id.slice(0, 8)}</td>
-                  <td>{f.client_name}</td>
-                  <td className="small">
-                    {f.next_action_type || "—"}
-                    {f.next_action_note ? ` · ${f.next_action_note}` : ""}
-                  </td>
-                  <td className="num">{formatMoney(f.overdue_amount)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      <QueryStatus
-        isLoading={isLoading}
-        isError={isError}
-        isEmpty={!data?.results.length}
-        emptyMessage="Aucun dossier de recouvrement."
-        onRetry={() => refetch()}
+      <div
+        className={`collections-workspace${showCollectionsAside ? " has-aside" : ""}`}
       >
-        <>
-          <table className="table card">
-            <thead>
-              <tr>
-                <th>Dossier</th>
-                <th>Client</th>
-                <th>Produit</th>
-                <th>PAR</th>
-                <th>Tranche</th>
-                <th className="num">Jours</th>
-                <th className="num">Impayé</th>
-                <th>Prochaine action</th>
-                <th>Agent</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.results ?? []).map((c) => (
-                <tr
-                  key={c.id}
-                  className="row-clickable"
-                  onClick={() => navigate(`/recouvrement/${c.id}`)}
-                >
-                  <td>{c.application_reference || c.loan.slice(0, 8)}</td>
-                  <td>{c.client_name}</td>
-                  <td className="small">{c.product_name || "—"}</td>
-                  <td>
-                    <Badge value={c.par_class_display} />
-                  </td>
-                  <td>
-                    <Badge value={c.tranche_name || c.stage_display} />
-                  </td>
-                  <td className="num">{c.days_overdue}</td>
-                  <td className="num">{formatMoney(c.overdue_amount)}</td>
-                  <td className="small">
-                    {c.next_action_date
-                      ? `${c.next_action_date}${
-                          c.next_action_type_display
-                            ? ` · ${c.next_action_type_display}`
-                            : ""
-                        }`
-                      : "—"}
-                  </td>
-                  <td className="small">{c.assigned_to_name || "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <PaginationBar
-            page={page}
-            count={data?.count ?? 0}
-            onPageChange={setPage}
-          />
-        </>
-      </QueryStatus>
+        <div className="list-table-region">
+          <QueryStatus
+            isLoading={isLoading}
+            isError={isError}
+            isEmpty={!data?.results.length}
+            emptyMessage="Aucun crédit en impayé."
+            onRetry={() => refetch()}
+          >
+            <>
+              <div className="table-scroll table-scroll--fill">
+                <table className="table card">
+                  <thead>
+                    <tr>
+                      <th>Dossier</th>
+                      <th>Client</th>
+                      <th>Produit</th>
+                      <th>PAR</th>
+                      <th>Tranche</th>
+                      <th className="num">Jours</th>
+                      <th className="num">Impayé</th>
+                      <th>Prochaine action</th>
+                      <th>Agent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(data?.results ?? []).map((c) => (
+                      <tr
+                        key={c.id}
+                        className="row-clickable"
+                        onClick={() => navigate(`/recouvrement/${c.id}`)}
+                      >
+                        <td>
+                          {c.application_reference || c.loan.slice(0, 8)}
+                        </td>
+                        <td>{c.client_name}</td>
+                        <td className="small">{c.product_name || "—"}</td>
+                        <td>
+                          <Badge value={c.par_class_display} />
+                        </td>
+                        <td>
+                          <Badge value={c.tranche_name || c.stage_display} />
+                        </td>
+                        <td className="num">{c.days_overdue}</td>
+                        <td className="num">
+                          {formatMoney(c.overdue_amount)}
+                        </td>
+                        <td className="small">
+                          {c.next_action_date
+                            ? `${c.next_action_date}${
+                                c.next_action_type_display
+                                  ? ` · ${c.next_action_type_display}`
+                                  : ""
+                              }`
+                            : "—"}
+                        </td>
+                        <td className="small">
+                          {c.assigned_to_name || "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <PaginationBar
+                page={page}
+                count={data?.count ?? 0}
+                pageSize={LIST_PAGE_SIZE}
+                onPageChange={setPage}
+              />
+            </>
+          </QueryStatus>
+        </div>
+
+        {showCollectionsAside && (
+          <aside className="collections-aside" aria-label="Suivi terrain">
+            {showHearingsPanel && (
+              <div className="collections-aside-card">
+                <div className="collections-aside-head">
+                  <strong>Agenda audiences</strong>
+                  <span className="muted small">30 j</span>
+                </div>
+                {hearings.data && hearings.data.length > 0 ? (
+                  <div className="collections-aside-scroll">
+                    <table className="table table-compact">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Client</th>
+                          <th>Juridiction</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hearings.data.map((h) => (
+                          <tr
+                            key={h.id}
+                            className="row-clickable"
+                            onClick={() =>
+                              navigate(
+                                `/recouvrement/${h.case_id}/contentieux/${h.id}`,
+                              )
+                            }
+                          >
+                            <td className="small">
+                              {h.hearing_date}
+                              {h.hearing_time
+                                ? ` ${String(h.hearing_time).slice(0, 5)}`
+                                : ""}
+                            </td>
+                            <td className="small">{h.client_name}</td>
+                            <td className="small muted">
+                              {h.court_name || h.law_firm_name || "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="muted small collections-aside-empty">
+                    Aucune audience planifiée.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {showFollowupsPanel && (
+              <div className="collections-aside-card">
+                <div className="collections-aside-head">
+                  <strong>Prochaines actions</strong>
+                </div>
+                {dash && dash.due_followups.length > 0 ? (
+                  <div className="collections-aside-scroll">
+                    <table className="table table-compact">
+                      <thead>
+                        <tr>
+                          <th>Date</th>
+                          <th>Client</th>
+                          <th className="num">Impayé</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dash.due_followups.map((f) => (
+                          <tr
+                            key={f.id}
+                            className="row-clickable"
+                            onClick={() => navigate(`/recouvrement/${f.id}`)}
+                          >
+                            <td className="small">
+                              {f.next_action_date || "—"}
+                              {f.next_action_type
+                                ? ` · ${f.next_action_type}`
+                                : ""}
+                            </td>
+                            <td className="small">
+                              <div>{f.client_name}</div>
+                              <div className="muted">
+                                {f.application_reference || f.id.slice(0, 8)}
+                              </div>
+                            </td>
+                            <td className="num small">
+                              {formatMoney(f.overdue_amount)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <p className="muted small collections-aside-empty">
+                    Aucune action planifiée.
+                  </p>
+                )}
+              </div>
+            )}
+          </aside>
+        )}
+      </div>
     </div>
   );
 }

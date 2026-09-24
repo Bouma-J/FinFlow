@@ -3,7 +3,7 @@ import { KeyRound, Plus, Shield, UsersRound, X } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
-import type { AdminUser, Agency, DataScope, Paginated, Role, Tenant } from "@/api/types";
+import type { AdminUser, Agency, CbsCatalogItem, DataScope, Paginated, Role, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import { Card, PageHeader, PaginationBar, QueryStatus, TenantScopeNotice } from "@/components/ui";
 import { apiErrorMessage } from "@/utils/apiError";
@@ -80,6 +80,17 @@ export function AdminUsersPage() {
     queryFn: async () =>
       (await api.get<Paginated<Agency>>("/agencies/", { params: { page_size: 200 } }))
         .data,
+    enabled: !needsTenant,
+  });
+
+  const cbsManagers = useQuery({
+    queryKey: ["cbs-managers", activeTenant, user?.tenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CbsCatalogItem>>("/cbs-managers/", {
+          params: { page_size: 200, is_active: true },
+        })
+      ).data,
     enabled: !needsTenant,
   });
 
@@ -494,12 +505,23 @@ export function AdminUsersPage() {
               />
             </label>
             <label className="field">
-              <span>ID CBS (idGestionnaire)</span>
-              <input
+              <span>Gestionnaire CBS</span>
+              <select
                 value={form.cbs_id}
                 onChange={(e) => setForm({ ...form, cbs_id: e.target.value })}
-                placeholder="Optionnel — mapping Perfect"
-              />
+              >
+                <option value="">— Aucun —</option>
+                {(cbsManagers.data?.results ?? []).map((m) => (
+                  <option key={m.id} value={m.cbs_code}>
+                    {m.code} — {m.label} ({m.cbs_code})
+                  </option>
+                ))}
+              </select>
+              {!cbsManagers.data?.results?.length && (
+                <span className="field-hint">
+                  Importez les référentiels CBS pour peupler la liste.
+                </span>
+              )}
             </label>
             {!form.is_group_level && !form.as_filiale_admin && (
               <>
@@ -694,14 +716,20 @@ export function AdminUsersPage() {
               />
             </label>
             <label className="field">
-              <span>ID CBS (idGestionnaire)</span>
-              <input
+              <span>Gestionnaire CBS</span>
+              <select
                 value={editing.cbs_id ?? ""}
                 onChange={(e) =>
                   setEditing({ ...editing, cbs_id: e.target.value })
                 }
-                placeholder="Optionnel"
-              />
+              >
+                <option value="">— Aucun —</option>
+                {(cbsManagers.data?.results ?? []).map((m) => (
+                  <option key={m.id} value={m.cbs_code}>
+                    {m.code} — {m.label} ({m.cbs_code})
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="field">
               <span>Agence principale</span>
@@ -863,7 +891,11 @@ export function AdminUsersPage() {
           </thead>
           <tbody>
             {(users.data?.results ?? []).map((u) => (
-              <tr key={u.id}>
+              <tr
+                key={u.id}
+                className="row-clickable"
+                onClick={() => setEditing(u)}
+              >
                 <td>{u.username}</td>
                 <td className="small">{u.email || <span className="muted">—</span>}</td>
                 <td>
@@ -897,19 +929,20 @@ export function AdminUsersPage() {
                 <td>
                   <button
                     className={`badge badge-${u.is_active ? "success" : "muted"} badge-btn`}
-                    onClick={() =>
+                    onClick={(e) => {
+                      e.stopPropagation();
                       patchMutation.mutate({
                         id: u.id,
                         data: { is_active: !u.is_active },
-                      })
-                    }
+                      });
+                    }}
                     title="Activer / désactiver"
                   >
                     {u.is_active ? "Actif" : "Inactif"}
                   </button>
                 </td>
                 <td>
-                  <div className="row-actions">
+                  <div className="row-actions" onClick={(e) => e.stopPropagation()}>
                     <button
                       className="btn btn-ghost btn-sm"
                       onClick={() => setEditing(u)}

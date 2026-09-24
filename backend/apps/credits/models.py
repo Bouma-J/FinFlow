@@ -429,6 +429,19 @@ class CreditApplication(TenantScopedModel, AuthoredModel):
         blank=True,
         default="",
     )
+    # Références CBS après décaissement réussi (crd/simple)
+    cbs_demande_number = models.CharField(
+        "n° demande CBS (numDemande)", max_length=100, blank=True, default=""
+    )
+    cbs_demande_ref = models.CharField(
+        "réf. demande CBS (refDemande)", max_length=100, blank=True, default=""
+    )
+    cbs_contract_number = models.CharField(
+        "n° contrat CBS (numContrat)", max_length=100, blank=True, default=""
+    )
+    cbs_operation_date = models.DateField(
+        "date opération CBS (dateOperation)", null=True, blank=True
+    )
 
     workflow_instances = GenericRelation(
         "workflow.WorkflowInstance",
@@ -854,6 +867,11 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
         CONDITIONAL = "CONDITIONAL", "Favorable sous conditions"
         UNFAVORABLE = "UNFAVORABLE", "Défavorable"
 
+    class IndividualProfile(models.TextChoices):
+        SALARIE = "SALARIE", "Salarié"
+        INDEPENDANT = "INDEPENDANT", "Indépendant"
+        MIXTE = "MIXTE", "Mixte (salarié + activité)"
+
     application = models.ForeignKey(
         CreditApplication,
         on_delete=models.CASCADE,
@@ -872,6 +890,16 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
     client_type = models.CharField(
         "type de client", max_length=20, blank=True,
         help_text="Renseigné automatiquement d'après le client.",
+    )
+    individual_profile = models.CharField(
+        "profil particulier",
+        max_length=20,
+        choices=IndividualProfile.choices,
+        blank=True,
+        help_text=(
+            "Salarié, indépendant ou mixte — oriente les blocs de l'analyse "
+            "pour les personnes physiques."
+        ),
     )
     reference_period = models.CharField(
         "période de référence", max_length=15,
@@ -892,7 +920,7 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
         "revenus locatifs / rente", max_digits=18, decimal_places=2, default=0
     )
     other_activity_income = models.DecimalField(
-        "revenus d'activité annexe", max_digits=18, decimal_places=2, default=0
+        "revenus d'activité (hors bloc dédié)", max_digits=18, decimal_places=2, default=0
     )
     other_income = models.DecimalField(
         "autres revenus", max_digits=18, decimal_places=2, default=0
@@ -1275,19 +1303,19 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
     es_comment = models.TextField("commentaire E&S", blank=True)
 
     # ------------------------------------------------------------------ #
-    # Personne physique — mini-bloc activité annexe
+    # Personne physique — activité génératrice de revenus
     # ------------------------------------------------------------------ #
     has_side_activity = models.BooleanField(
-        "exerce une activité annexe", default=False
+        "exerce une activité génératrice de revenus", default=False
     )
     activity_turnover = models.DecimalField(
-        "CA / recettes activité annexe", max_digits=18, decimal_places=2,
+        "CA / recettes activité", max_digits=18, decimal_places=2,
         default=0,
     )
     activity_expenses = models.DecimalField(
-        "charges activité annexe", max_digits=18, decimal_places=2, default=0,
+        "charges activité", max_digits=18, decimal_places=2, default=0,
     )
-    activity_comment = models.TextField("commentaire activité annexe", blank=True)
+    activity_comment = models.TextField("commentaire activité", blank=True)
 
     # ------------------------------------------------------------------ #
     # Groupement (PROFESSIONAL)
@@ -1544,6 +1572,24 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
             live_type = getattr(self.application.client, "client_type", "") or ""
             if live_type:
                 self.client_type = live_type
+
+        # Profil particulier : heuristique si non renseigné.
+        if self.is_individual and not self.individual_profile:
+            has_salary = _dec(self.salary_income) > 0 or _dec(self.net_salary) > 0
+            has_activity = self.has_side_activity or _dec(self.activity_turnover) > 0
+            if has_salary and has_activity:
+                self.individual_profile = self.IndividualProfile.MIXTE
+            elif has_activity:
+                self.individual_profile = self.IndividualProfile.INDEPENDANT
+            elif has_salary:
+                self.individual_profile = self.IndividualProfile.SALARIE
+
+        # Aligner has_side_activity sur le profil (indépendant / mixte).
+        if self.individual_profile in (
+            self.IndividualProfile.INDEPENDANT,
+            self.IndividualProfile.MIXTE,
+        ):
+            self.has_side_activity = True
 
         # Période de référence : défaut selon le type de client.
         if not self.reference_period:

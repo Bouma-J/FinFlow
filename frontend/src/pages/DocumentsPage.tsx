@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { Download, FolderOpen } from "lucide-react";
+import { FolderOpen } from "lucide-react";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -30,12 +30,15 @@ import {
 } from "@/components/ListFilters";
 import { PermLink } from "@/components/PermLink";
 import {
+  DEFAULT_PAGE_SIZE,
   PageHeader,
   PaginationBar,
   QueryStatus,
   TenantScopeNotice,
   formatDate,
 } from "@/components/ui";
+
+const LIST_PAGE_SIZE = Math.max(15, DEFAULT_PAGE_SIZE);
 
 const RELATED_KIND_OPTIONS = [
   ["", "Tous les modules"],
@@ -146,6 +149,7 @@ export function DocumentsPage() {
       "ged-documents",
       activeTenant,
       page,
+      LIST_PAGE_SIZE,
       search,
       category,
       relatedKind,
@@ -160,7 +164,7 @@ export function DocumentsPage() {
         await api.get<Paginated<GedDocument>>("/documents/", {
           params: {
             page,
-            page_size: 25,
+            page_size: LIST_PAGE_SIZE,
             ...(search.trim() ? { search: search.trim() } : {}),
             ...(category ? { category } : {}),
             ...(relatedKind ? { related_kind: relatedKind } : {}),
@@ -199,190 +203,210 @@ export function DocumentsPage() {
   const count = docs.data?.count ?? 0;
 
   return (
-    <div className="page-shell">
-      <PageHeader
-        icon={FolderOpen}
-        title="GED — Documents"
-        subtitle="Consultation unifiée (clients, dossiers, garanties, cautions, formalisations, mains levées, dations, recouvrement, contentieux)"
-      />
-
-      <ListFilters
-        search={
-          <SearchInput
-            value={search}
-            onChange={setFilter(setSearch)}
-            placeholder="Nom de fichier, catégorie, déposant…"
-          />
-        }
-        activeCount={countActive(
-          search,
-          category,
-          relatedKind,
-          expiry,
-          uploadedBy,
-          createdAfter,
-          createdBefore,
-          clientFilter,
-        )}
-        onReset={() => {
-          setSearch("");
-          setCategory("");
-          setRelatedKind("");
-          setExpiry("");
-          setUploadedBy("");
-          setCreatedAfter("");
-          setCreatedBefore("");
-          setPage(1);
-          if (clientFilter) clearClientFilter();
-        }}
-      >
-        <FilterField label="Module" active={!!relatedKind}>
-          <FilterSelect
-            value={relatedKind}
-            onChange={setFilter(setRelatedKind)}
-          >
-            {RELATED_KIND_OPTIONS.map(([value, label]) => (
-              <option key={value || "all"} value={value}>
-                {label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <FilterField label="Catégorie" active={!!category}>
-          <FilterSelect value={category} onChange={setFilter(setCategory)}>
-            <option value="">Toutes les catégories</option>
-            {(categories.data?.results ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.code} — {c.label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <FilterField label="Expiration" active={!!expiry}>
-          <FilterSelect value={expiry} onChange={setFilter(setExpiry)}>
-            {EXPIRY_OPTIONS.map(([value, label]) => (
-              <option key={value || "all"} value={value}>
-                {label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <OfficerFilter
-          value={uploadedBy}
-          onChange={setFilter(setUploadedBy)}
-          label="Déposé par"
-          emptyLabel="Tous les déposants"
+    <div className="page-shell page-shell--list">
+      <div className="list-page-chrome">
+        <PageHeader
+          icon={FolderOpen}
+          title="GED — Documents"
+          subtitle="Consultation unifiée (clients, dossiers, garanties, cautions, formalisations, mains levées, dations, recouvrement, contentieux)"
         />
-        <FilterField label="Déposé du" active={!!createdAfter}>
-          <input
-            type="date"
-            value={createdAfter}
-            onChange={(e) => setFilter(setCreatedAfter)(e.target.value)}
-          />
-        </FilterField>
-        <FilterField label="jusqu'au" active={!!createdBefore}>
-          <input
-            type="date"
-            value={createdBefore}
-            onChange={(e) => setFilter(setCreatedBefore)(e.target.value)}
-          />
-        </FilterField>
-      </ListFilters>
-      <ClientFilterBanner
-        clientId={clientFilter}
-        onClear={() => {
-          clearClientFilter();
-          setPage(1);
-        }}
-      />
-      <p className="muted small" style={{ marginTop: 8, marginBottom: 16 }}>
-        Les catégories se paramètrent dans{" "}
-        <PermLink
-          user={user}
-          anyOf={PERM_ADMIN_REFERENTIALS}
-          to="/admin/referentiels-metier"
-        >
-          Référentiels métier
-        </PermLink>
-        . Les pièces dossier sont aussi indexées ici à l&apos;upload.
-      </p>
 
-      <QueryStatus
-        isLoading={docs.isLoading}
-        isError={docs.isError}
-        isEmpty={results.length === 0}
-        emptyMessage="Aucun document dans la GED pour ces filtres."
-        onRetry={() => docs.refetch()}
-      >
-        <>
-          <table className="table card">
-            <thead>
-              <tr>
-                <th>Nom</th>
-                <th>Catégorie</th>
-                <th>Module</th>
-                <th>Rattaché à</th>
-                <th>Taille</th>
-                <th>Créé le</th>
-                <th>Expire</th>
-                <th />
-              </tr>
-            </thead>
-            <tbody>
-              {results.map((d) => {
-                const href = relatedHref(d);
-                const hrefPerms = href ? relatedPerms(href) : null;
-                const url = d.file_url || d.file;
-                return (
-                  <tr key={d.id}>
-                    <td>
-                      <strong>{d.name}</strong>
-                      {d.uploaded_by_name ? (
-                        <div className="muted small">{d.uploaded_by_name}</div>
-                      ) : null}
-                    </td>
-                    <td>
-                      <code>{d.category_code || "—"}</code>
-                      <div className="muted small">{d.category_label}</div>
-                    </td>
-                    <td>{relatedKindLabel(d)}</td>
-                    <td>
-                      {href && d.related_label ? (
-                        hrefPerms ? (
-                          <PermLink user={user} anyOf={hrefPerms} to={href}>
-                            {d.related_label}
-                          </PermLink>
-                        ) : (
-                          <Link to={href}>{d.related_label}</Link>
-                        )
-                      ) : (
-                        d.related_label || <span className="muted">—</span>
-                      )}
-                    </td>
-                    <td>{formatBytes(d.size_bytes)}</td>
-                    <td>{formatDate(d.created_at)}</td>
-                    <td>{d.expiry_date ? formatDate(d.expiry_date) : "—"}</td>
-                    <td>
-                      {url ? (
-                        <a
-                          className="btn btn-ghost btn-sm"
-                          href={url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          <Download size={14} />
-                          Ouvrir
-                        </a>
-                      ) : null}
-                    </td>
+        <ListFilters
+          search={
+            <SearchInput
+              value={search}
+              onChange={setFilter(setSearch)}
+              placeholder="Nom de fichier, catégorie, déposant…"
+            />
+          }
+          activeCount={countActive(
+            search,
+            category,
+            relatedKind,
+            expiry,
+            uploadedBy,
+            createdAfter,
+            createdBefore,
+            clientFilter,
+          )}
+          onReset={() => {
+            setSearch("");
+            setCategory("");
+            setRelatedKind("");
+            setExpiry("");
+            setUploadedBy("");
+            setCreatedAfter("");
+            setCreatedBefore("");
+            setPage(1);
+            if (clientFilter) clearClientFilter();
+          }}
+        >
+          <FilterField label="Module" active={!!relatedKind}>
+            <FilterSelect
+              value={relatedKind}
+              onChange={setFilter(setRelatedKind)}
+            >
+              {RELATED_KIND_OPTIONS.map(([value, label]) => (
+                <option key={value || "all"} value={value}>
+                  {label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <FilterField label="Catégorie" active={!!category}>
+            <FilterSelect value={category} onChange={setFilter(setCategory)}>
+              <option value="">Toutes les catégories</option>
+              {(categories.data?.results ?? []).map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code} — {c.label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <FilterField label="Expiration" active={!!expiry}>
+            <FilterSelect value={expiry} onChange={setFilter(setExpiry)}>
+              {EXPIRY_OPTIONS.map(([value, label]) => (
+                <option key={value || "all"} value={value}>
+                  {label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <OfficerFilter
+            value={uploadedBy}
+            onChange={setFilter(setUploadedBy)}
+            label="Déposé par"
+            emptyLabel="Tous les déposants"
+          />
+          <FilterField label="Déposé du" active={!!createdAfter}>
+            <input
+              type="date"
+              value={createdAfter}
+              onChange={(e) => setFilter(setCreatedAfter)(e.target.value)}
+            />
+          </FilterField>
+          <FilterField label="jusqu'au" active={!!createdBefore}>
+            <input
+              type="date"
+              value={createdBefore}
+              onChange={(e) => setFilter(setCreatedBefore)(e.target.value)}
+            />
+          </FilterField>
+        </ListFilters>
+        <ClientFilterBanner
+          clientId={clientFilter}
+          onClear={() => {
+            clearClientFilter();
+            setPage(1);
+          }}
+        />
+        <p className="muted small" style={{ marginTop: 8, marginBottom: 12 }}>
+          Les catégories se paramètrent dans{" "}
+          <PermLink
+            user={user}
+            anyOf={PERM_ADMIN_REFERENTIALS}
+            to="/admin/referentiels-metier"
+          >
+            Référentiels métier
+          </PermLink>
+          . Les pièces dossier sont aussi indexées ici à l&apos;upload.
+        </p>
+      </div>
+
+      <div className="list-table-region">
+        <QueryStatus
+          isLoading={docs.isLoading}
+          isError={docs.isError}
+          isEmpty={results.length === 0}
+          emptyMessage="Aucun document dans la GED pour ces filtres."
+          onRetry={() => docs.refetch()}
+        >
+          <>
+            <div className="table-scroll table-scroll--fill">
+              <table className="table card">
+                <thead>
+                  <tr>
+                    <th>Nom</th>
+                    <th>Catégorie</th>
+                    <th>Module</th>
+                    <th>Rattaché à</th>
+                    <th>Taille</th>
+                    <th>Créé le</th>
+                    <th>Expire</th>
                   </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          <PaginationBar page={page} count={count} onPageChange={setPage} />
-        </>
-      </QueryStatus>
+                </thead>
+                <tbody>
+                  {results.map((d) => {
+                    const href = relatedHref(d);
+                    const hrefPerms = href ? relatedPerms(href) : null;
+                    const url = d.file_url || d.file;
+                    return (
+                      <tr
+                        key={d.id}
+                        className={url ? "row-clickable" : undefined}
+                        onClick={
+                          url
+                            ? () =>
+                                window.open(url, "_blank", "noopener,noreferrer")
+                            : undefined
+                        }
+                      >
+                        <td>
+                          <strong>{d.name}</strong>
+                          {d.uploaded_by_name ? (
+                            <div className="muted small">
+                              {d.uploaded_by_name}
+                            </div>
+                          ) : null}
+                        </td>
+                        <td>
+                          <code>{d.category_code || "—"}</code>
+                          <div className="muted small">{d.category_label}</div>
+                        </td>
+                        <td>{relatedKindLabel(d)}</td>
+                        <td>
+                          {href && d.related_label ? (
+                            hrefPerms ? (
+                              <PermLink
+                                user={user}
+                                anyOf={hrefPerms}
+                                to={href}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {d.related_label}
+                              </PermLink>
+                            ) : (
+                              <Link
+                                to={href}
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                {d.related_label}
+                              </Link>
+                            )
+                          ) : (
+                            d.related_label || <span className="muted">—</span>
+                          )}
+                        </td>
+                        <td>{formatBytes(d.size_bytes)}</td>
+                        <td>{formatDate(d.created_at)}</td>
+                        <td>
+                          {d.expiry_date ? formatDate(d.expiry_date) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              page={page}
+              count={count}
+              pageSize={LIST_PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          </>
+        </QueryStatus>
+      </div>
     </div>
   );
 }

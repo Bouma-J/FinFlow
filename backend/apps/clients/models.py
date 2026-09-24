@@ -196,17 +196,116 @@ class Client(TenantScopedModel, AuthoredModel):
     email = models.EmailField("email", blank=True)
     address = models.CharField("adresse", max_length=255, blank=True)
     city = models.CharField("ville", max_length=100, blank=True)
+    postal_box = models.CharField("boîte postale", max_length=50, blank=True)
+    head_office = models.CharField("siège social", max_length=255, blank=True)
+    sigle = models.CharField("sigle", max_length=50, blank=True)
 
     # ------------------------------------------------------------------ #
-    # Core Banking (référentiel externe)
+    # Core Banking — mapping 1:1 de la situation adhérent (adh/situation)
     # ------------------------------------------------------------------ #
     cbs_client_id = models.CharField(
         "matricule Core Banking", max_length=50, blank=True, db_index=True,
-        help_text="Identifiant / matricule du client dans le Core Banking.",
+        help_text="codeAdherent",
     )
     cbs_account_number = models.CharField(
         "n° de compte Core Banking", max_length=50, blank=True,
-        help_text="Numéro de compte principal du client dans le Core Banking.",
+        help_text="numManuel",
+    )
+    cbs_full_name = models.CharField(
+        "nom adhérent CBS", max_length=255, blank=True,
+        help_text="nomAdherent",
+    )
+    cbs_order_number = models.CharField(
+        "n° d'ordre CBS", max_length=50, blank=True,
+        help_text="numOrdre",
+    )
+    cbs_profession_id = models.CharField(
+        "id profession CBS", max_length=50, blank=True,
+        help_text="idProfession",
+    )
+    cbs_nationality_id = models.CharField(
+        "id nationalité CBS", max_length=50, blank=True,
+        help_text="idNationalite",
+    )
+    cbs_sector_id = models.CharField(
+        "id secteur d'activité CBS", max_length=50, blank=True,
+        help_text="idSecteurActivite",
+    )
+    cbs_client_type_id = models.CharField(
+        "id type client CBS", max_length=50, blank=True,
+        help_text="idTypeClient",
+    )
+    cbs_zone_id = models.CharField(
+        "id zone CBS", max_length=50, blank=True,
+        help_text="idZone",
+    )
+    cbs_savings_product_id = models.CharField(
+        "id produit épargne CBS", max_length=50, blank=True,
+        help_text="idProduitEpg",
+    )
+    cbs_signature_count = models.PositiveIntegerField(
+        "nombre de signatures CBS", null=True, blank=True,
+        help_text="nbreSignature",
+    )
+    cbs_distance = models.DecimalField(
+        "distance CBS",
+        max_digits=12,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="distance",
+    )
+    cbs_registration_date = models.DateField(
+        "date d'inscription CBS", null=True, blank=True,
+        help_text="dateInscription",
+    )
+    cbs_creation_date = models.DateField(
+        "date de création CBS", null=True, blank=True,
+        help_text="dateCreation",
+    )
+    cbs_credit_limit = models.DecimalField(
+        "limite de crédit CBS",
+        max_digits=18,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="limitCredit",
+    )
+    cbs_est_valide = models.BooleanField(
+        "adhérent valide CBS", null=True, blank=True,
+        help_text="estValide",
+    )
+    cbs_point_of_service_id = models.CharField(
+        "point de service CBS", max_length=50, blank=True,
+        help_text="idPointService",
+    )
+    cbs_point_of_service_name = models.CharField(
+        "libellé point de service CBS", max_length=255, blank=True,
+        help_text="nomPointService",
+    )
+    cbs_external_id = models.CharField(
+        "identifiant externe CBS", max_length=100, blank=True,
+        help_text="externalId",
+    )
+    cbs_context = models.CharField(
+        "contexte réponse CBS", max_length=100, blank=True,
+        help_text="context",
+    )
+    cbs_message = models.CharField(
+        "message réponse CBS", max_length=255, blank=True,
+        help_text="message",
+    )
+    cbs_synced_at = models.DateTimeField(
+        "dernière synchronisation CBS", null=True, blank=True,
+    )
+    cbs_situation = models.JSONField(
+        "situation CBS (copie brute)",
+        default=dict,
+        blank=True,
+        help_text=(
+            "Copie de sauvegarde de la dernière réponse CBS "
+            "(normalisée + raw). La source métier reste les colonnes ci-dessus."
+        ),
     )
 
     # KYC

@@ -69,15 +69,46 @@ def assert_analysis_ready_for_submission(application):
                 "ou le CA de l'activité commune."
             )
     else:
+        profile = getattr(reference, "individual_profile", "") or ""
+        has_salary = (
+            _dec(reference.salary_income) > 0 or _dec(reference.net_salary) > 0
+        )
+        has_activity_ca = _dec(reference.activity_turnover) > 0
+        if not profile:
+            if has_salary and (reference.has_side_activity or has_activity_ca):
+                profile = FinancialAnalysis.IndividualProfile.MIXTE
+            elif reference.has_side_activity or has_activity_ca:
+                profile = FinancialAnalysis.IndividualProfile.INDEPENDANT
+            else:
+                profile = FinancialAnalysis.IndividualProfile.SALARIE
+
+        if profile in (
+            FinancialAnalysis.IndividualProfile.SALARIE,
+            FinancialAnalysis.IndividualProfile.MIXTE,
+        ):
+            if not has_salary:
+                raise WorkflowError(
+                    "Analyse salarié incomplète : indiquez le salaire net du demandeur."
+                )
+        if profile in (
+            FinancialAnalysis.IndividualProfile.INDEPENDANT,
+            FinancialAnalysis.IndividualProfile.MIXTE,
+        ):
+            if not has_activity_ca:
+                raise WorkflowError(
+                    "Analyse indépendant incomplète : indiquez le chiffre d'affaires "
+                    "/ recettes de l'activité génératrice de revenus."
+                )
+        elif reference.has_side_activity and not has_activity_ca:
+            raise WorkflowError(
+                "Activité génératrice de revenus : indiquez le chiffre d'affaires "
+                "/ recettes."
+            )
+
         if reference.total_income <= 0:
             raise WorkflowError(
                 "Analyse personne physique incomplète : les revenus du ménage "
                 "(ou de l'activité) doivent être renseignés."
-            )
-        if reference.has_side_activity and _dec(reference.activity_turnover) <= 0:
-            raise WorkflowError(
-                "Mini-bloc activité : indiquez le chiffre d'affaires / recettes "
-                "de l'activité annexe."
             )
 
     product = application.product

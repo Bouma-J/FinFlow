@@ -313,8 +313,24 @@ def client_kpis(client_qs, params=None):
 
 
 def par_kpis(case_qs):
-    """Répartition du portefeuille à risque."""
+    """Répartition du portefeuille à risque + signaux opérationnels."""
+    from apps.collections.models import PaymentPromise
+
+    today = timezone.localdate()
     open_cases = case_qs.exclude(stage=CollectionCase.Stage.CLOSED)
+    followups_due = open_cases.filter(
+        next_action_date__isnull=False,
+        next_action_date__lte=today,
+    ).count()
+    broken_promises = PaymentPromise.objects.filter(
+        case__in=open_cases,
+        status=PaymentPromise.Status.BROKEN,
+        promised_date__gte=today - timedelta(days=30),
+    ).count()
+    pending_promises = PaymentPromise.objects.filter(
+        case__in=open_cases,
+        status=PaymentPromise.Status.PENDING,
+    ).count()
     return {
         "by_par_class": list(
             case_qs.values("par_class")
@@ -329,6 +345,9 @@ def par_kpis(case_qs):
         "open_cases": open_cases.count(),
         "total_overdue": case_qs.aggregate(total=Sum("overdue_amount"))["total"]
         or 0,
+        "followups_due": followups_due,
+        "pending_promises": pending_promises,
+        "broken_promises_30d": broken_promises,
     }
 
 
@@ -375,15 +394,18 @@ def workflow_kpis(application_qs, user=None):
         instance__in=instances,
         status=ApprovalTask.Status.PENDING,
     )
+    now = timezone.now()
+    overdue_tasks = pending_tasks.filter(due_at__isnull=False, due_at__lt=now)
     my_pending = 0
+    my_overdue = 0
     if user and user.is_authenticated and not getattr(user, "is_group_level", False):
         from apps.workflow.services import effective_group_ids
 
         group_ids = list(effective_group_ids(user))
         if group_ids:
-            my_pending = pending_tasks.filter(
-                step__required_group_id__in=group_ids
-            ).count()
+            mine = pending_tasks.filter(step__required_group_id__in=group_ids)
+            my_pending = mine.count()
+            my_overdue = mine.filter(due_at__isnull=False, due_at__lt=now).count()
     conditions_pending = ApprovalCondition.all_tenants.filter(
         application_id__in=app_ids,
         status__in=[
@@ -393,9 +415,136 @@ def workflow_kpis(application_qs, user=None):
     ).count()
     return {
         "pending_tasks": pending_tasks.count(),
+        "overdue_tasks": overdue_tasks.count(),
         "my_pending_tasks": my_pending,
+        "my_overdue_tasks": my_overdue,
         "conditions_pending": conditions_pending,
     }
+
+
+def funnel_kpis(application_qs):
+    """Tunnel commercial : soumission → décision → décaissement."""
+    submitted = application_qs.exclude(
+        status__in=[
+            CreditApplication.Status.DRAFT,
+            CreditApplication.Status.CANCELLED,
+        ]
+    ).count()
+    in_approval = application_qs.filter(
+        status=CreditApplication.Status.IN_APPROVAL
+    ).count()
+    approved = application_qs.filter(
+        status__in=[
+            CreditApplication.Status.APPROVED,
+            CreditApplication.Status.CONTRACT_GENERATED,
+            CreditApplication.Status.DISBURSEMENT_PENDING,
+            CreditApplication.Status.DISBURSED,
+            CreditApplication.Status.CLOSED,
+        ]
+    ).count()
+    disbursed = application_qs.filter(
+        status__in=[
+            CreditApplication.Status.DISBURSED,
+            CreditApplication.Status.CLOSED,
+        ]
+    ).count()
+    rejected = application_qs.filter(
+        status=CreditApplication.Status.REJECTED
+    ).count()
+    returned = application_qs.filter(
+        status=CreditApplication.Status.RETURNED
+    ).count()
+    decided = approved + rejected
+    return {
+        "submitted": submitted,
+        "in_approval": in_approval,
+        "approved": approved,
+        "disbursed": disbursed,
+        "rejected": rejected,
+        "returned": returned,
+        "approval_rate_pct": round((approved / decided) * 100, 1)
+        if decided
+        else None,
+        "disbursement_rate_pct": round((disbursed / approved) * 100, 1)
+        if approved
+        else None,
+    }
+
+
+def quality_kpis(application_qs, client_qs):
+    """Alertes qualité dossier / KYC."""
+    kyc_pending = client_qs.filter(kyc_status=Client.KycStatus.PENDING).count()
+    kyc_rejected = client_qs.filter(kyc_status=Client.KycStatus.REJECTED).count()
+    pipeline = application_qs.filter(
+        status__in=[
+            CreditApplication.Status.DRAFT,
+            CreditApplication.Status.SUBMITTED,
+            CreditApplication.Status.IN_APPROVAL,
+            CreditApplication.Status.RETURNED,
+            CreditApplication.Status.APPROVED,
+            CreditApplication.Status.CONTRACT_GENERATED,
+            CreditApplication.Status.DISBURSEMENT_PENDING,
+        ]
+    )
+    without_guarantee = (
+        pipeline.exclude(guarantees__status=Guarantee.Status.ACTIVE)
+        .distinct()
+        .count()
+    )
+    return {
+        "kyc_pending": kyc_pending,
+        "kyc_rejected": kyc_rejected,
+        "pipeline_without_active_guarantee": without_guarantee,
+    }
+
+
+def after_sales_kpis(*, tenant_id=None, user=None, application_qs=None):
+    """Compteurs après-vente alignés sur le hub (ouverts / en circuit)."""
+    from apps.guarantees.models import (
+        DationRequest,
+        GuaranteeFormalizationRequest,
+        GuaranteeReleaseRequest,
+    )
+
+    closed = ("COMPLETED", "CANCELLED", "REJECTED")
+    access = _after_sales_module_access(user=user)
+    app_ids = None
+    if application_qs is not None:
+        app_ids = application_qs.values_list("id", flat=True)
+
+    def _scope(qs, app_field="application_id"):
+        if tenant_id:
+            qs = qs.filter(tenant_id=tenant_id)
+        if app_ids is not None and app_field:
+            qs = qs.filter(**{f"{app_field}__in": app_ids})
+        return qs
+
+    out = {"access": access}
+    if access["main_levee"]:
+        ml = _scope(GuaranteeReleaseRequest.all_tenants.all())
+        out["main_levee"] = {
+            "open": ml.exclude(status__in=closed).count(),
+            "in_approval": ml.filter(
+                status=GuaranteeReleaseRequest.Status.IN_APPROVAL
+            ).count(),
+        }
+    if access["dation"]:
+        dt = _scope(DationRequest.all_tenants.all())
+        out["dation"] = {
+            "open": dt.exclude(status__in=closed).count(),
+            "in_approval": dt.filter(
+                status=DationRequest.Status.IN_APPROVAL
+            ).count(),
+        }
+    if access["formalisation"]:
+        fm = _scope(GuaranteeFormalizationRequest.all_tenants.all())
+        out["formalisation"] = {
+            "open": fm.exclude(status__in=closed).count(),
+            "in_approval": fm.filter(
+                status=GuaranteeFormalizationRequest.Status.IN_APPROVAL
+            ).count(),
+        }
+    return out
 
 
 def cbs_kpis(tenant_id):
@@ -468,6 +617,7 @@ def build_dashboard(tenant_id=None, params=None, user=None):
     credits = credit_kpis(applications)
     credits["monthly"] = monthly_trend(applications)
     credits["recent"] = recent_applications(applications)
+    credits["funnel"] = funnel_kpis(applications)
 
     include_cbs = bool(
         user
@@ -504,6 +654,10 @@ def build_dashboard(tenant_id=None, params=None, user=None):
         "contracts": contract_kpis(contracts),
         "workflow": workflow_kpis(applications, user=user),
         "risk": par_kpis(cases),
+        "quality": quality_kpis(applications, clients),
+        "after_sales": after_sales_kpis(
+            tenant_id=tenant_id, user=user, application_qs=applications
+        ),
     }
     if include_cbs:
         payload["cbs"] = cbs_kpis(tenant_id)

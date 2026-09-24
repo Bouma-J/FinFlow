@@ -56,6 +56,7 @@ import {
 import {
   Badge,
   Card,
+  DEFAULT_PAGE_SIZE,
   EmptyState,
   ErrorState,
   PageHeader,
@@ -65,6 +66,8 @@ import {
   formatDate,
   formatMoney,
 } from "@/components/ui";
+
+const LIST_PAGE_SIZE = Math.max(15, DEFAULT_PAGE_SIZE);
 
 const EDITABLE_STATUSES = ["DRAFT", "IN_PROGRESS", "RETURNED"];
 
@@ -141,6 +144,7 @@ function errMsg(err: unknown, fallback: string) {
 }
 
 export function FormalizationsPage() {
+  const navigate = useNavigate();
   const { user, activeTenant } = useAuth();
   const { clientFilter, clearClientFilter } = useClientSearchParam();
   const canInitiate = hasPerm(
@@ -165,6 +169,7 @@ export function FormalizationsPage() {
       "guarantee-formalizations",
       activeTenant,
       page,
+      LIST_PAGE_SIZE,
       search,
       status,
       legalStage,
@@ -178,6 +183,7 @@ export function FormalizationsPage() {
           {
             params: {
               page,
+              page_size: LIST_PAGE_SIZE,
               ...(search.trim() ? { search: search.trim() } : {}),
               ...(status ? { status } : {}),
               ...(legalStage ? { legal_stage: legalStage } : {}),
@@ -190,141 +196,150 @@ export function FormalizationsPage() {
   });
 
   return (
-    <div>
-      <PageHeader
-        icon={Stamp}
-        title="Formalisations"
-        subtitle="Constitution juridique des garanties — parallèle au crédit"
-        actions={
-          canInitiate ? (
-            <Link className="btn btn-primary" to="/formalisations/nouvelle">
-              <Plus />
-              Nouvelle formalisation
-            </Link>
-          ) : undefined
-        }
-      />
+    <div className="page-shell page-shell--list">
+      <div className="list-page-chrome">
+        <PageHeader
+          icon={Stamp}
+          title="Formalisations"
+          subtitle="Constitution juridique des garanties — parallèle au crédit"
+          actions={
+            canInitiate ? (
+              <Link className="btn btn-primary" to="/formalisations/nouvelle">
+                <Plus />
+                Nouvelle formalisation
+              </Link>
+            ) : undefined
+          }
+        />
 
-      <div className="callout callout-info" style={{ marginBottom: 14 }}>
-        La formalisation est parallèle au crédit et ne bloque pas le
-        décaissement.
+        <ListFilters
+          search={
+            <SearchInput
+              value={search}
+              onChange={setFilter(setSearch)}
+              placeholder="Réf., notaire, n° enregistrement, client…"
+            />
+          }
+          activeCount={countActive(
+            search,
+            status,
+            legalStage,
+            agency,
+            clientFilter,
+          )}
+          onReset={() => {
+            setSearch("");
+            setStatus("");
+            setLegalStage("");
+            setAgency("");
+            setPage(1);
+            if (clientFilter) clearClientFilter();
+          }}
+        >
+          <FilterField label="Statut" active={!!status}>
+            <FilterSelect value={status} onChange={setFilter(setStatus)}>
+              {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
+                <option key={value || "all"} value={value}>
+                  {label}
+                </option>
+              ))}
+            </FilterSelect>
+          </FilterField>
+          <FilterField label="Stade juridique" active={!!legalStage}>
+            <FilterSelect
+              value={legalStage}
+              onChange={setFilter(setLegalStage)}
+            >
+              <option value="">Tous stades juridiques</option>
+              <option value="NOT_SENT">Non soumis chez le notaire</option>
+              <option value="AT_NOTARY">Chez le notaire</option>
+              <option value="AWAITING_SIGNATURE">En attente de signature</option>
+              <option value="SIGNED">Acte signé</option>
+              <option value="PENDING_REGISTRATION">
+                Enregistrement en cours
+              </option>
+              <option value="REGISTERED">Enregistré</option>
+              <option value="DONE">Formalisation terminée</option>
+            </FilterSelect>
+          </FilterField>
+          <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
+        </ListFilters>
+        <ClientFilterBanner
+          clientId={clientFilter}
+          onClear={() => {
+            clearClientFilter();
+            setPage(1);
+          }}
+        />
       </div>
 
-      <ListFilters
-        search={
-          <SearchInput
-            value={search}
-            onChange={setFilter(setSearch)}
-            placeholder="Réf., notaire, n° enregistrement, client…"
-          />
-        }
-        activeCount={countActive(search, status, legalStage, agency, clientFilter)}
-        onReset={() => {
-          setSearch("");
-          setStatus("");
-          setLegalStage("");
-          setAgency("");
-          setPage(1);
-          if (clientFilter) clearClientFilter();
-        }}
-      >
-        <FilterField label="Statut" active={!!status}>
-          <FilterSelect value={status} onChange={setFilter(setStatus)}>
-            {PROCESS_STATUS_OPTIONS.map(([value, label]) => (
-              <option key={value || "all"} value={value}>
-                {label}
-              </option>
-            ))}
-          </FilterSelect>
-        </FilterField>
-        <FilterField label="Stade juridique" active={!!legalStage}>
-          <FilterSelect value={legalStage} onChange={setFilter(setLegalStage)}>
-            <option value="">Tous stades juridiques</option>
-            <option value="NOT_SENT">Non soumis chez le notaire</option>
-            <option value="AT_NOTARY">Chez le notaire</option>
-            <option value="AWAITING_SIGNATURE">En attente de signature</option>
-            <option value="SIGNED">Acte signé</option>
-            <option value="PENDING_REGISTRATION">Enregistrement en cours</option>
-            <option value="REGISTERED">Enregistré</option>
-            <option value="DONE">Formalisation terminée</option>
-          </FilterSelect>
-        </FilterField>
-        <AgencyFilter value={agency} onChange={setFilter(setAgency)} />
-      </ListFilters>
-      <ClientFilterBanner
-        clientId={clientFilter}
-        onClear={() => {
-          clearClientFilter();
-          setPage(1);
-        }}
-      />
-
-      <QueryStatus
-        isLoading={list.isLoading}
-        isError={list.isError}
-        isEmpty={!list.data?.results.length}
-        emptyMessage="Aucune formalisation ne correspond à ces critères."
-        onRetry={() => list.refetch()}
-      >
-        <>
-          <table className="table card">
-            <thead>
-              <tr>
-                <th>Référence</th>
-                <th>Garantie</th>
-                <th>Client</th>
-                <th>Étape juridique</th>
-                <th>Statut</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {(list.data?.results ?? []).map((r) => (
-                <tr key={r.id}>
-                  <td>
-                    <code>{r.reference || "—"}</code>
-                  </td>
-                  <td>
-                    <PermLink
-                      user={user}
-                      anyOf={PERM_GUARANTEES}
-                      to={`/garanties/${r.guarantee}`}
+      <div className="list-table-region">
+        <QueryStatus
+          isLoading={list.isLoading}
+          isError={list.isError}
+          isEmpty={!list.data?.results.length}
+          emptyMessage="Aucune formalisation ne correspond à ces critères."
+          onRetry={() => list.refetch()}
+        >
+          <>
+            <div className="table-scroll table-scroll--fill">
+              <table className="table card">
+                <thead>
+                  <tr>
+                    <th>Référence</th>
+                    <th>Garantie</th>
+                    <th>Client</th>
+                    <th>Étape juridique</th>
+                    <th>Statut</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(list.data?.results ?? []).map((r) => (
+                    <tr
+                      key={r.id}
+                      className="row-clickable"
+                      onClick={() => navigate(`/formalisations/${r.id}`)}
                     >
-                      {r.guarantee_reference || r.guarantee.slice(0, 8)}
-                    </PermLink>
-                  </td>
-                  <td>{r.client_display}</td>
-                  <td>
-                    <Badge
-                      value={r.legal_stage}
-                      label={legalStageLabel(
-                        r.legal_stage,
-                        r.legal_stage_display,
-                      )}
-                    />
-                  </td>
-                  <td>
-                    <Badge value={r.status} label={r.status_display} />
-                  </td>
-                  <td>
-                    <Link
-                      className="btn btn-ghost btn-sm"
-                      to={`/formalisations/${r.id}`}
-                    >
-                      Ouvrir
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <PaginationBar
-            page={page}
-            count={list.data?.count ?? 0}
-            onPageChange={setPage}
-          />
-        </>
-      </QueryStatus>
+                      <td>
+                        <code>{r.reference || "—"}</code>
+                      </td>
+                      <td>
+                        <PermLink
+                          user={user}
+                          anyOf={PERM_GUARANTEES}
+                          to={`/garanties/${r.guarantee}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                        </PermLink>
+                      </td>
+                      <td>{r.client_display}</td>
+                      <td>
+                        <Badge
+                          value={r.legal_stage}
+                          label={legalStageLabel(
+                            r.legal_stage,
+                            r.legal_stage_display,
+                          )}
+                        />
+                      </td>
+                      <td>
+                        <Badge value={r.status} label={r.status_display} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <PaginationBar
+              page={page}
+              count={list.data?.count ?? 0}
+              pageSize={LIST_PAGE_SIZE}
+              onPageChange={setPage}
+            />
+          </>
+        </QueryStatus>
+      </div>
     </div>
   );
 }
@@ -1201,56 +1216,85 @@ export function FormalizationDetailPage() {
   ].filter(Boolean) as { label: string; href: string }[];
 
   return (
-    <div>
-      <PageHeader
-        icon={Stamp}
-        title={r.reference || "Formalisation"}
-        subtitle={r.client_display}
-        actions={
-          <div className="row-actions">
-            <Link className="btn btn-ghost" to="/formalisations">
-              <ArrowLeft />
+    <div className="page-shell detail-banner-page">
+      <div className="client-banner">
+        <div className="client-banner-main">
+          <div className="client-banner-info">
+            <span className="client-banner-icon">
+              <Stamp size={26} />
+            </span>
+            <div className="client-banner-identity">
+              <h2 className="client-banner-name">
+                {r.client_display || "Formalisation"}
+              </h2>
+              <p className="client-banner-ref">
+                Formalisation <code>{r.reference || "—"}</code>
+                {r.guarantee && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_GUARANTEES}
+                    className="client-banner-inline-link"
+                    to={`/garanties/${r.guarantee}`}
+                    fallback={
+                      r.guarantee_reference ? (
+                        <span className="muted">
+                          · {r.guarantee_reference}
+                        </span>
+                      ) : null
+                    }
+                  >
+                    · Garantie{" "}
+                    {r.guarantee_reference || r.guarantee.slice(0, 8)}
+                  </PermLink>
+                )}
+                {r.application && (
+                  <PermLink
+                    user={user}
+                    anyOf={PERM_CREDITS}
+                    className="client-banner-inline-link"
+                    to={`/dossiers/${r.application}`}
+                    fallback={
+                      r.application_reference ? (
+                        <span className="muted">
+                          · Crédit {r.application_reference}
+                        </span>
+                      ) : null
+                    }
+                  >
+                    · Dossier crédit{" "}
+                    {r.application_reference || r.application.slice(0, 8)}
+                  </PermLink>
+                )}
+              </p>
+              <div className="client-banner-meta">
+                <Badge value={r.status} label={r.status_display} />
+                <Badge
+                  value={r.legal_stage}
+                  label={legalStageLabel(r.legal_stage, r.legal_stage_display)}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="client-banner-actions">
+            <Link className="btn btn-banner" to="/formalisations">
+              <ArrowLeft size={15} />
               Retour
             </Link>
             {canStart && (
               <button
-                className="btn btn-ghost"
+                type="button"
+                className="btn btn-banner"
                 onClick={() => start.mutate()}
                 disabled={start.isPending}
               >
                 Démarrer
               </button>
             )}
-            {canSubmit && (
-              <button
-                className="btn btn-primary"
-                onClick={() => submit.mutate()}
-                disabled={submit.isPending}
-              >
-                Soumettre au circuit
-              </button>
-            )}
-            {canComplete && (
-              <button
-                className="btn btn-primary"
-                onClick={() => {
-                  if (
-                    !window.confirm(
-                      "Clôturer cette formalisation et reporter les preuves sur la garantie ?",
-                    )
-                  ) {
-                    return;
-                  }
-                  complete.mutate();
-                }}
-                disabled={complete.isPending}
-              >
-                Clôturer
-              </button>
-            )}
             {canCancel && (
               <button
-                className="btn btn-ghost"
+                type="button"
+                className="btn btn-banner btn-banner-danger"
                 onClick={() => {
                   if (
                     r.status === "IN_APPROVAL" &&
@@ -1267,38 +1311,37 @@ export function FormalizationDetailPage() {
                 Annuler
               </button>
             )}
-          </div>
-        }
-      />
-
-      <div className="client-banner">
-        <div className="client-banner-info">
-          <span className="client-banner-icon">
-            <Stamp size={26} />
-          </span>
-          <div>
-            <h2 className="client-banner-name">
-              {r.guarantee_reference || "Formalisation"}
-            </h2>
-            <div className="client-banner-meta">
-              <code>{r.reference}</code>
-              <Badge value={r.status} label={r.status_display} />
-              <Badge
-                value={r.legal_stage}
-                label={legalStageLabel(r.legal_stage, r.legal_stage_display)}
-              />
-              {r.application_reference && (
-                <span className="muted">Crédit {r.application_reference}</span>
-              )}
-            </div>
+            {canComplete && (
+              <button
+                type="button"
+                className="btn btn-banner btn-banner-primary"
+                onClick={() => {
+                  if (
+                    !window.confirm(
+                      "Clôturer cette formalisation et reporter les preuves sur la garantie ?",
+                    )
+                  ) {
+                    return;
+                  }
+                  complete.mutate();
+                }}
+                disabled={complete.isPending}
+              >
+                Clôturer
+              </button>
+            )}
+            {canSubmit && (
+              <button
+                type="button"
+                className="btn btn-banner btn-banner-primary"
+                onClick={() => submit.mutate()}
+                disabled={submit.isPending}
+              >
+                Soumettre au circuit
+              </button>
+            )}
           </div>
         </div>
-      </div>
-
-      <div className="callout callout-info" style={{ marginBottom: 14 }}>
-        La formalisation est parallèle au crédit et ne bloque pas le
-        décaissement. La garantie reste utilisable pendant le parcours
-        juridique.
       </div>
 
       {actionError && <div className="form-error">{actionError}</div>}
@@ -1818,18 +1861,16 @@ export function FormalizationDetailPage() {
             {proofLinks.length > 0 && (
               <ul className="link-list" style={{ marginBottom: 10 }}>
                 {proofLinks.map((p) => (
-                  <li key={p.href}>
+                  <li
+                    key={p.href}
+                    className="row-clickable"
+                    onClick={() =>
+                      window.open(p.href, "_blank", "noopener,noreferrer")
+                    }
+                  >
                     <span>
                       <FileSignature size={14} /> {p.label}
                     </span>
-                    <a
-                      className="btn btn-ghost btn-sm"
-                      href={p.href}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Ouvrir
-                    </a>
                   </li>
                 ))}
               </ul>
@@ -1839,19 +1880,17 @@ export function FormalizationDetailPage() {
             ) : (docs.data ?? []).length > 0 ? (
               <ul className="link-list">
                 {(docs.data ?? []).map((d) => (
-                  <li key={d.id}>
+                  <li
+                    key={d.id}
+                    className="row-clickable"
+                    onClick={() =>
+                      window.open(d.file, "_blank", "noopener,noreferrer")
+                    }
+                  >
                     <span>
                       <FileUp size={14} /> {d.name}
                       <em className="muted small"> · {d.category_label}</em>
                     </span>
-                    <a
-                      className="btn btn-ghost btn-sm"
-                      href={d.file}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Ouvrir
-                    </a>
                   </li>
                 ))}
               </ul>

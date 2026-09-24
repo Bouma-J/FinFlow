@@ -4,7 +4,9 @@ import { useState, type FormEvent } from "react";
 
 import { api } from "@/api/client";
 import type {
+  CreditProduct,
   Paginated,
+  ProductCategory,
   Role,
   WorkflowDefinition,
   WorkflowStep,
@@ -30,6 +32,17 @@ type StepForm = {
   allow_return: boolean;
 };
 
+type DefForm = {
+  code: string;
+  name: string;
+  version: number;
+  target_type: string;
+  min_amount: string;
+  max_amount: string;
+  product: string;
+  product_category: string;
+};
+
 const EMPTY_STEP: StepForm = {
   name: "",
   order: 1,
@@ -39,6 +52,17 @@ const EMPTY_STEP: StepForm = {
   min_amount: "",
   max_amount: "",
   allow_return: true,
+};
+
+const EMPTY_DEF: DefForm = {
+  code: "",
+  name: "",
+  version: 1,
+  target_type: "CREDIT",
+  min_amount: "",
+  max_amount: "",
+  product: "",
+  product_category: "",
 };
 
 function parseApiError(err: unknown, fallback: string): string {
@@ -82,22 +106,58 @@ function formToPayload(form: StepForm) {
   };
 }
 
+function defToCreatePayload(form: DefForm) {
+  return {
+    code: form.code,
+    name: form.name,
+    version: form.version,
+    target_type: form.target_type,
+    min_amount: form.min_amount || null,
+    max_amount: form.max_amount || null,
+    product: form.target_type === "CREDIT" && form.product ? form.product : null,
+    product_category:
+      form.target_type === "CREDIT" && form.product_category
+        ? form.product_category
+        : null,
+  };
+}
+
+function formatMoneyHint(value: string | null | undefined) {
+  if (!value) return null;
+  const n = Number(value);
+  if (Number.isNaN(n)) return value;
+  return n.toLocaleString("fr-FR", { maximumFractionDigits: 0 });
+}
+
+function criteriaLabel(d: WorkflowDefinition) {
+  const parts: string[] = [];
+  if (d.min_amount != null || d.max_amount != null) {
+    const from = formatMoneyHint(d.min_amount) ?? "0";
+    const to = formatMoneyHint(d.max_amount) ?? "∞";
+    parts.push(`${from} → ${to}`);
+  }
+  if (d.product_label) parts.push(d.product_label);
+  else if (d.product_category_label) parts.push(d.product_category_label);
+  return parts.length ? parts.join(" · ") : "Tous montants / produits";
+}
+
 export function AdminWorkflowPage() {
   const { user, activeTenant } = useAuth();
   const qc = useQueryClient();
   const needsTenant = user?.is_group_level && !activeTenant;
 
-  const [def, setDef] = useState({
-    code: "",
-    name: "",
-    version: 1,
-    target_type: "CREDIT",
-  });
+  const [def, setDef] = useState<DefForm>({ ...EMPTY_DEF });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [stepError, setStepError] = useState<string | null>(null);
   const [editingStepId, setEditingStepId] = useState<string | null>(null);
   const [step, setStep] = useState<StepForm>({ ...EMPTY_STEP });
   const [editStep, setEditStep] = useState<StepForm>({ ...EMPTY_STEP });
+  const [criteriaDraft, setCriteriaDraft] = useState({
+    min_amount: "",
+    max_amount: "",
+    product: "",
+    product_category: "",
+  });
 
   const defs = useQuery({
     queryKey: ["workflow-definitions", activeTenant],
@@ -115,6 +175,26 @@ export function AdminWorkflowPage() {
   const roles = useQuery({
     queryKey: ["admin-roles", activeTenant],
     queryFn: async () => (await api.get<Paginated<Role>>("/roles/")).data,
+    enabled: !needsTenant,
+  });
+  const products = useQuery({
+    queryKey: ["credit-products", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<CreditProduct>>("/credit-products/", {
+          params: { page_size: 200, is_active: true },
+        })
+      ).data,
+    enabled: !needsTenant,
+  });
+  const categories = useQuery({
+    queryKey: ["product-categories", activeTenant],
+    queryFn: async () =>
+      (
+        await api.get<Paginated<ProductCategory>>("/product-categories/", {
+          params: { page_size: 200, is_active: true },
+        })
+      ).data,
     enabled: !needsTenant,
   });
 
@@ -136,11 +216,33 @@ export function AdminWorkflowPage() {
 
   const createDef = useMutation({
     mutationFn: async () =>
-      (await api.post("/workflow-definitions/", def)).data,
+      (await api.post("/workflow-definitions/", defToCreatePayload(def))).data,
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["workflow-definitions"] });
-      setDef({ code: "", name: "", version: 1, target_type: "CREDIT" });
+      setDef({ ...EMPTY_DEF });
     },
+    onError: (err) =>
+      setStepError(parseApiError(err, "Création du circuit impossible.")),
+  });
+
+  const updateCriteria = useMutation({
+    mutationFn: async (id: string) =>
+      (
+        await api.patch<WorkflowDefinition>(`/workflow-definitions/${id}/`, {
+          min_amount: criteriaDraft.min_amount || null,
+          max_amount: criteriaDraft.max_amount || null,
+          product: criteriaDraft.product || null,
+          product_category: criteriaDraft.product_category || null,
+        })
+      ).data,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["workflow-definitions"] });
+      setStepError(null);
+    },
+    onError: (err) =>
+      setStepError(
+        parseApiError(err, "Modification des critères impossible."),
+      ),
   });
   const createStep = useMutation({
     mutationFn: async () =>
@@ -285,7 +387,7 @@ export function AdminWorkflowPage() {
       <PageHeader
         icon={GitBranch}
         title="Circuits d'approbation"
-        subtitle={`Étapes, rôles habilités, seuils et SLA — ${scopeLabel}`}
+        subtitle={`Sélection par montant / produit, étapes, rôles et SLA — ${scopeLabel}`}
       />
 
       {user?.is_group_level && activeTenant && (
@@ -358,7 +460,12 @@ export function AdminWorkflowPage() {
             <select
               value={def.target_type}
               onChange={(e) =>
-                setDef({ ...def, target_type: e.target.value })
+                setDef({
+                  ...def,
+                  target_type: e.target.value,
+                  product: "",
+                  product_category: "",
+                })
               }
             >
               {Object.entries(WORKFLOW_LABELS.target_type).map(([k, v]) => (
@@ -368,7 +475,83 @@ export function AdminWorkflowPage() {
               ))}
             </select>
           </label>
+          {def.target_type === "CREDIT" && (
+            <>
+              <label className="field">
+                <span>Montant min (optionnel)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="1"
+                  placeholder="ex. 0"
+                  value={def.min_amount}
+                  onChange={(e) =>
+                    setDef({ ...def, min_amount: e.target.value })
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Montant max (optionnel)</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="1"
+                  placeholder="ex. 1000000"
+                  value={def.max_amount}
+                  onChange={(e) =>
+                    setDef({ ...def, max_amount: e.target.value })
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>Famille de produits (optionnel)</span>
+                <select
+                  value={def.product_category}
+                  onChange={(e) =>
+                    setDef({
+                      ...def,
+                      product_category: e.target.value,
+                      product: "",
+                    })
+                  }
+                >
+                  <option value="">Toutes les familles</option>
+                  {(categories.data?.results ?? []).map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Produit précis (optionnel)</span>
+                <select
+                  value={def.product}
+                  onChange={(e) =>
+                    setDef({ ...def, product: e.target.value })
+                  }
+                >
+                  <option value="">Tous les produits</option>
+                  {(products.data?.results ?? [])
+                    .filter(
+                      (p) =>
+                        !def.product_category ||
+                        p.category === def.product_category,
+                    )
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </>
+          )}
         </div>
+        <p className="muted small" style={{ marginTop: 8 }}>
+          Critères de sélection : montant seul, produit/famille seul, ou les
+          deux. Laisser vide = circuit générique.
+        </p>
         <button className="btn btn-primary btn-sm" disabled={createDef.isPending}>
           Créer le circuit
         </button>
@@ -389,6 +572,7 @@ export function AdminWorkflowPage() {
                   <th>Code</th>
                   <th>Nom</th>
                   <th>Processus</th>
+                  <th>Critères</th>
                   <th className="num">Étapes</th>
                   <th>Statut</th>
                   <th></th>
@@ -396,7 +580,25 @@ export function AdminWorkflowPage() {
               </thead>
               <tbody>
                 {(defs.data?.results ?? []).map((d) => (
-                  <tr key={d.id}>
+                  <tr
+                    key={d.id}
+                    className="row-clickable"
+                    onClick={() => {
+                      setSelectedId(d.id);
+                      setEditingStepId(null);
+                      setStepError(null);
+                      setStep({
+                        ...EMPTY_STEP,
+                        order: Math.max(1, d.steps.length + 1),
+                      });
+                      setCriteriaDraft({
+                        min_amount: d.min_amount ?? "",
+                        max_amount: d.max_amount ?? "",
+                        product: d.product ?? "",
+                        product_category: d.product_category ?? "",
+                      });
+                    }}
+                  >
                     <td>
                       {d.code} v{d.version}
                     </td>
@@ -405,6 +607,7 @@ export function AdminWorkflowPage() {
                       {WORKFLOW_LABELS.target_type[d.target_type] ||
                         d.target_type}
                     </td>
+                    <td className="small">{criteriaLabel(d)}</td>
                     <td className="num">{d.steps.length}</td>
                     <td>
                       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -431,7 +634,11 @@ export function AdminWorkflowPage() {
                       </div>
                     </td>
                     <td>
-                      <div className="row-actions" style={{ gap: 4 }}>
+                      <div
+                        className="row-actions"
+                        style={{ gap: 4 }}
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <button
                           type="button"
                           className="btn btn-ghost btn-sm"
@@ -517,6 +724,123 @@ export function AdminWorkflowPage() {
                   </span>
                 )}
               </div>
+
+              {selected.target_type === "CREDIT" && (
+                <div
+                  className="card"
+                  style={{
+                    marginBottom: 14,
+                    padding: 12,
+                    background: "var(--surface-2)",
+                  }}
+                >
+                  <strong style={{ display: "block", marginBottom: 8 }}>
+                    Critères de sélection
+                  </strong>
+                  <p className="muted small" style={{ marginTop: 0 }}>
+                    Le dossier prend ce circuit s&apos;il matche la tranche et/ou
+                    le produit. En cas de chevauchement, le circuit le plus
+                    spécifique gagne.
+                  </p>
+                  {circuitEditable(selected) ? (
+                    <form
+                      className="form-grid"
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        updateCriteria.mutate(selected.id);
+                      }}
+                    >
+                      <label className="field">
+                        <span>Montant min</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={criteriaDraft.min_amount}
+                          onChange={(e) =>
+                            setCriteriaDraft({
+                              ...criteriaDraft,
+                              min_amount: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Montant max</span>
+                        <input
+                          type="number"
+                          min={0}
+                          value={criteriaDraft.max_amount}
+                          onChange={(e) =>
+                            setCriteriaDraft({
+                              ...criteriaDraft,
+                              max_amount: e.target.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="field">
+                        <span>Famille</span>
+                        <select
+                          value={criteriaDraft.product_category}
+                          onChange={(e) =>
+                            setCriteriaDraft({
+                              ...criteriaDraft,
+                              product_category: e.target.value,
+                              product: "",
+                            })
+                          }
+                        >
+                          <option value="">Toutes</option>
+                          {(categories.data?.results ?? []).map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Produit</span>
+                        <select
+                          value={criteriaDraft.product}
+                          onChange={(e) =>
+                            setCriteriaDraft({
+                              ...criteriaDraft,
+                              product: e.target.value,
+                            })
+                          }
+                        >
+                          <option value="">Tous</option>
+                          {(products.data?.results ?? [])
+                            .filter(
+                              (p) =>
+                                !criteriaDraft.product_category ||
+                                p.category === criteriaDraft.product_category,
+                            )
+                            .map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.label}
+                              </option>
+                            ))}
+                        </select>
+                      </label>
+                      <div className="field" style={{ alignSelf: "end" }}>
+                        <button
+                          type="submit"
+                          className="btn btn-primary btn-sm"
+                          disabled={updateCriteria.isPending}
+                        >
+                          Enregistrer les critères
+                        </button>
+                      </div>
+                    </form>
+                  ) : (
+                    <p className="small" style={{ margin: 0 }}>
+                      {criteriaLabel(selected)}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <p className="muted small" style={{ marginBottom: 12 }}>
                 Plusieurs étapes avec le <strong>même numéro d&apos;ordre</strong>{" "}
                 s&apos;ouvrent en parallèle ; le circuit avance quand toutes sont

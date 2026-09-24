@@ -12,7 +12,8 @@ from apps.accounts.services import (
     CHARGE_AFFAIRE_ROLE_NAME,
     CHEF_AGENCE_ROLE_NAME,
     COMPTABLE_ROLE_NAME,
-    CREDIT_COMMITTEE_ROLE_NAME,
+    CREDIT_COMMITTEE_FILIALE_ROLE_NAME,
+    CREDIT_COMMITTEE_GROUP_ROLE_NAME,
     LECTEUR_ROLE_NAME,
     RESP_AUDIT_ROLE_NAME,
     RESP_CONTROLE_INTERNE_ROLE_NAME,
@@ -91,9 +92,14 @@ def test_chef_agence_decides_restructure_charge_affaire_proposes(tenant_a):
 
 def test_analyste_and_committee_can_view_collections(tenant_a):
     ensure_default_role_packs(tenant_a)
-    for name in (ANALYSTE_CREDIT_RISQUE_ROLE_NAME, CREDIT_COMMITTEE_ROLE_NAME):
+    for name in (
+        ANALYSTE_CREDIT_RISQUE_ROLE_NAME,
+        CREDIT_COMMITTEE_FILIALE_ROLE_NAME,
+        CREDIT_COMMITTEE_GROUP_ROLE_NAME,
+    ):
         codes = _codes(get_or_create_tenant_role(tenant_a, name)[0])
         assert "collections.view_collectioncase" in codes, name
+        assert "documents.add_document" in codes, name
 
 
 def test_comptable_can_view_guarantees(tenant_a):

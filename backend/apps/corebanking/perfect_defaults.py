@@ -18,6 +18,16 @@ PERFECT_ENDPOINTS = {
     "crd_simple": "gateway-perfect/crd/simple",
     "crd_situation": "gateway-perfect/crd/situation",
     "crd_impayes": "gateway-perfect/crd/impayes",
+    # Référentiels Perfect (GET, Bearer) — { datas: [{ id, code, libelle }] }
+    "ref_devise_list": "gateway-perfect/ref/devise-list",
+    "ref_point_service_list": "gateway-perfect/ref/point-service-list",
+    "ref_type_piece_identite_list": "gateway-perfect/ref/type-piece-identite-list",
+    "ref_gestionnaire_list": "gateway-perfect/ref/gestionnaire-list",
+    "ref_periodicite_list": "gateway-perfect/ref/periodicite-list",
+    "ref_motif_decision_list": "gateway-perfect/ref/motif-decision-list",
+    "ref_object_fin_list": "gateway-perfect/ref/object-fin-list",
+    "ref_source_fin_list": "gateway-perfect/ref/source-fin-list",
+    "ref_profession_list": "gateway-perfect/ref/profession-list",
 }
 
 DEFAULT_AUTH_SCOPE = "perfect"
@@ -73,6 +83,7 @@ def perfect_mapping_rules(*, demo: bool = False) -> dict:
     rules = {
         "provider": "perfect",
         "force_simulate": bool(demo),
+        "verify_ssl": True,
         "endpoints": dict(PERFECT_ENDPOINTS),
         "disbursement": {
             "mode": "LOCAL" if demo else "CBS",

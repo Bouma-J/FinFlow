@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 from apps.accounts.models import User
 from apps.accounts.services import (
     CHARGE_AFFAIRE_ROLE_NAME,
-    CREDIT_COMMITTEE_ROLE_NAME,
+    CREDIT_COMMITTEE_FILIALE_ROLE_NAME,
     ensure_default_role_packs,
     get_or_create_tenant_role,
     validate_sod_role_assignment,
@@ -30,7 +30,7 @@ def test_sod_blocks_charge_affaire_and_committee(tenant_a):
     ensure_default_role_packs(tenant_a)
     with tenant_context(tenant_a.id):
         ca, _ = get_or_create_tenant_role(tenant_a, CHARGE_AFFAIRE_ROLE_NAME)
-        com, _ = get_or_create_tenant_role(tenant_a, CREDIT_COMMITTEE_ROLE_NAME)
+        com, _ = get_or_create_tenant_role(tenant_a, CREDIT_COMMITTEE_FILIALE_ROLE_NAME)
         with pytest.raises(ValueError, match="Séparation des tâches"):
             validate_sod_role_assignment([ca, com])
 

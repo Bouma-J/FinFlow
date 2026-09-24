@@ -312,6 +312,9 @@ class GroupViewSet(TenantContextMixin, viewsets.ModelViewSet):
     search_fields = ["name"]
     lookup_field = "group_id"
     lookup_url_kwarg = "pk"
+    action_perms = {
+        "group_level": ["accounts.view_tenantrole"],
+    }
 
     def get_queryset(self):
         qs = TenantRole.objects.select_related("tenant", "group").prefetch_related(
@@ -327,6 +330,28 @@ class GroupViewSet(TenantContextMixin, viewsets.ModelViewSet):
             else:
                 qs = TenantRole.objects.none()
         return qs
+
+    @action(detail=False, methods=["get"], url_path="group-level")
+    def group_level(self, request):
+        """Rôles transverses Groupe (ex. comité de crédit groupe)."""
+        from apps.accounts.services import (
+            CREDIT_COMMITTEE_GROUP_ROLE_NAME,
+            ensure_group_credit_committee_role,
+        )
+
+        group = ensure_group_credit_committee_role()
+        return Response(
+            [
+                {
+                    "id": group.id,
+                    "group_id": group.id,
+                    "name": CREDIT_COMMITTEE_GROUP_ROLE_NAME,
+                    "tenant": None,
+                    "permissions": [],
+                    "is_group_level_role": True,
+                }
+            ]
+        )
 
     def perform_create(self, serializer):
         if get_current_tenant_id() is None:

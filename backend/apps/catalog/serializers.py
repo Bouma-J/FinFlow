@@ -1,13 +1,19 @@
 from rest_framework import serializers
 
 from .models import (
+    CbsManager,
+    CbsProfession,
     ChecklistItem,
     CreditProduct,
     Currency,
+    DecisionMotif,
+    FinancingObject,
+    FinancingSource,
     LoanPeriodicity,
     ProductCategory,
     RejectReason,
     RepaymentMethod,
+    ServicePoint,
 )
 
 
@@ -57,7 +63,7 @@ class LoanPeriodicitySerializer(serializers.ModelSerializer):
             "id", "code", "label", "description", "cbs_code",
             "periods_per_year", "sort_order", "is_active",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = fields
 
 
 class RepaymentMethodSerializer(serializers.ModelSerializer):
@@ -77,7 +83,67 @@ class CurrencySerializer(serializers.ModelSerializer):
             "id", "code", "label", "description", "cbs_code",
             "sort_order", "is_active",
         ]
-        read_only_fields = ["id"]
+        read_only_fields = fields
+
+
+class FinancingObjectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingObject
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "purpose_type", "sort_order", "is_active",
+        ]
+        read_only_fields = fields
+
+
+class ServicePointSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ServicePoint
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "sort_order", "is_active",
+        ]
+        read_only_fields = fields
+
+
+class CbsManagerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CbsManager
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "sort_order", "is_active",
+        ]
+        read_only_fields = fields
+
+
+class FinancingSourceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = FinancingSource
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "sort_order", "is_active",
+        ]
+        read_only_fields = fields
+
+
+class DecisionMotifSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DecisionMotif
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "sort_order", "is_active",
+        ]
+        read_only_fields = fields
+
+
+class CbsProfessionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CbsProfession
+        fields = [
+            "id", "code", "label", "description", "cbs_code",
+            "sort_order", "is_active",
+        ]
+        read_only_fields = fields
 
 
 class ChecklistItemSerializer(serializers.ModelSerializer):

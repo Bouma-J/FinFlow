@@ -2,6 +2,7 @@
 Envoi des alertes e-mail liées aux circuits d'approbation.
 
 - Étape suivante : utilisateurs du rôle de l'étape qui vient d'être ouverte.
+  Pour le rôle Chef d'agence : limité à l'agence du dossier (sinon toute la filiale).
 - Fin de circuit : initiateur + tous les intervenants ayant agi.
 """
 from __future__ import annotations
@@ -11,6 +12,7 @@ import logging
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from django.utils.html import escape
 
@@ -193,9 +195,49 @@ def _describe_target(instance) -> dict:
     }
 
 
-def _users_for_group(group, tenant_id):
-    from django.db.models import Q
+def _group_role_name(group) -> str:
+    if group is None:
+        return ""
+    role = getattr(group, "tenant_role", None)
+    if role is not None and getattr(role, "name", None):
+        return str(role.name)
+    return str(getattr(group, "name", "") or "")
 
+
+def _group_is_chef_agence(group) -> bool:
+    from apps.accounts.services import CHEF_AGENCE_ROLE_NAME
+
+    return _group_role_name(group) == CHEF_AGENCE_ROLE_NAME
+
+
+def _target_agency_id(instance):
+    """Agence métier du dossier / processus (crédits, ML, dation, formalisation)."""
+    target = getattr(instance, "target", None)
+    if target is None:
+        return None
+    agency_id = getattr(target, "agency_id", None)
+    if agency_id:
+        return agency_id
+    application = getattr(target, "application", None)
+    if application is not None:
+        return getattr(application, "agency_id", None)
+    guarantee = getattr(target, "guarantee", None)
+    if guarantee is not None:
+        agency_id = getattr(guarantee, "agency_id", None)
+        if agency_id:
+            return agency_id
+        app = getattr(guarantee, "application", None)
+        if app is not None:
+            return getattr(app, "agency_id", None)
+    return None
+
+
+def _users_for_group(group, tenant_id, *, agency_id=None):
+    """Membres du rôle (+ délégataires). Optionnellement restreints à une agence.
+
+    Si ``agency_id`` est fourni mais qu'aucun membre n'y est rattaché, repli
+    sur l'ensemble du rôle filiale (évite un dossier sans alerte).
+    """
     from apps.accounts.models import Delegation
 
     if group is None:
@@ -206,6 +248,20 @@ def _users_for_group(group, tenant_id):
     ).exclude(email="")
     if tenant_id:
         qs = qs.filter(Q(tenant_id=tenant_id) | Q(is_group_level=True)).distinct()
+
+    if agency_id:
+        scoped = qs.filter(
+            Q(agency_id=agency_id) | Q(agencies=agency_id)
+        ).distinct()
+        if scoped.exists():
+            qs = scoped
+        else:
+            logger.info(
+                "Aucun destinataire du rôle « %s » pour l'agence %s — "
+                "repli sur tous les membres du rôle.",
+                _group_role_name(group) or getattr(group, "name", group),
+                agency_id,
+            )
 
     member_ids = list(qs.values_list("id", flat=True))
     today = timezone.now().date()
@@ -231,6 +287,19 @@ def _users_for_group(group, tenant_id):
     return User.objects.filter(
         Q(pk__in=member_ids) | Q(pk__in=delegates.values_list("id", flat=True))
     ).distinct()
+
+
+def _users_for_step(instance, step):
+    """Destinataires d'une alerte d'étape (agence pour Chef d'agence)."""
+    group = getattr(step, "required_group", None)
+    agency_id = None
+    if _group_is_chef_agence(group):
+        agency_id = _target_agency_id(instance)
+    return _users_for_group(
+        group,
+        getattr(instance, "tenant_id", None),
+        agency_id=agency_id,
+    )
 
 
 def _emails(users) -> list[str]:
@@ -429,7 +498,7 @@ def notify_step_opened(instance, step, task=None):
     if not prefs or not prefs.enabled or not prefs.notify_on_step:
         return None
 
-    users = _users_for_group(step.required_group, tenant.id)
+    users = _users_for_step(instance, step)
     recipients = _emails(users)
     meta = _describe_target(instance)
     subject = _alert_subject(
@@ -635,7 +704,7 @@ def notify_sla_breach(task):
     if not prefs or not prefs.enabled:
         return None
 
-    users = _users_for_group(step.required_group, tenant.id)
+    users = _users_for_step(instance, step)
     recipients = _emails(users)
     meta = _describe_target(instance)
     due = task.due_at.isoformat() if task.due_at else "—"

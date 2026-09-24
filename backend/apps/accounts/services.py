@@ -12,7 +12,12 @@ CHEF_AGENCE_ROLE_NAME = "Chef d'agence"
 RESP_EXPLOITATION_ROLE_NAME = "Responsable exploitation"
 RESP_CREDIT_RISQUE_ROLE_NAME = "Responsable crédit et risque"
 ANALYSTE_CREDIT_RISQUE_ROLE_NAME = "Analyste crédit et risque"
+# Ancien libellé — migré vers CREDIT_COMMITTEE_FILIALE_ROLE_NAME.
 CREDIT_COMMITTEE_ROLE_NAME = "Comité de crédit"
+CREDIT_COMMITTEE_FILIALE_ROLE_NAME = "Comité de crédit filiale"
+CREDIT_COMMITTEE_GROUP_ROLE_NAME = "Comité de crédit groupe"
+# Groupe Django transverse (utilisateurs is_group_level).
+GROUP_CREDIT_COMMITTEE_DJANGO_GROUP = "__ff_group__credit_committee"
 RESP_RETAILS_ROLE_NAME = "Responsable retails"
 DIRECTEUR_GENERAL_ROLE_NAME = "Directeur Général"
 RESP_JURIDIQUE_ROLE_NAME = "Responsable Juridique"
@@ -34,6 +39,15 @@ LECTEUR_ROLE_NAME = "Lecteur"
 LEGACY_BOOTSTRAP_ROLE_NAMES = (
     "Analyste crédit",
     "Responsable agence",
+)
+
+# Alias historiques encore acceptés pour détection d'étape comité / SoD.
+CREDIT_COMMITTEE_ROLE_ALIASES = frozenset(
+    {
+        CREDIT_COMMITTEE_ROLE_NAME,
+        CREDIT_COMMITTEE_FILIALE_ROLE_NAME,
+        CREDIT_COMMITTEE_GROUP_ROLE_NAME,
+    }
 )
 
 # Permissions Django nécessaires pour administrer une filiale
@@ -97,6 +111,15 @@ _VIEW_CATALOG = (
     ("catalog", "view_productcategory"),
     ("catalog", "view_rejectreason"),
     ("catalog", "view_checklistitem"),
+    ("catalog", "view_currency"),
+    ("catalog", "view_loanperiodicity"),
+    ("catalog", "view_repaymentmethod"),
+    ("catalog", "view_financingobject"),
+    ("catalog", "view_servicepoint"),
+    ("catalog", "view_cbsmanager"),
+    ("catalog", "view_financingsource"),
+    ("catalog", "view_decisionmotif"),
+    ("catalog", "view_cbsprofession"),
 )
 
 _VIEW_DOCS = (
@@ -429,6 +452,7 @@ _COMMITTEE_PERMS = (
     *_VIEW_COLLECTIONS,
     *_VIEW_TRANSVERSE,
     *_WRITE_ANALYSIS,
+    ("workflow", "change_approvaltask"),
 )
 
 _DG_PERMS = _READ_METIER
@@ -582,7 +606,8 @@ DEFAULT_ROLE_PACKS = {
     RESP_EXPLOITATION_ROLE_NAME: _RESP_EXPLOITATION_PERMS,
     RESP_CREDIT_RISQUE_ROLE_NAME: _RESP_CREDIT_PERMS,
     ANALYSTE_CREDIT_RISQUE_ROLE_NAME: _ANALYSTE_PERMS,
-    CREDIT_COMMITTEE_ROLE_NAME: _COMMITTEE_PERMS,
+    CREDIT_COMMITTEE_FILIALE_ROLE_NAME: _COMMITTEE_PERMS,
+    CREDIT_COMMITTEE_GROUP_ROLE_NAME: _COMMITTEE_PERMS,
     RESP_RETAILS_ROLE_NAME: _RESP_RETAILS_PERMS,
     DIRECTEUR_GENERAL_ROLE_NAME: _DG_PERMS,
     RESP_JURIDIQUE_ROLE_NAME: _RESP_JURIDIQUE_PERMS,
@@ -643,6 +668,11 @@ def validate_groups_for_tenant(tenant_id, groups):
 
 # SoD dur : paires de rôles métier incompatibles sur le même utilisateur.
 SOD_INCOMPATIBLE_ROLE_PAIRS = (
+    frozenset({CHARGE_AFFAIRE_ROLE_NAME, CREDIT_COMMITTEE_FILIALE_ROLE_NAME}),
+    frozenset({CHARGE_AFFAIRE_ROLE_NAME, CREDIT_COMMITTEE_GROUP_ROLE_NAME}),
+    frozenset({ANALYSTE_CREDIT_RISQUE_ROLE_NAME, CREDIT_COMMITTEE_FILIALE_ROLE_NAME}),
+    frozenset({ANALYSTE_CREDIT_RISQUE_ROLE_NAME, CREDIT_COMMITTEE_GROUP_ROLE_NAME}),
+    # Alias historique « Comité de crédit » encore présent sur certaines bases.
     frozenset({CHARGE_AFFAIRE_ROLE_NAME, CREDIT_COMMITTEE_ROLE_NAME}),
     frozenset({ANALYSTE_CREDIT_RISQUE_ROLE_NAME, CREDIT_COMMITTEE_ROLE_NAME}),
     frozenset({CHARGE_AFFAIRE_ROLE_NAME, DIRECTEUR_GENERAL_ROLE_NAME}),
@@ -749,6 +779,64 @@ def ensure_role_pack(tenant, role_name, spec):
     return group
 
 
+def migrate_legacy_committee_role(tenant):
+    """Renomme « Comité de crédit » → « Comité de crédit filiale » si libre."""
+    from .models import TenantRole
+
+    legacy = TenantRole.objects.filter(
+        tenant=tenant, name=CREDIT_COMMITTEE_ROLE_NAME
+    ).first()
+    if not legacy:
+        return
+    if TenantRole.objects.filter(
+        tenant=tenant, name=CREDIT_COMMITTEE_FILIALE_ROLE_NAME
+    ).exists():
+        # Les deux coexistent : on conserve le nouveau, on retire l'ancien
+        # seulement s'il n'a plus d'utilisateur.
+        if not legacy.group.user_set.exists():
+            group = legacy.group
+            legacy.delete()
+            group.delete()
+        return
+    legacy.name = CREDIT_COMMITTEE_FILIALE_ROLE_NAME
+    legacy.save(update_fields=["name"])
+
+
+def ensure_group_credit_committee_role():
+    """Groupe Django transverse pour le comité de crédit Groupe."""
+    group, _ = Group.objects.get_or_create(name=GROUP_CREDIT_COMMITTEE_DJANGO_GROUP)
+    desired = permissions_from_spec(_COMMITTEE_PERMS)
+    current = set(group.permissions.all())
+    missing = [perm for perm in desired if perm not in current]
+    if missing:
+        group.permissions.add(*missing)
+    return group
+
+
+def committee_role_name_for_group(group) -> str | None:
+    """Libellé métier d'un groupe d'étape (TenantRole ou comité Groupe)."""
+    if group is None:
+        return None
+    if group.name == GROUP_CREDIT_COMMITTEE_DJANGO_GROUP:
+        return CREDIT_COMMITTEE_GROUP_ROLE_NAME
+    tr = getattr(group, "tenant_role", None)
+    if tr is None:
+        from .models import TenantRole
+
+        tr = TenantRole.objects.filter(group_id=group.id).first()
+    return tr.name if tr else None
+
+
+def is_credit_committee_role_name(name: str | None) -> bool:
+    return bool(name) and name in CREDIT_COMMITTEE_ROLE_ALIASES
+
+
+def user_has_group_credit_committee_role(user) -> bool:
+    if not (user and getattr(user, "is_authenticated", False)):
+        return False
+    return user.groups.filter(name=GROUP_CREDIT_COMMITTEE_DJANGO_GROUP).exists()
+
+
 def retire_legacy_bootstrap_roles(tenant):
     """
     Retire les anciens rôles bootstrap s'ils n'ont aucun utilisateur affecté.
@@ -775,21 +863,26 @@ def ensure_default_role_packs(tenant):
 
     - Administrateur filiale : pack complet
     - Rôles métier bootstrap (dont finance / compta / Lecteur) : packs adaptés
+    - Comités de crédit filiale + groupe
     - Anciens rôles (Analyste crédit, Responsable agence) : retirés si inutilisés
     """
+    migrate_legacy_committee_role(tenant)
     ensure_filiale_admin_role(tenant)
     for role_name, spec in DEFAULT_ROLE_PACKS.items():
         ensure_role_pack(tenant, role_name, spec)
+    ensure_group_credit_committee_role()
     retire_legacy_bootstrap_roles(tenant)
     from apps.collections.services import (
         ensure_default_escalation_rules,
         ensure_default_tranches,
         ensure_litigation_document_categories,
     )
+    from apps.documents.category_seed import ensure_committee_document_categories
 
     ensure_default_escalation_rules(tenant)
     ensure_default_tranches(tenant)
     ensure_litigation_document_categories(tenant)
+    ensure_committee_document_categories(tenant)
 
 
 @transaction.atomic
