@@ -6,7 +6,7 @@ import {
   X,
 } from "lucide-react";
 import { useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type { Client, Paginated } from "@/api/types";
