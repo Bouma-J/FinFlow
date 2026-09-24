@@ -1,4 +1,5 @@
 """Dossiers de crédit et cycle de vie associé."""
+import logging
 import math
 from dateutil.relativedelta import relativedelta
 from datetime import timedelta
@@ -7,6 +8,8 @@ from decimal import Decimal
 from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
 from django.utils import timezone
+
+logger = logging.getLogger("finflow.credits")
 
 from apps.common.files import safe_filename
 from apps.common.models import AuthoredModel, TenantScopedModel
@@ -1663,9 +1666,19 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
             score, breakdown = compute_score(self, metrics, th)
             self.internal_score = self._clamp(score, 6, 2)
             self.score_breakdown = breakdown
-        except Exception:
-            # La contre-analyse ne doit jamais bloquer l'enregistrement.
-            pass
+        except Exception as e:
+            # La contre-analyse ne doit jamais bloquer l'enregistrement,
+            # mais on trace l'erreur pour investigation
+            logger.error(
+                f"Échec calcul score analyse {self.pk}: {e}",
+                exc_info=True,
+                extra={
+                    "analysis_id": self.pk,
+                    "application_id": self.application_id,
+                    "tenant_id": self.tenant_id,
+                },
+            )
+            # Continuer la sauvegarde sans score
 
         super().save(*args, **kwargs)
 
