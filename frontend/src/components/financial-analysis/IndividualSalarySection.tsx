@@ -75,13 +75,13 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
   ];
 
   const expensesFields = [
-    { key: 'rent', label: 'Loyer', format: 'money' as const },
-    { key: 'food', label: 'Alimentation', format: 'money' as const },
-    { key: 'transport', label: 'Transport', format: 'money' as const },
-    { key: 'education', label: 'Éducation', format: 'money' as const },
-    { key: 'health', label: 'Santé', format: 'money' as const },
-    { key: 'utilities', label: 'Énergie/Eau', format: 'money' as const },
-    { key: 'other_expenses', label: 'Autres dépenses', format: 'money' as const },
+    { key: 'rent_expense', label: 'Loyer', format: 'money' as const },
+    { key: 'food_expense', label: 'Alimentation', format: 'money' as const },
+    { key: 'transport_expense', label: 'Transport', format: 'money' as const },
+    { key: 'education_expense', label: 'Éducation', format: 'money' as const },
+    { key: 'health_expense', label: 'Santé', format: 'money' as const },
+    { key: 'utilities_expense', label: 'Énergie/Eau', format: 'money' as const },
+    { key: 'other_household_expenses', label: 'Autres dépenses', format: 'money' as const },
   ];
 
   const periodLabels = Array.from({ length: periods }, (_, i) => `Mois ${i + 1}`);
@@ -276,8 +276,8 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
                 type="number"
                 step="0.01"
                 min="0"
-                value={data.rent || ''}
-                onChange={(e) => onChange({ rent: parseFloat(e.target.value) || 0 })}
+                value={data.rent_expense || ''}
+                onChange={(e) => onChange({ rent_expense: parseFloat(e.target.value) || 0 })}
                 disabled={disabled}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 placeholder="Montant moyen"
@@ -291,8 +291,8 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
                 type="number"
                 step="0.01"
                 min="0"
-                value={data.food || ''}
-                onChange={(e) => onChange({ food: parseFloat(e.target.value) || 0 })}
+                value={data.food_expense || ''}
+                onChange={(e) => onChange({ food_expense: parseFloat(e.target.value) || 0 })}
                 disabled={disabled}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 placeholder="Montant moyen"
@@ -306,8 +306,8 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
                 type="number"
                 step="0.01"
                 min="0"
-                value={data.transport || ''}
-                onChange={(e) => onChange({ transport: parseFloat(e.target.value) || 0 })}
+                value={data.transport_expense || ''}
+                onChange={(e) => onChange({ transport_expense: parseFloat(e.target.value) || 0 })}
                 disabled={disabled}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 placeholder="Montant moyen"
@@ -321,8 +321,8 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
                 type="number"
                 step="0.01"
                 min="0"
-                value={data.education || ''}
-                onChange={(e) => onChange({ education: parseFloat(e.target.value) || 0 })}
+                value={data.education_expense || ''}
+                onChange={(e) => onChange({ education_expense: parseFloat(e.target.value) || 0 })}
                 disabled={disabled}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 placeholder="Montant moyen"
@@ -336,8 +336,8 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
                 type="number"
                 step="0.01"
                 min="0"
-                value={data.health || ''}
-                onChange={(e) => onChange({ health: parseFloat(e.target.value) || 0 })}
+                value={data.health_expense || ''}
+                onChange={(e) => onChange({ health_expense: parseFloat(e.target.value) || 0 })}
                 disabled={disabled}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 placeholder="Montant moyen"
@@ -351,8 +351,8 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
                 type="number"
                 step="0.01"
                 min="0"
-                value={data.utilities || ''}
-                onChange={(e) => onChange({ utilities: parseFloat(e.target.value) || 0 })}
+                value={data.utilities_expense || ''}
+                onChange={(e) => onChange({ utilities_expense: parseFloat(e.target.value) || 0 })}
                 disabled={disabled}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 placeholder="Montant moyen"
@@ -366,8 +366,8 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
                 type="number"
                 step="0.01"
                 min="0"
-                value={data.other_expenses || ''}
-                onChange={(e) => onChange({ other_expenses: parseFloat(e.target.value) || 0 })}
+                value={data.other_household_expenses || ''}
+                onChange={(e) => onChange({ other_household_expenses: parseFloat(e.target.value) || 0 })}
                 disabled={disabled}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
                 placeholder="Montant moyen"
@@ -398,7 +398,7 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
           <div>
             <span className="text-gray-600">Dépenses totales:</span>
             <span className="ml-2 font-medium text-gray-900">
-              {((data.rent || 0) + (data.food || 0) + (data.transport || 0) + (data.education || 0) + (data.health || 0) + (data.utilities || 0) + (data.other_expenses || 0)).toFixed(2)}
+              {((data.rent_expense || 0) + (data.food_expense || 0) + (data.transport_expense || 0) + (data.education_expense || 0) + (data.health_expense || 0) + (data.utilities_expense || 0) + (data.other_household_expenses || 0)).toFixed(2)}
             </span>
           </div>
           <div>
@@ -406,7 +406,7 @@ export const IndividualSalarySection: React.FC<IndividualSalarySectionProps> = (
             <span className="ml-2 font-bold text-green-700">
               {(
                 ((data.salary_income || 0) + (data.spouse_income || 0) + (data.other_income || 0) + (data.rental_income || 0)) -
-                ((data.rent || 0) + (data.food || 0) + (data.transport || 0) + (data.education || 0) + (data.health || 0) + (data.utilities || 0) + (data.other_expenses || 0))
+                ((data.rent_expense || 0) + (data.food_expense || 0) + (data.transport_expense || 0) + (data.education_expense || 0) + (data.health_expense || 0) + (data.utilities_expense || 0) + (data.other_household_expenses || 0))
               ).toFixed(2)}
             </span>
           </div>

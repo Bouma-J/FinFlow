@@ -1080,13 +1080,6 @@ export interface FinancialAnalysis {
   group_structure?: string | null;
   member_count?: number | null;
   // NEW: Detailed financial fields (more user-friendly names)
-  rent?: string | null;
-  food?: string | null;
-  transport?: string | null;
-  education?: string | null;
-  health?: string | null;
-  utilities?: string | null;
-  other_expenses?: string | null;
   pension_income?: string | null;
   investment_income?: string | null;
   cost_of_goods_sold?: string | null;
@@ -1180,26 +1173,26 @@ export interface FinancialAnalysis {
   other_activity_income: string;
   other_income: string;
   // Particulier — charges
-  rent_expense: string;
-  food_expense: string;
-  utilities_expense: string;
-  transport_expense: string;
-  education_expense: string;
-  health_expense: string;
-  other_household_expenses: string;
+  rent_expense?: string | null;
+  food_expense?: string | null;
+  utilities_expense?: string | null;
+  transport_expense?: string | null;
+  education_expense?: string | null;
+  health_expense?: string | null;
+  other_household_expenses?: string | null;
   // Entreprise — exploitation
-  turnover: string;
-  cogs: string;
-  op_rent: string;
-  op_salaries: string;
-  op_utilities: string;
-  op_transport: string;
-  op_telecom: string;
-  op_taxes: string;
-  op_maintenance: string;
-  op_other: string;
-  depreciation: string;
-  financial_charges: string;
+  turnover?: string | null;
+  cogs?: string | null;
+  op_rent?: string | null;
+  op_salaries?: string | null;
+  op_utilities?: string | null;
+  op_transport?: string | null;
+  op_telecom?: string | null;
+  op_taxes?: string | null;
+  op_maintenance?: string | null;
+  op_other?: string | null;
+  depreciation?: string | null;
+  financial_charges?: string | null;
   // Entreprise — bilan
   stock_value: string;
   receivables: string;

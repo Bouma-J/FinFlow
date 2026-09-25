@@ -191,17 +191,28 @@ export interface FinancialAnalysis {
   total_income?: number;
   
   // Dépenses (synthétiques ou calculées automatiquement si mode DETAILED)
-  rent?: number;
-  food?: number;
-  transport?: number;
-  education?: number;
-  health?: number;
-  utilities?: number;
-  other_expenses?: number;
+  rent_expense?: number;
+  food_expense?: number;
+  transport_expense?: number;
+  education_expense?: number;
+  health_expense?: number;
+  utilities_expense?: number;
+  other_household_expenses?: number;
   total_expenses?: number;
   
   // Exploitation (entreprises) - synthétiques ou calculés automatiquement si mode DETAILED
   turnover?: number;
+  cogs?: number;
+  op_rent?: number;
+  op_salaries?: number;
+  op_utilities?: number;
+  op_transport?: number;
+  op_telecom?: number;
+  op_taxes?: number;
+  op_maintenance?: number;
+  op_other?: number;
+  depreciation?: number;
+  financial_charges?: number;
   cost_of_goods_sold?: number;
   gross_margin?: number;
   operating_expenses?: number;

@@ -161,26 +161,26 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
                 <DetailedTable
                   periods={detailedData.expenses_detail}
                   fields={[
-                    { key: 'rent', label: 'Loyer' },
-                    { key: 'food', label: 'Alimentation' },
-                    { key: 'transport', label: 'Transport' },
-                    { key: 'education', label: 'Éducation' },
-                    { key: 'health', label: 'Santé' },
-                    { key: 'utilities', label: 'Énergie/Eau' },
-                    { key: 'other_expenses', label: 'Autres dépenses' },
+                    { key: 'rent_expense', label: 'Loyer' },
+                    { key: 'food_expense', label: 'Alimentation' },
+                    { key: 'transport_expense', label: 'Transport' },
+                    { key: 'education_expense', label: 'Éducation' },
+                    { key: 'health_expense', label: 'Santé' },
+                    { key: 'utilities_expense', label: 'Énergie/Eau' },
+                    { key: 'other_household_expenses', label: 'Autres dépenses' },
                   ]}
                   currency={currency}
                 />
               ) : (
                 <Table>
                   <tbody>
-                    <TableRow label="Loyer moyen" value={formatMoney(analysis.rent)} />
-                    <TableRow label="Alimentation moyenne" value={formatMoney(analysis.food)} />
-                    <TableRow label="Transport moyen" value={formatMoney(analysis.transport)} />
-                    <TableRow label="Éducation moyenne" value={formatMoney(analysis.education)} />
-                    <TableRow label="Santé moyenne" value={formatMoney(analysis.health)} />
-                    <TableRow label="Énergie/Eau moyenne" value={formatMoney(analysis.utilities)} />
-                    <TableRow label="Autres dépenses moyennes" value={formatMoney(analysis.other_expenses)} />
+                    <TableRow label="Loyer moyen" value={formatMoney(analysis.rent_expense)} />
+                    <TableRow label="Alimentation moyenne" value={formatMoney(analysis.food_expense)} />
+                    <TableRow label="Transport moyen" value={formatMoney(analysis.transport_expense)} />
+                    <TableRow label="Éducation moyenne" value={formatMoney(analysis.education_expense)} />
+                    <TableRow label="Santé moyenne" value={formatMoney(analysis.health_expense)} />
+                    <TableRow label="Énergie/Eau moyenne" value={formatMoney(analysis.utilities_expense)} />
+                    <TableRow label="Autres dépenses moyennes" value={formatMoney(analysis.other_household_expenses)} />
                     <TableRow 
                       label="Total charges" 
                       value={formatMoney(analysis.total_household_charges)} 
@@ -200,11 +200,15 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
                   periods={detailedData.exploitation_detail}
                   fields={[
                     { key: 'turnover', label: 'Chiffre d\'affaires' },
-                    { key: 'purchases', label: 'Achats' },
-                    { key: 'inventory_start', label: 'Stock début' },
-                    { key: 'inventory_end', label: 'Stock fin' },
-                    { key: 'operating_expenses', label: 'Charges exploitation' },
-                    { key: 'staff_costs', label: 'Charges personnel' },
+                    { key: 'cogs', label: 'Coût biens vendus' },
+                    { key: 'op_rent', label: 'Loyer professionnel' },
+                    { key: 'op_salaries', label: 'Salaires' },
+                    { key: 'op_utilities', label: 'Énergie/Eau' },
+                    { key: 'op_transport', label: 'Transport' },
+                    { key: 'op_telecom', label: 'Télécom' },
+                    { key: 'op_taxes', label: 'Taxes' },
+                    { key: 'op_maintenance', label: 'Maintenance' },
+                    { key: 'op_other', label: 'Autres charges' },
                   ]}
                   currency={currency}
                 />
@@ -212,12 +216,15 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
                 <Table>
                   <tbody>
                     <TableRow label="Chiffre d'affaires moyen" value={formatMoney(analysis.turnover)} />
-                    <TableRow label="Coût des biens vendus" value={formatMoney(analysis.cost_of_goods_sold)} />
-                    <TableRow label="Achats moyens" value={formatMoney(analysis.purchases)} />
-                    <TableRow label="Stock initial moyen" value={formatMoney(analysis.inventory_start)} />
-                    <TableRow label="Stock final moyen" value={formatMoney(analysis.inventory_end)} />
-                    <TableRow label="Charges d'exploitation" value={formatMoney(analysis.operating_expenses)} />
-                    <TableRow label="Charges de personnel" value={formatMoney(analysis.staff_costs)} />
+                    <TableRow label="Coût des biens vendus" value={formatMoney(analysis.cogs)} />
+                    <TableRow label="Loyer professionnel" value={formatMoney(analysis.op_rent)} />
+                    <TableRow label="Salaires" value={formatMoney(analysis.op_salaries)} />
+                    <TableRow label="Énergie/Eau" value={formatMoney(analysis.op_utilities)} />
+                    <TableRow label="Transport" value={formatMoney(analysis.op_transport)} />
+                    <TableRow label="Télécom" value={formatMoney(analysis.op_telecom)} />
+                    <TableRow label="Taxes" value={formatMoney(analysis.op_taxes)} />
+                    <TableRow label="Maintenance" value={formatMoney(analysis.op_maintenance)} />
+                    <TableRow label="Autres charges" value={formatMoney(analysis.op_other)} />
                     <TableRow 
                       label="Marge brute" 
                       value={formatMoney(analysis.gross_margin)} 

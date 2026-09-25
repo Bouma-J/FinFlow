@@ -69,11 +69,15 @@ export const CorporateSection: React.FC<CorporateSectionProps> = ({
 
   const exploitationFields = [
     { key: 'turnover', label: 'Chiffre d\'affaires', format: 'money' as const },
-    { key: 'purchases', label: 'Achats', format: 'money' as const },
-    { key: 'inventory_start', label: 'Stock début', format: 'money' as const },
-    { key: 'inventory_end', label: 'Stock fin', format: 'money' as const },
-    { key: 'operating_expenses', label: 'Charges exploitation', format: 'money' as const },
-    { key: 'staff_costs', label: 'Charges personnel', format: 'money' as const },
+    { key: 'cogs', label: 'Coût biens vendus', format: 'money' as const },
+    { key: 'op_rent', label: 'Loyer professionnel', format: 'money' as const },
+    { key: 'op_salaries', label: 'Salaires', format: 'money' as const },
+    { key: 'op_utilities', label: 'Énergie/Eau', format: 'money' as const },
+    { key: 'op_transport', label: 'Transport', format: 'money' as const },
+    { key: 'op_telecom', label: 'Télécom', format: 'money' as const },
+    { key: 'op_taxes', label: 'Taxes', format: 'money' as const },
+    { key: 'op_maintenance', label: 'Maintenance', format: 'money' as const },
+    { key: 'op_other', label: 'Autres charges', format: 'money' as const },
   ];
 
   const bankingFields = [
@@ -323,32 +327,122 @@ export const CorporateSection: React.FC<CorporateSectionProps> = ({
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Charges d'exploitation moyennes
+                    Loyer professionnel moyen
                   </label>
                   <input
                     type="number"
                     step="0.01"
                     min="0"
-                    value={data.operating_expenses || ''}
-                    onChange={(e) => onChange({ operating_expenses: parseFloat(e.target.value) || 0 })}
+                    value={data.op_rent || ''}
+                    onChange={(e) => onChange({ op_rent: parseFloat(e.target.value) || 0 })}
                     disabled={disabled}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                    placeholder="Loyer, énergie, fournitures..."
+                    placeholder="Loyer professionnel"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Charges de personnel moyennes
+                    Salaires moyens
                   </label>
                   <input
                     type="number"
                     step="0.01"
                     min="0"
-                    value={data.staff_costs || ''}
-                    onChange={(e) => onChange({ staff_costs: parseFloat(e.target.value) || 0 })}
+                    value={data.op_salaries || ''}
+                    onChange={(e) => onChange({ op_salaries: parseFloat(e.target.value) || 0 })}
                     disabled={disabled}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
-                    placeholder="Salaires, charges sociales..."
+                    placeholder="Salaires"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Énergie/Eau moyenne
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={data.op_utilities || ''}
+                    onChange={(e) => onChange({ op_utilities: parseFloat(e.target.value) || 0 })}
+                    disabled={disabled}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                    placeholder="Énergie/Eau"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Transport moyen
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={data.op_transport || ''}
+                    onChange={(e) => onChange({ op_transport: parseFloat(e.target.value) || 0 })}
+                    disabled={disabled}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                    placeholder="Transport"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Télécom moyen
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={data.op_telecom || ''}
+                    onChange={(e) => onChange({ op_telecom: parseFloat(e.target.value) || 0 })}
+                    disabled={disabled}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                    placeholder="Télécom"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Taxes moyennes
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={data.op_taxes || ''}
+                    onChange={(e) => onChange({ op_taxes: parseFloat(e.target.value) || 0 })}
+                    disabled={disabled}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                    placeholder="Taxes"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Maintenance moyenne
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={data.op_maintenance || ''}
+                    onChange={(e) => onChange({ op_maintenance: parseFloat(e.target.value) || 0 })}
+                    disabled={disabled}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                    placeholder="Maintenance"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Autres charges moyennes
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={data.op_other || ''}
+                    onChange={(e) => onChange({ op_other: parseFloat(e.target.value) || 0 })}
+                    disabled={disabled}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500 disabled:bg-gray-100"
+                    placeholder="Autres charges"
                   />
                 </div>
               </div>
