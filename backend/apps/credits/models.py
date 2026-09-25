@@ -14,6 +14,7 @@ logger = logging.getLogger("finflow.credits")
 from apps.common.files import safe_filename
 from apps.common.models import AuthoredModel, TenantScopedModel
 from apps.common.tenancy import get_current_tenant_id
+from .validators import validate_detailed_data
 
 # Import des modèles de workflow de validation pour opérations sensibles
 # Importé en fin de fichier pour éviter les dépendances circulaires
@@ -931,7 +932,12 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
         "données détaillées",
         default=dict,
         blank=True,
-        help_text="Structure JSON pour les analyses détaillées (revenus, charges, exploitation par période)"
+        validators=[validate_detailed_data],
+        help_text=(
+            "Structure JSON pour les analyses détaillées (revenus, charges, exploitation par période). "
+            "Clés autorisées: income_detail, expenses_detail, exploitation_detail, banking_detail, collective_detail. "
+            "Chaque clé contient une liste de périodes avec des champs numériques."
+        )
     )
 
     # ------------------------------------------------------------------ #

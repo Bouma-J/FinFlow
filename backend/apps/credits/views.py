@@ -709,6 +709,170 @@ class FinancialAnalysisViewSet(TenantScopedViewSet):
         self._assert_mutable(instance)
         super().perform_destroy(instance)
 
+    @action(detail=True, methods=['post'], url_path='convert-to-detailed')
+    def convert_to_detailed(self, request, pk=None):
+        """
+        Convertit une analyse SYNTHETIC en DETAILED.
+        
+        Répartit uniformément les valeurs moyennes sur toutes les périodes.
+        Le nombre de périodes est déterminé par banking_observation_period_months.
+        """
+        from rest_framework.response import Response
+        from rest_framework import status
+        
+        instance = self.get_object()
+        self._assert_mutable(instance)
+        
+        if instance.analysis_mode == 'DETAILED':
+            return Response(
+                {"detail": "Cette analyse est déjà en mode DETAILED."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Nombre de périodes
+        nb_periods = instance.banking_observation_period_months or 3
+        
+        # Créer les données détaillées à partir des moyennes
+        detailed_data = {}
+        
+        # Revenus (INDIVIDUAL)
+        if instance.client_type in ['INDIVIDUAL', 'PHYSIQUE']:
+            income_detail = []
+            for i in range(nb_periods):
+                period = {"period_label": f"Mois {i + 1}"}
+                if instance.salary_income:
+                    period["salary_income"] = float(instance.salary_income)
+                if instance.spouse_income:
+                    period["spouse_income"] = float(instance.spouse_income)
+                if instance.rental_income:
+                    period["rental_income"] = float(instance.rental_income)
+                if instance.other_activity_income:
+                    period["other_activity_income"] = float(instance.other_activity_income)
+                if instance.other_income:
+                    period["other_income"] = float(instance.other_income)
+                income_detail.append(period)
+            
+            if income_detail:
+                detailed_data["income_detail"] = income_detail
+            
+            # Dépenses
+            expenses_detail = []
+            for i in range(nb_periods):
+                period = {"period_label": f"Mois {i + 1}"}
+                if instance.rent_expense:
+                    period["rent_expense"] = float(instance.rent_expense)
+                if instance.food_expense:
+                    period["food_expense"] = float(instance.food_expense)
+                if instance.utilities_expense:
+                    period["utilities_expense"] = float(instance.utilities_expense)
+                if instance.transport_expense:
+                    period["transport_expense"] = float(instance.transport_expense)
+                if instance.education_expense:
+                    period["education_expense"] = float(instance.education_expense)
+                if instance.health_expense:
+                    period["health_expense"] = float(instance.health_expense)
+                if instance.other_household_expenses:
+                    period["other_household_expenses"] = float(instance.other_household_expenses)
+                expenses_detail.append(period)
+            
+            if expenses_detail:
+                detailed_data["expenses_detail"] = expenses_detail
+        
+        # Exploitation (CORPORATE)
+        if instance.client_type in ['CORPORATE', 'MORALE', 'ENTREPRISE']:
+            exploitation_detail = []
+            for i in range(nb_periods):
+                period = {"period_label": f"Mois {i + 1}"}
+                if instance.turnover:
+                    period["turnover"] = float(instance.turnover)
+                if instance.cogs:
+                    period["cogs"] = float(instance.cogs)
+                if instance.op_rent:
+                    period["op_rent"] = float(instance.op_rent)
+                if instance.op_salaries:
+                    period["op_salaries"] = float(instance.op_salaries)
+                if instance.op_utilities:
+                    period["op_utilities"] = float(instance.op_utilities)
+                if instance.op_transport:
+                    period["op_transport"] = float(instance.op_transport)
+                if instance.op_telecom:
+                    period["op_telecom"] = float(instance.op_telecom)
+                if instance.op_taxes:
+                    period["op_taxes"] = float(instance.op_taxes)
+                if instance.op_maintenance:
+                    period["op_maintenance"] = float(instance.op_maintenance)
+                if instance.op_other:
+                    period["op_other"] = float(instance.op_other)
+                exploitation_detail.append(period)
+            
+            if exploitation_detail:
+                detailed_data["exploitation_detail"] = exploitation_detail
+        
+        # Groupement (GROUP)
+        if instance.client_type in ['GROUP', 'PROFESSIONAL', 'GROUPEMENT']:
+            collective_detail = []
+            for i in range(nb_periods):
+                period = {"period_label": f"Mois {i + 1}"}
+                if instance.collective_contributions:
+                    period["contributions"] = float(instance.collective_contributions)
+                if instance.collective_savings:
+                    period["collective_savings"] = float(instance.collective_savings)
+                # solidarity_fund n'existe pas encore dans le modèle, on skip
+                collective_detail.append(period)
+            
+            if collective_detail:
+                detailed_data["collective_detail"] = collective_detail
+        
+        # Mouvements bancaires (tous types)
+        banking_detail = []
+        for i in range(nb_periods):
+            period = {"period_label": f"Mois {i + 1}"}
+            if instance.avg_monthly_credit_movements:
+                period["credit_movements"] = float(instance.avg_monthly_credit_movements)
+            if instance.avg_monthly_debit_movements:
+                period["debit_movements"] = float(instance.avg_monthly_debit_movements)
+            banking_detail.append(period)
+        
+        if banking_detail:
+            detailed_data["banking_detail"] = banking_detail
+        
+        # Sauvegarder
+        instance.analysis_mode = 'DETAILED'
+        instance.detailed_data = detailed_data
+        instance.save()
+        
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
+    @action(detail=True, methods=['post'], url_path='convert-to-synthetic')
+    def convert_to_synthetic(self, request, pk=None):
+        """
+        Convertit une analyse DETAILED en SYNTHETIC.
+        
+        Les moyennes sont calculées automatiquement par la méthode save() du modèle
+        via _compute_synthetic_from_detailed().
+        """
+        from rest_framework.response import Response
+        from rest_framework import status
+        
+        instance = self.get_object()
+        self._assert_mutable(instance)
+        
+        if instance.analysis_mode == 'SYNTHETIC':
+            return Response(
+                {"detail": "Cette analyse est déjà en mode SYNTHETIC."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Passer en mode SYNTHETIC
+        # La méthode save() du modèle calculera automatiquement les moyennes
+        # via _compute_synthetic_from_detailed()
+        instance.analysis_mode = 'SYNTHETIC'
+        instance.save()  # Ceci déclenche le calcul automatique
+        
+        serializer = self.get_serializer(instance)
+        return Response(serializer.data)
+
 
 class AnalysisThresholdViewSet(TenantScopedViewSet):
     """Seuils normatifs d'analyse, paramétrables par filiale."""

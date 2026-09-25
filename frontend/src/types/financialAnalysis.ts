@@ -7,44 +7,70 @@ export type AnalysisMode = 'SYNTHETIC' | 'DETAILED';
 export type ClientType = 'INDIVIDUAL' | 'CORPORATE' | 'GROUP';
 
 /**
- * Structure des données détaillées par période pour les revenus
+ * Structure des données détaillées par période pour les revenus (INDIVIDUAL)
  */
 export interface IncomePeriod {
   period_label?: string;
+  
+  // Revenus salariés
   salary_income?: number;
-  other_income?: number;
   spouse_income?: number;
   rental_income?: number;
-  pension_income?: number;
-  investment_income?: number;
+  other_activity_income?: number;
+  other_income?: number;
+  
+  // Activité génératrice de revenu (AGR)
+  activity_turnover?: number;
+  activity_expenses?: number;
 }
 
 /**
- * Structure des données détaillées par période pour les dépenses
+ * Structure des données détaillées par période pour les dépenses (INDIVIDUAL)
  */
 export interface ExpensesPeriod {
   period_label?: string;
-  rent?: number;
-  food?: number;
-  transport?: number;
-  education?: number;
-  health?: number;
-  utilities?: number;
-  other_expenses?: number;
+  
+  // Dépenses ménage
+  rent_expense?: number;
+  food_expense?: number;
+  utilities_expense?: number;
+  transport_expense?: number;
+  education_expense?: number;
+  health_expense?: number;
+  other_household_expenses?: number;
+  
+  // Charges informelles
+  tontine_expense?: number;
+  social_contributions?: number;
+  family_support_expense?: number;
 }
 
 /**
- * Structure des données détaillées par période pour l'exploitation (entreprises)
+ * Structure des données détaillées par période pour l'exploitation (CORPORATE)
  */
 export interface ExploitationPeriod {
   period_label?: string;
+  
+  // Revenus & coûts
   turnover?: number;
-  cost_of_goods_sold?: number;
-  operating_expenses?: number;
-  staff_costs?: number;
-  inventory_start?: number;
-  inventory_end?: number;
-  purchases?: number;
+  cogs?: number;  // cost_of_goods_sold
+  
+  // Charges d'exploitation détaillées
+  op_rent?: number;
+  op_salaries?: number;
+  op_utilities?: number;
+  op_transport?: number;
+  op_telecom?: number;
+  op_taxes?: number;
+  op_maintenance?: number;
+  op_other?: number;
+  
+  // Amortissement & charges financières
+  depreciation?: number;
+  financial_charges?: number;
+  
+  // Stocks
+  stock_value?: number;
 }
 
 /**
@@ -77,6 +103,62 @@ export interface DetailedData {
   banking_detail?: BankingPeriod[];
   collective_detail?: CollectivePeriod[];
 }
+
+/**
+ * Helper functions pour créer des périodes vides
+ */
+export const createEmptyIncomePeriod = (index: number): IncomePeriod => ({
+  period_label: `Période ${index + 1}`,
+  salary_income: 0,
+  spouse_income: 0,
+  rental_income: 0,
+  other_activity_income: 0,
+  other_income: 0,
+});
+
+export const createEmptyExpensesPeriod = (index: number): ExpensesPeriod => ({
+  period_label: `Période ${index + 1}`,
+  rent_expense: 0,
+  food_expense: 0,
+  utilities_expense: 0,
+  transport_expense: 0,
+  education_expense: 0,
+  health_expense: 0,
+  other_household_expenses: 0,
+  tontine_expense: 0,
+  social_contributions: 0,
+  family_support_expense: 0,
+});
+
+export const createEmptyExploitationPeriod = (index: number): ExploitationPeriod => ({
+  period_label: `Période ${index + 1}`,
+  turnover: 0,
+  cogs: 0,
+  op_rent: 0,
+  op_salaries: 0,
+  op_utilities: 0,
+  op_transport: 0,
+  op_telecom: 0,
+  op_taxes: 0,
+  op_maintenance: 0,
+  op_other: 0,
+  depreciation: 0,
+  financial_charges: 0,
+});
+
+export const createEmptyBankingPeriod = (index: number): BankingPeriod => ({
+  period_label: `Période ${index + 1}`,
+  credit_movements: 0,
+  debit_movements: 0,
+  average_balance: 0,
+});
+
+export const createEmptyCollectivePeriod = (index: number): CollectivePeriod => ({
+  period_label: `Période ${index + 1}`,
+  contributions: 0,
+  collective_savings: 0,
+  solidarity_fund: 0,
+});
 
 /**
  * Interface pour l'analyse financière complète
