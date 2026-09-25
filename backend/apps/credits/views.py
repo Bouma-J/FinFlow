@@ -27,6 +27,7 @@ from .models import (
     CreditDocument,
     CreditInstructionPolicy,
     FieldVisit,
+    FieldVisitRule,
     FinancialAnalysis,
     Loan,
     LoanRestructuringRequest,
@@ -38,6 +39,7 @@ from .serializers import (
     CreditApplicationSerializer,
     CreditDocumentSerializer,
     CreditInstructionPolicySerializer,
+    FieldVisitRuleSerializer,
     FieldVisitSerializer,
     FinancialAnalysisSerializer,
     LoanRestructuringRequestSerializer,
@@ -995,6 +997,18 @@ class CreditInstructionPolicyViewSet(TenantContextMixin, viewsets.ViewSet):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
+
+
+class FieldVisitRuleViewSet(TenantScopedViewSet):
+    queryset = FieldVisitRule.objects.all()
+    serializer_class = FieldVisitRuleSerializer
+    permission_classes = [IsAuthenticated, MustChangePasswordGate, HasModelPermission]
+    enforce_model_permissions = True
+    filterset_fields = ["is_active", "client_type", "blocking_stage"]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        return qs.order_by("-priority", "id")
 
 
 class FieldVisitViewSet(TenantScopedViewSet):

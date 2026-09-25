@@ -5,6 +5,7 @@ from .views import (
     CreditApplicationViewSet,
     CreditDocumentViewSet,
     CreditInstructionPolicyViewSet,
+    FieldVisitRuleViewSet,
     FieldVisitViewSet,
     FinancialAnalysisViewSet,
     LoanRestructuringRequestViewSet,
@@ -26,6 +27,7 @@ router.register(
     CreditInstructionPolicyViewSet,
     basename="credit-instruction-policy",
 )
+router.register("field-visit-rules", FieldVisitRuleViewSet, basename="field-visit-rule")
 router.register("field-visits", FieldVisitViewSet, basename="field-visit")
 router.register("loans", LoanViewSet, basename="loan")
 router.register(

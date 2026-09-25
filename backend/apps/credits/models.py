@@ -1877,6 +1877,106 @@ class FinancialDocument(TenantScopedModel):
         return self.label or f"Document {self.pk}"
 
 
+class FieldVisitRule(TenantScopedModel):
+    """Règle conditionnelle pour obliger une visite terrain selon le profil client et montant."""
+
+    class BlockingStage(models.TextChoices):
+        SUBMIT = "SUBMIT", "À la soumission"
+        OPINION = "OPINION", "À la saisie de l'avis"
+        APPROVAL = "APPROVAL", "À l'approbation"
+
+    name = models.CharField(
+        "nom de la règle",
+        max_length=255,
+        help_text="Ex. 'Particulier indépendant 0-100K : visite par chargé de compte'",
+    )
+    is_active = models.BooleanField("règle active", default=True)
+    priority = models.IntegerField(
+        "priorité",
+        default=0,
+        help_text="Ordre d'application (plus élevé = prioritaire). Utile si plusieurs règles s'appliquent.",
+    )
+
+    client_type = models.CharField(
+        "type de client",
+        max_length=50,
+        blank=True,
+        help_text="INDIVIDUAL, CORPORATE, PROFESSIONAL. Vide = tous types.",
+    )
+    individual_profile = models.CharField(
+        "profil particulier",
+        max_length=50,
+        blank=True,
+        help_text="SALARIE, INDEPENDANT, RETRAITE, etc. Vide = tous profils.",
+    )
+    amount_min = models.DecimalField(
+        "montant minimum",
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Montant minimum du crédit pour cette règle. Vide = pas de minimum.",
+    )
+    amount_max = models.DecimalField(
+        "montant maximum",
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Montant maximum du crédit pour cette règle. Vide = pas de maximum.",
+    )
+
+    required_role = models.CharField(
+        "rôle requis pour la visite",
+        max_length=150,
+        help_text="Ex. CHARGE_COMPTE, RESP_EXPLOITATION, DIRECTEUR. Le visiteur doit avoir ce rôle.",
+    )
+    blocking_stage = models.CharField(
+        "étape de blocage",
+        max_length=20,
+        choices=BlockingStage.choices,
+        default=BlockingStage.SUBMIT,
+        help_text="À quelle étape bloquer si la visite n'est pas faite.",
+    )
+
+    class Meta:
+        verbose_name = "règle de visite terrain"
+        verbose_name_plural = "règles de visite terrain"
+        ordering = ["-priority", "id"]
+
+    def __str__(self):
+        return self.name
+
+    def matches(self, application) -> bool:
+        """Vérifie si cette règle s'applique à un dossier donné."""
+        if not self.is_active:
+            return False
+
+        client = application.client
+        if not client:
+            return False
+
+        if self.client_type and client.client_type != self.client_type:
+            return False
+
+        if self.individual_profile:
+            individual_profile = getattr(client, "individual_profile", None)
+            if individual_profile != self.individual_profile:
+                return False
+
+        amount = application.amount_requested
+        if amount is None:
+            return False
+
+        if self.amount_min is not None and amount < self.amount_min:
+            return False
+
+        if self.amount_max is not None and amount > self.amount_max:
+            return False
+
+        return True
+
+
 class FieldVisit(TenantScopedModel):
     """Compte rendu de visite terrain."""
 
@@ -1905,6 +2005,13 @@ class FieldVisit(TenantScopedModel):
         help_text="Ex. 5.359952, -4.008256 (collé depuis Maps).",
     )
     report = models.TextField("compte rendu", blank=True)
+    
+    photos = models.JSONField(
+        "photos de la visite",
+        default=list,
+        blank=True,
+        help_text="Liste des IDs de documents (photos) liés à cette visite.",
+    )
 
     class Meta:
         verbose_name = "visite terrain"

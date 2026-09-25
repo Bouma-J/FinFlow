@@ -13,6 +13,7 @@ from .models import (
     CreditDocument,
     CreditInstructionPolicy,
     FieldVisit,
+    FieldVisitRule,
     FinancialAnalysis,
     FinancialDocument,
     Installment,
@@ -326,6 +327,23 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
         return analysis
 
 
+class FieldVisitRuleSerializer(serializers.ModelSerializer):
+    blocking_stage_display = serializers.CharField(
+        source="get_blocking_stage_display", read_only=True
+    )
+
+    class Meta:
+        model = FieldVisitRule
+        fields = [
+            "id", "name", "is_active", "priority",
+            "client_type", "individual_profile",
+            "amount_min", "amount_max",
+            "required_role", "blocking_stage", "blocking_stage_display",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
 class FieldVisitSerializer(serializers.ModelSerializer):
     visited_by_display = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
@@ -351,7 +369,7 @@ class FieldVisitSerializer(serializers.ModelSerializer):
         fields = [
             "id", "application", "visit_date", "visited_by",
             "visited_by_display", "visitor_role", "can_edit",
-            "geo_coordinates", "report", "created_at",
+            "geo_coordinates", "report", "photos", "created_at",
         ]
         read_only_fields = [
             "id", "visited_by", "visited_by_display", "visitor_role",

@@ -7,6 +7,7 @@ from .models import (
     CreditInstructionPolicy,
     CreditRenewalPolicy,
     FieldVisit,
+    FieldVisitRule,
     FinancialAnalysis,
     Installment,
     Loan,
@@ -58,6 +59,18 @@ class LoanAdmin(admin.ModelAdmin):
     ]
     list_filter = ["status", "tenant"]
     inlines = [InstallmentInline]
+
+
+@admin.register(FieldVisitRule)
+class FieldVisitRuleAdmin(admin.ModelAdmin):
+    list_display = [
+        "name", "is_active", "priority", "client_type", 
+        "amount_min", "amount_max", "required_role", 
+        "blocking_stage", "tenant"
+    ]
+    list_filter = ["tenant", "is_active", "client_type", "blocking_stage"]
+    search_fields = ["name", "required_role"]
+    ordering = ["-priority", "id"]
 
 
 @admin.register(FieldVisit)
