@@ -163,7 +163,7 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
     bfr = serializers.ReadOnlyField()
     gross_margin_pct = serializers.ReadOnlyField()
     net_margin_pct = serializers.ReadOnlyField()
-    dependents_count = serializers.ReadOnlyField()
+    # dependents_count is now a regular field (moved from read-only)
     disposable_per_capita = serializers.ReadOnlyField()
     projected_monthly_surplus = serializers.ReadOnlyField()
     collective_capacity = serializers.ReadOnlyField()
@@ -179,6 +179,13 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
             "client_type", "client_type_source",
             "individual_profile",
             "reference_period", "analysis_date",
+            # NEW: Analysis mode and detailed data
+            "analysis_mode", "detailed_data", "banking_observation_period_months",
+            # NEW: Context fields (moved from CreditApplication)
+            "employer_name", "contract_type", "dependents_count", "premises_status",
+            "tax_regime", "avg_client_payment_days", "avg_supplier_payment_days",
+            "clientele", "catchment_area",
+            "avg_monthly_credit_movements", "avg_monthly_debit_movements",
             # Particulier
             "salary_income", "spouse_income", "rental_income",
             "other_activity_income", "other_income",
