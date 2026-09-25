@@ -29,6 +29,8 @@ from .models import (
     FieldVisit,
     FinancialAnalysis,
     Loan,
+    LoanRestructuringRequest,
+    LoanWriteOffRequest,
 )
 from .serializers import (
     AnalysisThresholdSerializer,
@@ -38,7 +40,9 @@ from .serializers import (
     CreditInstructionPolicySerializer,
     FieldVisitSerializer,
     FinancialAnalysisSerializer,
+    LoanRestructuringRequestSerializer,
     LoanSerializer,
+    LoanWriteOffRequestSerializer,
     SimulationSerializer,
 )
 from .services import (
@@ -998,3 +1002,254 @@ class LoanViewSet(TenantScopedReadOnlyViewSet):
             raise ValidationError({"detail": str(exc)}) from exc
         loan.refresh_from_db()
         return Response(LoanSerializer(loan, context={"request": request}).data)
+
+
+# ============================================================================
+# ViewSets pour les opérations sensibles sur prêts (Second Regard)
+# ============================================================================
+
+
+class LoanWriteOffRequestViewSet(TenantScopedViewSet):
+    """ViewSet pour les demandes de passage en perte (Write-off)."""
+
+    queryset = LoanWriteOffRequest.objects.select_related(
+        "loan",
+        "loan__application",
+        "loan__application__client",
+        "created_by",
+        "reviewed_by",
+        "executed_by",
+    ).all()
+    serializer_class = LoanWriteOffRequestSerializer
+    permission_classes = [IsAuthenticated, MustChangePasswordGate, HasModelPermission]
+    enforce_model_permissions = True
+    filterset_fields = ["status", "loan", "reason"]
+    search_fields = [
+        "loan__application__reference",
+        "loan__application__client__reference",
+        "loan__application__client__last_name",
+        "loan__application__client__company_name",
+    ]
+    ordering_fields = ["created_at", "reviewed_at", "executed_at", "outstanding_balance"]
+    ordering = ["-created_at"]
+
+    def perform_create(self, serializer):
+        """Créer une demande de write-off."""
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve_request(self, request, pk=None):
+        """Approuver une demande de write-off."""
+        obj = self.get_object()
+
+        if not request.user.has_perm("credits.approve_writeoff"):
+            raise PermissionDenied("Vous n'avez pas la permission d'approuver les write-offs.")
+
+        if obj.created_by_id == request.user.id:
+            raise PermissionDenied(
+                "Vous ne pouvez pas approuver votre propre demande (principe de séparation des pouvoirs)."
+            )
+
+        comment = request.data.get("comment", "")
+        try:
+            obj.approve(request.user, comment)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            self.get_serializer(obj).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject_request(self, request, pk=None):
+        """Rejeter une demande de write-off."""
+        obj = self.get_object()
+
+        if not request.user.has_perm("credits.approve_writeoff"):
+            raise PermissionDenied("Vous n'avez pas la permission de rejeter les write-offs.")
+
+        if obj.created_by_id == request.user.id:
+            raise PermissionDenied(
+                "Vous ne pouvez pas rejeter votre propre demande (principe de séparation des pouvoirs)."
+            )
+
+        comment = request.data.get("comment", "")
+        if not comment:
+            raise ValidationError({"comment": "Un commentaire est obligatoire pour rejeter une demande."})
+
+        try:
+            obj.reject(request.user, comment)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            self.get_serializer(obj).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="execute")
+    def execute_request(self, request, pk=None):
+        """Exécuter un write-off approuvé."""
+        obj = self.get_object()
+
+        if not request.user.has_perm("credits.execute_writeoff"):
+            raise PermissionDenied("Vous n'avez pas la permission d'exécuter les write-offs.")
+
+        try:
+            loan = obj.execute(request.user)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            {
+                "request": self.get_serializer(obj).data,
+                "loan": LoanSerializer(loan, context={"request": request}).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel_request(self, request, pk=None):
+        """Annuler une demande de write-off (par le demandeur)."""
+        obj = self.get_object()
+
+        if obj.created_by_id != request.user.id:
+            raise PermissionDenied("Seul le demandeur peut annuler sa propre demande.")
+
+        reason = request.data.get("reason", "")
+        try:
+            obj.cancel(request.user, reason)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            self.get_serializer(obj).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class LoanRestructuringRequestViewSet(TenantScopedViewSet):
+    """ViewSet pour les demandes de restructuration de crédit."""
+
+    queryset = LoanRestructuringRequest.objects.select_related(
+        "loan",
+        "loan__application",
+        "loan__application__client",
+        "created_by",
+        "reviewed_by",
+        "executed_by",
+    ).all()
+    serializer_class = LoanRestructuringRequestSerializer
+    permission_classes = [IsAuthenticated, MustChangePasswordGate, HasModelPermission]
+    enforce_model_permissions = True
+    filterset_fields = ["status", "loan", "reason"]
+    search_fields = [
+        "loan__application__reference",
+        "loan__application__client__reference",
+        "loan__application__client__last_name",
+        "loan__application__client__company_name",
+    ]
+    ordering_fields = [
+        "created_at",
+        "reviewed_at",
+        "executed_at",
+        "current_outstanding_balance",
+        "new_duration_months",
+    ]
+    ordering = ["-created_at"]
+
+    def perform_create(self, serializer):
+        """Créer une demande de restructuration."""
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=["post"], url_path="approve")
+    def approve_request(self, request, pk=None):
+        """Approuver une demande de restructuration."""
+        obj = self.get_object()
+
+        if not request.user.has_perm("credits.approve_restructuring"):
+            raise PermissionDenied("Vous n'avez pas la permission d'approuver les restructurations.")
+
+        if obj.created_by_id == request.user.id:
+            raise PermissionDenied(
+                "Vous ne pouvez pas approuver votre propre demande (principe de séparation des pouvoirs)."
+            )
+
+        comment = request.data.get("comment", "")
+        try:
+            obj.approve(request.user, comment)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            self.get_serializer(obj).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="reject")
+    def reject_request(self, request, pk=None):
+        """Rejeter une demande de restructuration."""
+        obj = self.get_object()
+
+        if not request.user.has_perm("credits.approve_restructuring"):
+            raise PermissionDenied("Vous n'avez pas la permission de rejeter les restructurations.")
+
+        if obj.created_by_id == request.user.id:
+            raise PermissionDenied(
+                "Vous ne pouvez pas rejeter votre propre demande (principe de séparation des pouvoirs)."
+            )
+
+        comment = request.data.get("comment", "")
+        if not comment:
+            raise ValidationError({"comment": "Un commentaire est obligatoire pour rejeter une demande."})
+
+        try:
+            obj.reject(request.user, comment)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            self.get_serializer(obj).data,
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="execute")
+    def execute_request(self, request, pk=None):
+        """Exécuter une restructuration approuvée."""
+        obj = self.get_object()
+
+        if not request.user.has_perm("credits.execute_restructuring"):
+            raise PermissionDenied("Vous n'avez pas la permission d'exécuter les restructurations.")
+
+        try:
+            loan = obj.execute(request.user)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            {
+                "request": self.get_serializer(obj).data,
+                "loan": LoanSerializer(loan, context={"request": request}).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    @action(detail=True, methods=["post"], url_path="cancel")
+    def cancel_request(self, request, pk=None):
+        """Annuler une demande de restructuration (par le demandeur)."""
+        obj = self.get_object()
+
+        if obj.created_by_id != request.user.id:
+            raise PermissionDenied("Seul le demandeur peut annuler sa propre demande.")
+
+        reason = request.data.get("reason", "")
+        try:
+            obj.cancel(request.user, reason)
+        except ValueError as e:
+            raise ValidationError({"detail": str(e)}) from e
+
+        return Response(
+            self.get_serializer(obj).data,
+            status=status.HTTP_200_OK,
+        )

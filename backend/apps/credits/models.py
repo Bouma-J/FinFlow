@@ -15,6 +15,9 @@ from apps.common.files import safe_filename
 from apps.common.models import AuthoredModel, TenantScopedModel
 from apps.common.tenancy import get_current_tenant_id
 
+# Import des modèles de workflow de validation pour opérations sensibles
+# Importé en fin de fichier pour éviter les dépendances circulaires
+
 
 def credit_file_path(instance, filename):
     """Chemin de stockage des pièces jointes d'un dossier (lettre, photos)."""
@@ -1856,3 +1859,11 @@ class Installment(TenantScopedModel):
     @property
     def balance(self):
         return self.total_due - self.amount_paid
+
+
+# Import des modèles de workflow de validation pour opérations sensibles (à la fin pour éviter imports circulaires)
+from .loan_operations import (  # noqa: E402
+    LoanOperationRequest,
+    LoanRestructuringRequest,
+    LoanWriteOffRequest,
+)

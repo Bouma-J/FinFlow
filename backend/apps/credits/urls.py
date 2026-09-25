@@ -7,7 +7,9 @@ from .views import (
     CreditInstructionPolicyViewSet,
     FieldVisitViewSet,
     FinancialAnalysisViewSet,
+    LoanRestructuringRequestViewSet,
     LoanViewSet,
+    LoanWriteOffRequestViewSet,
 )
 
 router = DefaultRouter()
@@ -22,5 +24,15 @@ router.register(
 )
 router.register("field-visits", FieldVisitViewSet, basename="field-visit")
 router.register("loans", LoanViewSet, basename="loan")
+router.register(
+    "loan-writeoff-requests",
+    LoanWriteOffRequestViewSet,
+    basename="loan-writeoff-request",
+)
+router.register(
+    "loan-restructuring-requests",
+    LoanRestructuringRequestViewSet,
+    basename="loan-restructuring-request",
+)
 
 urlpatterns = router.urls

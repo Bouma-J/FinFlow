@@ -17,6 +17,8 @@ from .models import (
     FinancialDocument,
     Installment,
     Loan,
+    LoanRestructuringRequest,
+    LoanWriteOffRequest,
     StockPhoto,
 )
 
@@ -985,3 +987,233 @@ class SimulationSerializer(serializers.Serializer):
                 }
             )
         return attrs
+
+
+# ============================================================================
+# Serializers pour les opérations sensibles sur prêts (Second Regard)
+# ============================================================================
+
+
+class LoanWriteOffRequestSerializer(serializers.ModelSerializer):
+    """Serializer pour les demandes de passage en perte."""
+
+    created_by_display = serializers.SerializerMethodField()
+    reviewed_by_display = serializers.SerializerMethodField()
+    executed_by_display = serializers.SerializerMethodField()
+    loan_display = serializers.SerializerMethodField()
+    can_approve = serializers.SerializerMethodField()
+    can_reject = serializers.SerializerMethodField()
+    can_execute = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LoanWriteOffRequest
+        fields = [
+            "id",
+            "loan",
+            "loan_display",
+            "status",
+            "reason",
+            "outstanding_balance",
+            "days_past_due",
+            "recovery_attempts",
+            "guarantees_status",
+            "accounting_provision_rate",
+            "justification",
+            "created_by",
+            "created_by_display",
+            "created_at",
+            "reviewed_by",
+            "reviewed_by_display",
+            "reviewed_at",
+            "review_comment",
+            "executed_by",
+            "executed_by_display",
+            "executed_at",
+            "can_approve",
+            "can_reject",
+            "can_execute",
+            "can_cancel",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_at",
+            "reviewed_by",
+            "reviewed_at",
+            "executed_by",
+            "executed_at",
+        ]
+
+    def get_created_by_display(self, obj):
+        return str(obj.created_by) if obj.created_by else ""
+
+    def get_reviewed_by_display(self, obj):
+        return str(obj.reviewed_by) if obj.reviewed_by else ""
+
+    def get_executed_by_display(self, obj):
+        return str(obj.executed_by) if obj.executed_by else ""
+
+    def get_loan_display(self, obj):
+        if not obj.loan:
+            return ""
+        loan = obj.loan
+        app = loan.application
+        client_name = str(app.client) if app and app.client else "N/A"
+        return f"{app.reference if app else 'N/A'} — {client_name}"
+
+    def get_can_approve(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_approved()
+            and user.has_perm("credits.approve_writeoff")
+            and obj.created_by_id != user.id  # Séparation des pouvoirs
+        )
+
+    def get_can_reject(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_rejected()
+            and user.has_perm("credits.approve_writeoff")
+            and obj.created_by_id != user.id
+        )
+
+    def get_can_execute(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.can_be_executed() and user.has_perm("credits.execute_writeoff")
+
+    def get_can_cancel(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.status in ("PENDING", "APPROVED") and obj.created_by_id == user.id
+
+
+class LoanRestructuringRequestSerializer(serializers.ModelSerializer):
+    """Serializer pour les demandes de restructuration."""
+
+    created_by_display = serializers.SerializerMethodField()
+    reviewed_by_display = serializers.SerializerMethodField()
+    executed_by_display = serializers.SerializerMethodField()
+    loan_display = serializers.SerializerMethodField()
+    can_approve = serializers.SerializerMethodField()
+    can_reject = serializers.SerializerMethodField()
+    can_execute = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LoanRestructuringRequest
+        fields = [
+            "id",
+            "loan",
+            "loan_display",
+            "status",
+            "reason",
+            "current_outstanding_balance",
+            "current_monthly_installment",
+            "current_remaining_months",
+            "current_days_past_due",
+            "new_duration_months",
+            "new_interest_rate",
+            "grace_period_months",
+            "capitalize_arrears",
+            "arrears_amount",
+            "new_monthly_installment",
+            "additional_interest_cost",
+            "client_revised_income",
+            "client_revised_expenses",
+            "revised_debt_ratio",
+            "guarantees_maintained",
+            "guarantees_comment",
+            "special_conditions",
+            "previous_restructuring_count",
+            "justification",
+            "created_by",
+            "created_by_display",
+            "created_at",
+            "reviewed_by",
+            "reviewed_by_display",
+            "reviewed_at",
+            "review_comment",
+            "executed_by",
+            "executed_by_display",
+            "executed_at",
+            "can_approve",
+            "can_reject",
+            "can_execute",
+            "can_cancel",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_at",
+            "reviewed_by",
+            "reviewed_at",
+            "executed_by",
+            "executed_at",
+            "new_monthly_installment",
+            "additional_interest_cost",
+        ]
+
+    def get_created_by_display(self, obj):
+        return str(obj.created_by) if obj.created_by else ""
+
+    def get_reviewed_by_display(self, obj):
+        return str(obj.reviewed_by) if obj.reviewed_by else ""
+
+    def get_executed_by_display(self, obj):
+        return str(obj.executed_by) if obj.executed_by else ""
+
+    def get_loan_display(self, obj):
+        if not obj.loan:
+            return ""
+        loan = obj.loan
+        app = loan.application
+        client_name = str(app.client) if app and app.client else "N/A"
+        return f"{app.reference if app else 'N/A'} — {client_name}"
+
+    def get_can_approve(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_approved()
+            and user.has_perm("credits.approve_restructuring")
+            and obj.created_by_id != user.id  # Séparation des pouvoirs
+        )
+
+    def get_can_reject(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_rejected()
+            and user.has_perm("credits.approve_restructuring")
+            and obj.created_by_id != user.id
+        )
+
+    def get_can_execute(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.can_be_executed() and user.has_perm("credits.execute_restructuring")
+
+    def get_can_cancel(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.status in ("PENDING", "APPROVED") and obj.created_by_id == user.id
