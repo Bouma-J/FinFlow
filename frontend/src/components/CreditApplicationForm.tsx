@@ -43,6 +43,7 @@ import {
   ClientAutocomplete,
   clientOptionLabel,
 } from "@/components/ClientAutocomplete";
+import { ClientRenewalEligibilityAlert } from "@/components/ClientRenewalEligibilityAlert";
 import { useAuth } from "@/auth/AuthContext";
 
 const PERIODICITY_FALLBACK = [
@@ -777,6 +778,14 @@ export function CreditApplicationForm({
               profil (particulier, groupement ou entreprise).
             </p>
           )}
+          
+          {/* Alerte historique client */}
+          {client && (
+            <div className="mt-4">
+              <ClientRenewalEligibilityAlert clientId={typeof client === 'number' ? client : parseInt(client, 10)} />
+            </div>
+          )}
+          
           {showTypedSections && (
             <div
               className={`profile-banner ${isLegalEntity ? "corp" : "indiv"}`}

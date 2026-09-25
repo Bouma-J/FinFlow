@@ -87,6 +87,7 @@ import {
 import { PermLink } from "@/components/PermLink";
 import { ApprovalConditionsCard } from "@/components/ApprovalConditionsCard";
 import { CollateralSummaryCard } from "@/components/CollateralSummaryCard";
+import { ComparisonSummaryWidget } from "@/components/ComparisonSummaryWidget";
 import { DecisionPanel } from "@/components/DecisionPanel";
 import { RenewGuaranteesPanel } from "@/components/RenewGuaranteesPanel";
 import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
@@ -2777,6 +2778,9 @@ export function CreditApplicationDetailPage() {
 
         <SectionCollapseContext.Provider value={collapseCtx}>
         <div className="credit-form-main stack">
+          {/* Widget de comparaison avec l'historique */}
+          <ComparisonSummaryWidget applicationId={app.id} />
+
           {myTask && (
             <ViewSection
               id="sec-decision"
