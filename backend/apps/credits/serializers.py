@@ -13,10 +13,13 @@ from .models import (
     CreditDocument,
     CreditInstructionPolicy,
     FieldVisit,
+    FieldVisitRule,
     FinancialAnalysis,
     FinancialDocument,
     Installment,
     Loan,
+    LoanRestructuringRequest,
+    LoanWriteOffRequest,
     StockPhoto,
 )
 
@@ -161,7 +164,7 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
     bfr = serializers.ReadOnlyField()
     gross_margin_pct = serializers.ReadOnlyField()
     net_margin_pct = serializers.ReadOnlyField()
-    dependents_count = serializers.ReadOnlyField()
+    # dependents_count is now a regular field (moved from read-only)
     disposable_per_capita = serializers.ReadOnlyField()
     projected_monthly_surplus = serializers.ReadOnlyField()
     collective_capacity = serializers.ReadOnlyField()
@@ -177,6 +180,13 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
             "client_type", "client_type_source",
             "individual_profile",
             "reference_period", "analysis_date",
+            # NEW: Analysis mode and detailed data
+            "analysis_mode", "detailed_data", "banking_observation_period_months",
+            # NEW: Context fields (moved from CreditApplication)
+            "employer_name", "contract_type", "dependents_count", "premises_status",
+            "tax_regime", "avg_client_payment_days", "avg_supplier_payment_days",
+            "clientele", "catchment_area",
+            "avg_monthly_credit_movements", "avg_monthly_debit_movements",
             # Particulier
             "salary_income", "spouse_income", "rental_income",
             "other_activity_income", "other_income",
@@ -317,6 +327,23 @@ class FinancialAnalysisSerializer(serializers.ModelSerializer):
         return analysis
 
 
+class FieldVisitRuleSerializer(serializers.ModelSerializer):
+    blocking_stage_display = serializers.CharField(
+        source="get_blocking_stage_display", read_only=True
+    )
+
+    class Meta:
+        model = FieldVisitRule
+        fields = [
+            "id", "name", "is_active", "priority",
+            "client_type", "individual_profile",
+            "amount_min", "amount_max",
+            "required_role", "blocking_stage", "blocking_stage_display",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = ["id", "created_at", "updated_at"]
+
+
 class FieldVisitSerializer(serializers.ModelSerializer):
     visited_by_display = serializers.SerializerMethodField()
     can_edit = serializers.SerializerMethodField()
@@ -342,7 +369,7 @@ class FieldVisitSerializer(serializers.ModelSerializer):
         fields = [
             "id", "application", "visit_date", "visited_by",
             "visited_by_display", "visitor_role", "can_edit",
-            "geo_coordinates", "report", "created_at",
+            "geo_coordinates", "report", "photos", "created_at",
         ]
         read_only_fields = [
             "id", "visited_by", "visited_by_display", "visitor_role",
@@ -985,3 +1012,233 @@ class SimulationSerializer(serializers.Serializer):
                 }
             )
         return attrs
+
+
+# ============================================================================
+# Serializers pour les opérations sensibles sur prêts (Second Regard)
+# ============================================================================
+
+
+class LoanWriteOffRequestSerializer(serializers.ModelSerializer):
+    """Serializer pour les demandes de passage en perte."""
+
+    created_by_display = serializers.SerializerMethodField()
+    reviewed_by_display = serializers.SerializerMethodField()
+    executed_by_display = serializers.SerializerMethodField()
+    loan_display = serializers.SerializerMethodField()
+    can_approve = serializers.SerializerMethodField()
+    can_reject = serializers.SerializerMethodField()
+    can_execute = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LoanWriteOffRequest
+        fields = [
+            "id",
+            "loan",
+            "loan_display",
+            "status",
+            "reason",
+            "outstanding_balance",
+            "days_past_due",
+            "recovery_attempts",
+            "guarantees_status",
+            "accounting_provision_rate",
+            "justification",
+            "created_by",
+            "created_by_display",
+            "created_at",
+            "reviewed_by",
+            "reviewed_by_display",
+            "reviewed_at",
+            "review_comment",
+            "executed_by",
+            "executed_by_display",
+            "executed_at",
+            "can_approve",
+            "can_reject",
+            "can_execute",
+            "can_cancel",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_at",
+            "reviewed_by",
+            "reviewed_at",
+            "executed_by",
+            "executed_at",
+        ]
+
+    def get_created_by_display(self, obj):
+        return str(obj.created_by) if obj.created_by else ""
+
+    def get_reviewed_by_display(self, obj):
+        return str(obj.reviewed_by) if obj.reviewed_by else ""
+
+    def get_executed_by_display(self, obj):
+        return str(obj.executed_by) if obj.executed_by else ""
+
+    def get_loan_display(self, obj):
+        if not obj.loan:
+            return ""
+        loan = obj.loan
+        app = loan.application
+        client_name = str(app.client) if app and app.client else "N/A"
+        return f"{app.reference if app else 'N/A'} — {client_name}"
+
+    def get_can_approve(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_approved()
+            and user.has_perm("credits.approve_writeoff")
+            and obj.created_by_id != user.id  # Séparation des pouvoirs
+        )
+
+    def get_can_reject(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_rejected()
+            and user.has_perm("credits.approve_writeoff")
+            and obj.created_by_id != user.id
+        )
+
+    def get_can_execute(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.can_be_executed() and user.has_perm("credits.execute_writeoff")
+
+    def get_can_cancel(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.status in ("PENDING", "APPROVED") and obj.created_by_id == user.id
+
+
+class LoanRestructuringRequestSerializer(serializers.ModelSerializer):
+    """Serializer pour les demandes de restructuration."""
+
+    created_by_display = serializers.SerializerMethodField()
+    reviewed_by_display = serializers.SerializerMethodField()
+    executed_by_display = serializers.SerializerMethodField()
+    loan_display = serializers.SerializerMethodField()
+    can_approve = serializers.SerializerMethodField()
+    can_reject = serializers.SerializerMethodField()
+    can_execute = serializers.SerializerMethodField()
+    can_cancel = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LoanRestructuringRequest
+        fields = [
+            "id",
+            "loan",
+            "loan_display",
+            "status",
+            "reason",
+            "current_outstanding_balance",
+            "current_monthly_installment",
+            "current_remaining_months",
+            "current_days_past_due",
+            "new_duration_months",
+            "new_interest_rate",
+            "grace_period_months",
+            "capitalize_arrears",
+            "arrears_amount",
+            "new_monthly_installment",
+            "additional_interest_cost",
+            "client_revised_income",
+            "client_revised_expenses",
+            "revised_debt_ratio",
+            "guarantees_maintained",
+            "guarantees_comment",
+            "special_conditions",
+            "previous_restructuring_count",
+            "justification",
+            "created_by",
+            "created_by_display",
+            "created_at",
+            "reviewed_by",
+            "reviewed_by_display",
+            "reviewed_at",
+            "review_comment",
+            "executed_by",
+            "executed_by_display",
+            "executed_at",
+            "can_approve",
+            "can_reject",
+            "can_execute",
+            "can_cancel",
+        ]
+        read_only_fields = [
+            "id",
+            "created_by",
+            "created_at",
+            "reviewed_by",
+            "reviewed_at",
+            "executed_by",
+            "executed_at",
+            "new_monthly_installment",
+            "additional_interest_cost",
+        ]
+
+    def get_created_by_display(self, obj):
+        return str(obj.created_by) if obj.created_by else ""
+
+    def get_reviewed_by_display(self, obj):
+        return str(obj.reviewed_by) if obj.reviewed_by else ""
+
+    def get_executed_by_display(self, obj):
+        return str(obj.executed_by) if obj.executed_by else ""
+
+    def get_loan_display(self, obj):
+        if not obj.loan:
+            return ""
+        loan = obj.loan
+        app = loan.application
+        client_name = str(app.client) if app and app.client else "N/A"
+        return f"{app.reference if app else 'N/A'} — {client_name}"
+
+    def get_can_approve(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_approved()
+            and user.has_perm("credits.approve_restructuring")
+            and obj.created_by_id != user.id  # Séparation des pouvoirs
+        )
+
+    def get_can_reject(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return (
+            obj.can_be_rejected()
+            and user.has_perm("credits.approve_restructuring")
+            and obj.created_by_id != user.id
+        )
+
+    def get_can_execute(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.can_be_executed() and user.has_perm("credits.execute_restructuring")
+
+    def get_can_cancel(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user.is_authenticated:
+            return False
+        user = request.user
+        return obj.status in ("PENDING", "APPROVED") and obj.created_by_id == user.id

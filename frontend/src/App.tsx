@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import {
@@ -42,69 +43,99 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AdminRoute } from "@/components/AdminRoute";
 import { PermissionRoute } from "@/components/PermissionRoute";
 import { Layout } from "@/components/Layout";
-import { AuditPage } from "@/pages/AuditPage";
-import { ClientDetailPage } from "@/pages/ClientDetailPage";
-import { ClientEditPage } from "@/pages/ClientEditPage";
-import { ClientsPage } from "@/pages/ClientsPage";
-import { CreditApplicationDetailPage } from "@/pages/CreditApplicationDetailPage";
-import { CreditApplicationEditPage } from "@/pages/CreditApplicationEditPage";
-import { FinancialAnalysisPage } from "@/pages/FinancialAnalysisPage";
-import { CreditApplicationNewPage } from "@/pages/CreditApplicationNewPage";
-import { CreditApplicationsPage } from "@/pages/CreditApplicationsPage";
+import { Spinner } from "@/components/ui";
+
+// Pages critiques chargées immédiatement (first paint)
 import { DashboardPage } from "@/pages/DashboardPage";
-import { DocumentsPage } from "@/pages/DocumentsPage";
-import { GroupConsolidationPage } from "@/pages/GroupConsolidationPage";
-import { GuaranteeAddPage } from "@/pages/GuaranteeAddPage";
-import { LoansPage } from "@/pages/LoansPage";
-import { GuaranteeDetailPage } from "@/pages/GuaranteeDetailPage";
-import { GuaranteeEditPage } from "@/pages/GuaranteeEditPage";
-import { GuaranteesPage } from "@/pages/GuaranteesPage";
-import {
-  GuaranteeReleaseDetailPage,
-  GuaranteeReleaseNewPage,
-  GuaranteeReleasesPage,
-} from "@/pages/GuaranteeReleasesPage";
-import {
-  DationDetailPage,
-  DationNewPage,
-  DationsPage,
-} from "@/pages/DationsPage";
-import {
-  FormalizationDetailPage,
-  FormalizationNewPage,
-  FormalizationsPage,
-} from "@/pages/FormalizationsPage";
-import { CollectionsPage } from "@/pages/CollectionsPage";
-import { AfterSalesHubPage } from "@/pages/AfterSalesHubPage";
-import { CollectionCaseDetailPage } from "@/pages/CollectionCaseDetailPage";
-import { LegalPartiesPage } from "@/pages/admin/LegalPartiesPage";
-import { LitigationDetailPage } from "@/pages/LitigationDetailPage";
-import { SuretyEngagementAddPage } from "@/pages/SuretyEngagementAddPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ForceChangePasswordPage } from "@/pages/ForceChangePasswordPage";
-import { ProfilePage } from "@/pages/ProfilePage";
-import { ProductsPage } from "@/pages/ProductsPage";
-import { SimulatorPage } from "@/pages/SimulatorPage";
-import { SuretiesPage } from "@/pages/SuretiesPage";
-import { SuretyDetailPage } from "@/pages/SuretyDetailPage";
-import { SuretyEditPage } from "@/pages/SuretyEditPage";
-import { TasksPage } from "@/pages/TasksPage";
-import { AdminAgenciesPage } from "@/pages/admin/AgenciesPage";
-import { AdminTenantsPage } from "@/pages/admin/TenantsPage";
-import { AdminBusinessReferentialsPage } from "@/pages/admin/BusinessReferentialsPage";
-import { AdminConnectorsPage } from "@/pages/admin/ConnectorsPage";
-import { AdminContractsPage } from "@/pages/admin/ContractsAdminPage";
-import { AdminNotificationsPage } from "@/pages/admin/NotificationsPage";
-import { AdminCollectionEscalationRulesPage } from "@/pages/admin/CollectionEscalationRulesPage";
-import { AdminCollectionTranchesPage } from "@/pages/admin/CollectionTranchesPage";
-import { AdminCreditPolicyPage } from "@/pages/admin/CreditPolicyPage";
-import { AdminDelegationsPage } from "@/pages/admin/DelegationsPage";
-import { AdminProductsPage } from "@/pages/admin/ProductsAdminPage";
-import { AdminCbsReferentialsPage } from "@/pages/admin/CbsReferentialsPage";
-import { AdminCbsSituationProbePage } from "@/pages/admin/CbsSituationProbePage";
-import { AdminRolesPage } from "@/pages/admin/RolesPage";
-import { AdminUsersPage } from "@/pages/admin/UsersPage";
-import { AdminWorkflowPage } from "@/pages/admin/WorkflowPage";
+
+// Fallback loading pour lazy pages
+function PageLoadingFallback() {
+  return (
+    <div className="loading-screen">
+      <Spinner />
+      <p className="text-muted" style={{ marginTop: "1rem" }}>
+        Chargement...
+      </p>
+    </div>
+  );
+}
+
+// Pages principales - lazy loaded
+const ClientsPage = lazy(() => import("@/pages/ClientsPage").then(m => ({ default: m.ClientsPage })));
+const ClientDetailPage = lazy(() => import("@/pages/ClientDetailPage").then(m => ({ default: m.ClientDetailPage })));
+const ClientEditPage = lazy(() => import("@/pages/ClientEditPage").then(m => ({ default: m.ClientEditPage })));
+
+const CreditApplicationsPage = lazy(() => import("@/pages/CreditApplicationsPage").then(m => ({ default: m.CreditApplicationsPage })));
+const CreditApplicationNewPage = lazy(() => import("@/pages/CreditApplicationNewPage").then(m => ({ default: m.CreditApplicationNewPage })));
+const CreditApplicationDetailPage = lazy(() => import("@/pages/CreditApplicationDetailPage").then(m => ({ default: m.CreditApplicationDetailPage })));
+const CreditApplicationEditPage = lazy(() => import("@/pages/CreditApplicationEditPage").then(m => ({ default: m.CreditApplicationEditPage })));
+const FinancialAnalysisPage = lazy(() => import("@/pages/FinancialAnalysisPage").then(m => ({ default: m.FinancialAnalysisPage })));
+const LoansPage = lazy(() => import("@/pages/LoansPage").then(m => ({ default: m.LoansPage })));
+const LoanWriteOffRequestsPage = lazy(() => import("@/pages/LoanWriteOffRequestsPage").then(m => ({ default: m.LoanWriteOffRequestsPage })));
+const LoanRestructuringRequestsPage = lazy(() => import("@/pages/LoanRestructuringRequestsPage").then(m => ({ default: m.LoanRestructuringRequestsPage })));
+const CreditHistoryComparisonPage = lazy(() => import("@/pages/CreditHistoryComparisonPage").then(m => ({ default: m.CreditHistoryComparisonPage })));
+
+const GuaranteesPage = lazy(() => import("@/pages/GuaranteesPage").then(m => ({ default: m.GuaranteesPage })));
+const GuaranteeDetailPage = lazy(() => import("@/pages/GuaranteeDetailPage").then(m => ({ default: m.GuaranteeDetailPage })));
+const GuaranteeEditPage = lazy(() => import("@/pages/GuaranteeEditPage").then(m => ({ default: m.GuaranteeEditPage })));
+const GuaranteeAddPage = lazy(() => import("@/pages/GuaranteeAddPage").then(m => ({ default: m.GuaranteeAddPage })));
+
+// Pages après-vente - lazy loaded (pages lourdes)
+const GuaranteeReleasesPage = lazy(() => import("@/pages/GuaranteeReleasesPage").then(m => ({ default: m.GuaranteeReleasesPage })));
+const GuaranteeReleaseNewPage = lazy(() => import("@/pages/GuaranteeReleasesPage").then(m => ({ default: m.GuaranteeReleaseNewPage })));
+const GuaranteeReleaseDetailPage = lazy(() => import("@/pages/GuaranteeReleasesPage").then(m => ({ default: m.GuaranteeReleaseDetailPage })));
+
+const DationsPage = lazy(() => import("@/pages/DationsPage").then(m => ({ default: m.DationsPage })));
+const DationNewPage = lazy(() => import("@/pages/DationsPage").then(m => ({ default: m.DationNewPage })));
+const DationDetailPage = lazy(() => import("@/pages/DationsPage").then(m => ({ default: m.DationDetailPage })));
+
+const FormalizationsPage = lazy(() => import("@/pages/FormalizationsPage").then(m => ({ default: m.FormalizationsPage })));
+const FormalizationNewPage = lazy(() => import("@/pages/FormalizationsPage").then(m => ({ default: m.FormalizationNewPage })));
+const FormalizationDetailPage = lazy(() => import("@/pages/FormalizationsPage").then(m => ({ default: m.FormalizationDetailPage })));
+
+const AfterSalesHubPage = lazy(() => import("@/pages/AfterSalesHubPage").then(m => ({ default: m.AfterSalesHubPage })));
+
+// Pages recouvrement - lazy loaded
+const CollectionsPage = lazy(() => import("@/pages/CollectionsPage").then(m => ({ default: m.CollectionsPage })));
+const CollectionCaseDetailPage = lazy(() => import("@/pages/CollectionCaseDetailPage").then(m => ({ default: m.CollectionCaseDetailPage })));
+const LitigationDetailPage = lazy(() => import("@/pages/LitigationDetailPage").then(m => ({ default: m.LitigationDetailPage })));
+
+// Pages cautions - lazy loaded
+const SuretiesPage = lazy(() => import("@/pages/SuretiesPage").then(m => ({ default: m.SuretiesPage })));
+const SuretyDetailPage = lazy(() => import("@/pages/SuretyDetailPage").then(m => ({ default: m.SuretyDetailPage })));
+const SuretyEditPage = lazy(() => import("@/pages/SuretyEditPage").then(m => ({ default: m.SuretyEditPage })));
+const SuretyEngagementAddPage = lazy(() => import("@/pages/SuretyEngagementAddPage").then(m => ({ default: m.SuretyEngagementAddPage })));
+
+// Pages utilitaires - lazy loaded
+const ProfilePage = lazy(() => import("@/pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
+const ProductsPage = lazy(() => import("@/pages/ProductsPage").then(m => ({ default: m.ProductsPage })));
+const SimulatorPage = lazy(() => import("@/pages/SimulatorPage").then(m => ({ default: m.SimulatorPage })));
+const TasksPage = lazy(() => import("@/pages/TasksPage").then(m => ({ default: m.TasksPage })));
+const DocumentsPage = lazy(() => import("@/pages/DocumentsPage").then(m => ({ default: m.DocumentsPage })));
+const GroupConsolidationPage = lazy(() => import("@/pages/GroupConsolidationPage").then(m => ({ default: m.GroupConsolidationPage })));
+
+// Pages admin - lazy loaded (rarement accédées)
+const AuditPage = lazy(() => import("@/pages/AuditPage").then(m => ({ default: m.AuditPage })));
+const AdminAgenciesPage = lazy(() => import("@/pages/admin/AgenciesPage").then(m => ({ default: m.AdminAgenciesPage })));
+const AdminTenantsPage = lazy(() => import("@/pages/admin/TenantsPage").then(m => ({ default: m.AdminTenantsPage })));
+const AdminBusinessReferentialsPage = lazy(() => import("@/pages/admin/BusinessReferentialsPage").then(m => ({ default: m.AdminBusinessReferentialsPage })));
+const AdminConnectorsPage = lazy(() => import("@/pages/admin/ConnectorsPage").then(m => ({ default: m.AdminConnectorsPage })));
+const AdminContractsPage = lazy(() => import("@/pages/admin/ContractsAdminPage").then(m => ({ default: m.AdminContractsPage })));
+const AdminNotificationsPage = lazy(() => import("@/pages/admin/NotificationsPage").then(m => ({ default: m.AdminNotificationsPage })));
+const AdminCollectionEscalationRulesPage = lazy(() => import("@/pages/admin/CollectionEscalationRulesPage").then(m => ({ default: m.AdminCollectionEscalationRulesPage })));
+const AdminCollectionTranchesPage = lazy(() => import("@/pages/admin/CollectionTranchesPage").then(m => ({ default: m.AdminCollectionTranchesPage })));
+const AdminCreditPolicyPage = lazy(() => import("@/pages/admin/CreditPolicyPage").then(m => ({ default: m.AdminCreditPolicyPage })));
+const AdminFieldVisitRulesPage = lazy(() => import("@/pages/admin/FieldVisitRulesPage").then(m => ({ default: m.AdminFieldVisitRulesPage })));
+const AdminDelegationsPage = lazy(() => import("@/pages/admin/DelegationsPage").then(m => ({ default: m.AdminDelegationsPage })));
+const AdminProductsPage = lazy(() => import("@/pages/admin/ProductsAdminPage").then(m => ({ default: m.AdminProductsPage })));
+const AdminCbsReferentialsPage = lazy(() => import("@/pages/admin/CbsReferentialsPage").then(m => ({ default: m.AdminCbsReferentialsPage })));
+const AdminCbsSituationProbePage = lazy(() => import("@/pages/admin/CbsSituationProbePage").then(m => ({ default: m.AdminCbsSituationProbePage })));
+const AdminRolesPage = lazy(() => import("@/pages/admin/RolesPage").then(m => ({ default: m.AdminRolesPage })));
+const AdminUsersPage = lazy(() => import("@/pages/admin/UsersPage").then(m => ({ default: m.AdminUsersPage })));
+const AdminWorkflowPage = lazy(() => import("@/pages/admin/WorkflowPage").then(m => ({ default: m.AdminWorkflowPage })));
+const LegalPartiesPage = lazy(() => import("@/pages/admin/LegalPartiesPage").then(m => ({ default: m.LegalPartiesPage })));
 
 function FallbackHome() {
   const { user } = useAuth();
@@ -113,24 +144,25 @@ function FallbackHome() {
 
 export default function App() {
   return (
-    <Routes>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/login/:tenantCode" element={<LoginPage />} />
-      <Route
-        path="/changer-mot-de-passe"
-        element={
-          <ProtectedRoute>
-            <ForceChangePasswordPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        element={
-          <ProtectedRoute>
-            <Layout />
-          </ProtectedRoute>
-        }
-      >
+    <Suspense fallback={<PageLoadingFallback />}>
+      <Routes>
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/login/:tenantCode" element={<LoginPage />} />
+        <Route
+          path="/changer-mot-de-passe"
+          element={
+            <ProtectedRoute>
+              <ForceChangePasswordPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          element={
+            <ProtectedRoute>
+              <Layout />
+            </ProtectedRoute>
+          }
+        >
         <Route
           path="/"
           element={
@@ -181,6 +213,22 @@ export default function App() {
           }
         />
         <Route
+          path="/prets/writeoff-requests"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <LoanWriteOffRequestsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/prets/restructuring-requests"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <LoanRestructuringRequestsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
           path="/dossiers/nouveau"
           element={
             <PermissionRoute anyOf={PERM_CREDIT_CREATE}>
@@ -209,6 +257,14 @@ export default function App() {
           element={
             <PermissionRoute anyOf={PERM_CREDITS}>
               <FinancialAnalysisPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/dossiers/:id/comparaison-historique"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <CreditHistoryComparisonPage />
             </PermissionRoute>
           }
         />
@@ -600,6 +656,16 @@ export default function App() {
           }
         />
         <Route
+          path="/admin/regles-visites-terrain"
+          element={
+            <AdminRoute>
+              <PermissionRoute anyOf={PERM_ADMIN_POLICY}>
+                <AdminFieldVisitRulesPage />
+              </PermissionRoute>
+            </AdminRoute>
+          }
+        />
+        <Route
           path="/admin/tranches-recouvrement"
           element={
             <AdminRoute>
@@ -628,5 +694,6 @@ export default function App() {
       </Route>
       <Route path="*" element={<FallbackHome />} />
     </Routes>
+    </Suspense>
   );
 }

@@ -5,10 +5,14 @@ from .models import (
     CreditApplication,
     CreditDocument,
     CreditInstructionPolicy,
+    CreditRenewalPolicy,
     FieldVisit,
+    FieldVisitRule,
     FinancialAnalysis,
     Installment,
     Loan,
+    LoanRestructuringRequest,
+    LoanWriteOffRequest,
     StockPhoto,
 )
 
@@ -57,6 +61,18 @@ class LoanAdmin(admin.ModelAdmin):
     inlines = [InstallmentInline]
 
 
+@admin.register(FieldVisitRule)
+class FieldVisitRuleAdmin(admin.ModelAdmin):
+    list_display = [
+        "name", "is_active", "priority", "client_type", 
+        "amount_min", "amount_max", "required_role", 
+        "blocking_stage", "tenant"
+    ]
+    list_filter = ["tenant", "is_active", "client_type", "blocking_stage"]
+    search_fields = ["name", "required_role"]
+    ordering = ["-priority", "id"]
+
+
 @admin.register(FieldVisit)
 class FieldVisitAdmin(admin.ModelAdmin):
     list_display = ["application", "visit_date", "visited_by", "tenant"]
@@ -95,3 +111,306 @@ class CreditInstructionPolicyAdmin(admin.ModelAdmin):
         "enable_cancel_status",
     ]
     list_filter = ["tenant", "collateral_coverage_mode"]
+
+
+@admin.register(LoanWriteOffRequest)
+class LoanWriteOffRequestAdmin(admin.ModelAdmin):
+    """Admin pour les demandes de passage en perte."""
+
+    list_display = [
+        "id",
+        "loan",
+        "status",
+        "reason",
+        "outstanding_balance",
+        "days_past_due",
+        "created_by",
+        "created_at",
+        "reviewed_by",
+        "reviewed_at",
+        "tenant",
+    ]
+    list_filter = ["status", "reason", "tenant", "created_at", "reviewed_at"]
+    search_fields = [
+        "loan__application__reference",
+        "loan__application__client__last_name",
+        "loan__application__client__company_name",
+    ]
+    readonly_fields = [
+        "created_by",
+        "created_at",
+        "reviewed_by",
+        "reviewed_at",
+        "executed_by",
+        "executed_at",
+    ]
+    fieldsets = (
+        (
+            "Informations générales",
+            {
+                "fields": (
+                    "loan",
+                    "status",
+                    "reason",
+                    "outstanding_balance",
+                    "days_past_due",
+                )
+            },
+        ),
+        (
+            "Détails de la demande",
+            {
+                "fields": (
+                    "justification",
+                    "recovery_attempts",
+                    "guarantees_status",
+                    "accounting_provision_rate",
+                )
+            },
+        ),
+        (
+            "Validation",
+            {
+                "fields": (
+                    "reviewed_by",
+                    "reviewed_at",
+                    "review_comment",
+                )
+            },
+        ),
+        (
+            "Exécution",
+            {
+                "fields": (
+                    "executed_by",
+                    "executed_at",
+                )
+            },
+        ),
+        (
+            "Métadonnées",
+            {
+                "fields": (
+                    "created_by",
+                    "created_at",
+                    "tenant",
+                )
+            },
+        ),
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        """Interdire la suppression des demandes exécutées."""
+        if obj and obj.status == "EXECUTED":
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+@admin.register(LoanRestructuringRequest)
+class LoanRestructuringRequestAdmin(admin.ModelAdmin):
+    """Admin pour les demandes de restructuration."""
+
+    list_display = [
+        "id",
+        "loan",
+        "status",
+        "reason",
+        "current_outstanding_balance",
+        "new_duration_months",
+        "new_monthly_installment",
+        "created_by",
+        "created_at",
+        "reviewed_by",
+        "reviewed_at",
+        "tenant",
+    ]
+    list_filter = ["status", "reason", "tenant", "created_at", "reviewed_at"]
+    search_fields = [
+        "loan__application__reference",
+        "loan__application__client__last_name",
+        "loan__application__client__company_name",
+    ]
+    readonly_fields = [
+        "created_by",
+        "created_at",
+        "reviewed_by",
+        "reviewed_at",
+        "executed_by",
+        "executed_at",
+        "new_monthly_installment",
+        "additional_interest_cost",
+    ]
+    fieldsets = (
+        (
+            "Informations générales",
+            {
+                "fields": (
+                    "loan",
+                    "status",
+                    "reason",
+                )
+            },
+        ),
+        (
+            "État actuel du prêt",
+            {
+                "fields": (
+                    "current_outstanding_balance",
+                    "current_monthly_installment",
+                    "current_remaining_months",
+                    "current_days_past_due",
+                )
+            },
+        ),
+        (
+            "Nouveaux termes proposés",
+            {
+                "fields": (
+                    "new_duration_months",
+                    "new_interest_rate",
+                    "grace_period_months",
+                    "capitalize_arrears",
+                    "arrears_amount",
+                )
+            },
+        ),
+        (
+            "Impact financier (calculé automatiquement)",
+            {
+                "fields": (
+                    "new_monthly_installment",
+                    "additional_interest_cost",
+                )
+            },
+        ),
+        (
+            "Analyse de capacité révisée",
+            {
+                "fields": (
+                    "client_revised_income",
+                    "client_revised_expenses",
+                    "revised_debt_ratio",
+                )
+            },
+        ),
+        (
+            "Garanties et conditions",
+            {
+                "fields": (
+                    "guarantees_maintained",
+                    "guarantees_comment",
+                    "special_conditions",
+                    "previous_restructuring_count",
+                )
+            },
+        ),
+        (
+            "Justification",
+            {
+                "fields": ("justification",)
+            },
+        ),
+        (
+            "Validation",
+            {
+                "fields": (
+                    "reviewed_by",
+                    "reviewed_at",
+                    "review_comment",
+                )
+            },
+        ),
+        (
+            "Exécution",
+            {
+                "fields": (
+                    "executed_by",
+                    "executed_at",
+                )
+            },
+        ),
+        (
+            "Métadonnées",
+            {
+                "fields": (
+                    "created_by",
+                    "created_at",
+                    "tenant",
+                )
+            },
+        ),
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        """Interdire la suppression des demandes exécutées."""
+        if obj and obj.status == "EXECUTED":
+            return False
+        return super().has_delete_permission(request, obj)
+
+
+@admin.register(CreditRenewalPolicy)
+class CreditRenewalPolicyAdmin(admin.ModelAdmin):
+    """Admin pour les politiques de renouvellement de crédit."""
+
+    list_display = [
+        "tenant",
+        "min_repayment_rate",
+        "max_days_late_allowed",
+        "block_if_active_litigation",
+        "block_if_active_loan",
+        "block_if_writeoff_history",
+    ]
+    list_filter = ["tenant", "block_if_active_litigation", "block_if_active_loan"]
+    
+    fieldsets = (
+        (
+            "Seuils d'éligibilité",
+            {
+                "fields": (
+                    "tenant",
+                    "min_repayment_rate",
+                    "max_days_late_allowed",
+                    "min_months_since_last_disbursement",
+                    "min_months_since_loan_closure",
+                )
+            },
+        ),
+        (
+            "Règles de blocage (alertes bloquantes)",
+            {
+                "fields": (
+                    "block_if_active_litigation",
+                    "block_if_active_dation",
+                    "block_if_recent_restructuring",
+                    "block_if_writeoff_history",
+                    "block_if_active_loan",
+                    "block_if_below_repayment_threshold",
+                )
+            },
+        ),
+        (
+            "Règles d'avertissement (alertes non bloquantes)",
+            {
+                "fields": (
+                    "warn_if_late_payment",
+                    "warn_if_high_debt_ratio",
+                    "warn_if_increasing_amount",
+                    "warn_if_multiple_active_loans",
+                )
+            },
+        ),
+        (
+            "Seuils de comparaison",
+            {
+                "fields": (
+                    "significant_change_threshold",
+                    "high_debt_ratio_threshold",
+                    "max_amount_increase_pct",
+                )
+            },
+        ),
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        """Interdire la suppression de la politique par défaut."""
+        return request.user.is_superuser

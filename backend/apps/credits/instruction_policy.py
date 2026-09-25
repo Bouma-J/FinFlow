@@ -219,6 +219,34 @@ def build_readiness(application) -> dict:
             has_visit,
             message="" if has_visit else "Enregistrez une visite terrain.",
         )
+    
+    # Règles conditionnelles de visite terrain
+    from .models import FieldVisitRule
+    
+    applicable_rules = [
+        rule for rule in FieldVisitRule.objects.filter(
+            tenant=application.tenant,
+            is_active=True
+        ).order_by("-priority")
+        if rule.matches(application)
+    ]
+    
+    for rule in applicable_rules:
+        visits_with_role = FieldVisit.objects.filter(
+            application=application,
+            visitor_role=rule.required_role,
+        ).exists()
+        
+        add(
+            f"field_visit_rule_{rule.id}",
+            f"Visite terrain par {rule.required_role}",
+            visits_with_role,
+            blocking=True,
+            message="" if visits_with_role else (
+                f"Règle '{rule.name}' : une visite terrain par un {rule.required_role} "
+                f"est obligatoire ({rule.get_blocking_stage_display()})."
+            ),
+        )
 
     if policy.require_product_checklist and product:
         from apps.catalog.models import ChecklistItem
@@ -352,6 +380,9 @@ def assert_policy_submit_gates(application):
                 "Au moins une visite terrain est obligatoire avant soumission "
                 "(paramètre filiale)."
             )
+    
+    # Vérifier les règles conditionnelles de visite terrain pour SUBMIT
+    _assert_field_visit_rules(application, "SUBMIT")
 
     if (
         policy.collateral_coverage_mode
@@ -459,3 +490,45 @@ def amount_approved_writable(application) -> bool:
         CreditApplication.Status.DISBURSEMENT_PENDING,
         CreditApplication.Status.DISBURSED,
     }
+
+
+def _assert_field_visit_rules(application, blocking_stage: str):
+    """Vérifie les règles conditionnelles de visite terrain pour une étape donnée."""
+    from .models import FieldVisit, FieldVisitRule
+
+    applicable_rules = [
+        rule for rule in FieldVisitRule.objects.filter(
+            tenant=application.tenant,
+            is_active=True,
+            blocking_stage=blocking_stage,
+        ).order_by("-priority")
+        if rule.matches(application)
+    ]
+
+    for rule in applicable_rules:
+        visits_with_role = FieldVisit.objects.filter(
+            application=application,
+            visitor_role=rule.required_role,
+        ).exists()
+
+        if not visits_with_role:
+            stage_label = {
+                "SUBMIT": "soumission",
+                "OPINION": "saisie de l'avis",
+                "APPROVAL": "approbation",
+            }.get(blocking_stage, blocking_stage)
+            
+            raise WorkflowError(
+                f"Une visite terrain par un {rule.required_role} est obligatoire "
+                f"avant {stage_label} (règle : {rule.name})."
+            )
+
+
+def assert_field_visit_for_opinion(application):
+    """Vérifie les règles de visite terrain avant de saisir un avis."""
+    _assert_field_visit_rules(application, "OPINION")
+
+
+def assert_field_visit_for_approval(application):
+    """Vérifie les règles de visite terrain avant approbation."""
+    _assert_field_visit_rules(application, "APPROVAL")

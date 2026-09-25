@@ -1,4 +1,5 @@
 """Dossiers de crédit et cycle de vie associé."""
+import logging
 import math
 from dateutil.relativedelta import relativedelta
 from datetime import timedelta
@@ -8,9 +9,15 @@ from django.contrib.contenttypes.fields import GenericRelation
 from django.db import models
 from django.utils import timezone
 
+logger = logging.getLogger("finflow.credits")
+
 from apps.common.files import safe_filename
 from apps.common.models import AuthoredModel, TenantScopedModel
 from apps.common.tenancy import get_current_tenant_id
+from .validators import validate_detailed_data
+
+# Import des modèles de workflow de validation pour opérations sensibles
+# Importé en fin de fichier pour éviter les dépendances circulaires
 
 
 def credit_file_path(instance, filename):
@@ -908,6 +915,95 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
     analysis_date = models.DateField("date de l'analyse", null=True, blank=True)
 
     # ------------------------------------------------------------------ #
+    # Mode d'analyse (synthétique ou détaillé)
+    # ------------------------------------------------------------------ #
+    class AnalysisMode(models.TextChoices):
+        SYNTHETIC = "SYNTHETIC", "Synthétique (moyennes)"
+        DETAILED = "DETAILED", "Détaillé (période par période)"
+
+    analysis_mode = models.CharField(
+        "mode d'analyse",
+        max_length=15,
+        choices=AnalysisMode.choices,
+        default=AnalysisMode.SYNTHETIC,
+        help_text="Synthétique (moyennes) ou Détaillé (période par période)"
+    )
+    detailed_data = models.JSONField(
+        "données détaillées",
+        default=dict,
+        blank=True,
+        validators=[validate_detailed_data],
+        help_text=(
+            "Structure JSON pour les analyses détaillées (revenus, charges, exploitation par période). "
+            "Clés autorisées: income_detail, expenses_detail, exploitation_detail, banking_detail, collective_detail. "
+            "Chaque clé contient une liste de périodes avec des champs numériques."
+        )
+    )
+
+    # ------------------------------------------------------------------ #
+    # CONTEXTE EMPLOI (Personne Physique - déplacé depuis CreditApplication)
+    # ------------------------------------------------------------------ #
+    employer_name = models.CharField(
+        "employeur", max_length=200, blank=True,
+        help_text="Employeur au moment de l'analyse (peut différer du dossier initial)"
+    )
+    contract_type = models.CharField(
+        "type de contrat", max_length=20, choices=ContractType.choices, blank=True,
+        help_text="Type de contrat au moment de l'analyse"
+    )
+    dependents_count = models.PositiveIntegerField(
+        "nombre de personnes à charge", null=True, blank=True,
+        help_text="Nombre de personnes à charge (impact sur les charges du ménage)"
+    )
+    premises_status = models.CharField(
+        "statut d'occupation du logement", max_length=15,
+        choices=PremisesStatus.choices, blank=True,
+        help_text="Propriétaire ou locataire (impact sur les charges)"
+    )
+
+    # ------------------------------------------------------------------ #
+    # ANALYSE BANCAIRE (déplacé depuis CreditApplication)
+    # ------------------------------------------------------------------ #
+    avg_monthly_credit_movements = models.DecimalField(
+        "mouvements créditeurs mensuels moyens", max_digits=18, decimal_places=2,
+        null=True, blank=True,
+        help_text="Moyenne des encaissements mensuels sur la période d'observation"
+    )
+    avg_monthly_debit_movements = models.DecimalField(
+        "mouvements débiteurs mensuels moyens", max_digits=18, decimal_places=2,
+        null=True, blank=True,
+        help_text="Moyenne des décaissements mensuels (optionnel, pour analyse trésorerie)"
+    )
+    banking_observation_period_months = models.PositiveIntegerField(
+        "période d'observation bancaire (mois)", null=True, blank=True, default=3,
+        help_text="Nombre de mois analysés pour les mouvements bancaires"
+    )
+
+    # ------------------------------------------------------------------ #
+    # ENVIRONNEMENT COMMERCIAL (Entreprise - déplacé depuis CreditApplication)
+    # ------------------------------------------------------------------ #
+    tax_regime = models.CharField(
+        "régime fiscal", max_length=20, choices=TaxRegime.choices, blank=True,
+        help_text="Régime fiscal de l'entreprise"
+    )
+    avg_client_payment_days = models.PositiveIntegerField(
+        "délai moyen de paiement clients (jours)", null=True, blank=True,
+        help_text="Délai moyen de règlement par les clients (impact sur BFR)"
+    )
+    avg_supplier_payment_days = models.PositiveIntegerField(
+        "délai moyen de paiement fournisseurs (jours)", null=True, blank=True,
+        help_text="Délai moyen de règlement aux fournisseurs (impact sur BFR)"
+    )
+    clientele = models.CharField(
+        "description de la clientèle", max_length=255, blank=True,
+        help_text="Type et nature de la clientèle de l'entreprise"
+    )
+    catchment_area = models.CharField(
+        "zone de chalandise", max_length=15, choices=CatchmentArea.choices, blank=True,
+        help_text="Portée géographique de l'activité (Local/National/Export)"
+    )
+
+    # ------------------------------------------------------------------ #
     # PARTICULIER — revenus du ménage (période de référence)
     # ------------------------------------------------------------------ #
     salary_income = models.DecimalField(
@@ -1558,6 +1654,69 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
             return -limit
         return value
 
+    def _compute_synthetic_from_detailed(self):
+        """Calcule les champs synthétiques à partir des données détaillées (mode DETAILED)."""
+        if self.analysis_mode != self.AnalysisMode.DETAILED:
+            return
+        
+        data = self.detailed_data or {}
+        
+        # Revenus (moyenne sur les périodes)
+        income_detail = data.get('income_detail', [])
+        if income_detail and len(income_detail) > 0:
+            count = len(income_detail)
+            self.salary_income = sum(Decimal(str(p.get('salary_income', 0))) for p in income_detail) / count
+            self.spouse_income = sum(Decimal(str(p.get('spouse_income', 0))) for p in income_detail) / count
+            self.rental_income = sum(Decimal(str(p.get('rental_income', 0))) for p in income_detail) / count
+            self.other_activity_income = sum(Decimal(str(p.get('other_activity_income', 0))) for p in income_detail) / count
+            self.other_income = sum(Decimal(str(p.get('other_income', 0))) for p in income_detail) / count
+        
+        # Charges (moyenne sur les périodes)
+        expenses_detail = data.get('expenses_detail', [])
+        if expenses_detail and len(expenses_detail) > 0:
+            count = len(expenses_detail)
+            self.rent_expense = sum(Decimal(str(p.get('rent_expense', 0))) for p in expenses_detail) / count
+            self.food_expense = sum(Decimal(str(p.get('food_expense', 0))) for p in expenses_detail) / count
+            self.utilities_expense = sum(Decimal(str(p.get('utilities_expense', 0))) for p in expenses_detail) / count
+            self.transport_expense = sum(Decimal(str(p.get('transport_expense', 0))) for p in expenses_detail) / count
+            self.education_expense = sum(Decimal(str(p.get('education_expense', 0))) for p in expenses_detail) / count
+            self.health_expense = sum(Decimal(str(p.get('health_expense', 0))) for p in expenses_detail) / count
+            self.other_household_expenses = sum(Decimal(str(p.get('other_household_expenses', 0))) for p in expenses_detail) / count
+            self.tontine_expense = sum(Decimal(str(p.get('tontine_expense', 0))) for p in expenses_detail) / count
+            self.social_contributions = sum(Decimal(str(p.get('social_contributions', 0))) for p in expenses_detail) / count
+            self.family_support_expense = sum(Decimal(str(p.get('family_support_expense', 0))) for p in expenses_detail) / count
+        
+        # Exploitation (somme annuelle pour les entreprises)
+        exploitation_detail = data.get('exploitation_detail', [])
+        if exploitation_detail and len(exploitation_detail) > 0:
+            self.turnover = sum(Decimal(str(p.get('turnover', 0))) for p in exploitation_detail)
+            self.cogs = sum(Decimal(str(p.get('cogs', 0))) for p in exploitation_detail)
+            self.op_rent = sum(Decimal(str(p.get('op_rent', 0))) for p in exploitation_detail)
+            self.op_salaries = sum(Decimal(str(p.get('op_salaries', 0))) for p in exploitation_detail)
+            self.op_utilities = sum(Decimal(str(p.get('op_utilities', 0))) for p in exploitation_detail)
+            self.op_transport = sum(Decimal(str(p.get('op_transport', 0))) for p in exploitation_detail)
+            self.op_telecom = sum(Decimal(str(p.get('op_telecom', 0))) for p in exploitation_detail)
+            self.op_taxes = sum(Decimal(str(p.get('op_taxes', 0))) for p in exploitation_detail)
+            self.op_maintenance = sum(Decimal(str(p.get('op_maintenance', 0))) for p in exploitation_detail)
+            self.op_other = sum(Decimal(str(p.get('op_other', 0))) for p in exploitation_detail)
+            self.depreciation = sum(Decimal(str(p.get('depreciation', 0))) for p in exploitation_detail)
+            self.financial_charges = sum(Decimal(str(p.get('financial_charges', 0))) for p in exploitation_detail)
+        
+        # Mouvements bancaires (moyenne)
+        banking_detail = data.get('banking_detail', [])
+        if banking_detail and len(banking_detail) > 0:
+            count = len(banking_detail)
+            self.avg_monthly_credit_movements = sum(Decimal(str(p.get('credit_movements', 0))) for p in banking_detail) / count
+            self.avg_monthly_debit_movements = sum(Decimal(str(p.get('debit_movements', 0))) for p in banking_detail) / count
+        
+        # Groupement - cotisations (moyenne)
+        collective_detail = data.get('collective_detail', [])
+        if collective_detail and len(collective_detail) > 0:
+            count = len(collective_detail)
+            self.collective_contributions = sum(Decimal(str(p.get('collective_contributions', 0))) for p in collective_detail) / count
+            self.collective_other_income = sum(Decimal(str(p.get('collective_other_income', 0))) for p in collective_detail) / count
+            self.collective_operating_expenses = sum(Decimal(str(p.get('collective_operating_expenses', 0))) for p in collective_detail) / count
+
     def save(self, *args, **kwargs):
         # Affecte tôt le tenant pour récupérer les bons seuils.
         if self.tenant_id is None:
@@ -1566,6 +1725,10 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
             current = get_current_tenant_id()
             if current is not None:
                 self.tenant_id = current
+        
+        # Calcul automatique des champs synthétiques si mode DETAILED
+        if self.analysis_mode == self.AnalysisMode.DETAILED:
+            self._compute_synthetic_from_detailed()
 
         # Type de client : toujours celui de la fiche client du dossier.
         if self.application_id:
@@ -1663,9 +1826,19 @@ class FinancialAnalysis(TenantScopedModel, AuthoredModel):
             score, breakdown = compute_score(self, metrics, th)
             self.internal_score = self._clamp(score, 6, 2)
             self.score_breakdown = breakdown
-        except Exception:
-            # La contre-analyse ne doit jamais bloquer l'enregistrement.
-            pass
+        except Exception as e:
+            # La contre-analyse ne doit jamais bloquer l'enregistrement,
+            # mais on trace l'erreur pour investigation
+            logger.error(
+                f"Échec calcul score analyse {self.pk}: {e}",
+                exc_info=True,
+                extra={
+                    "analysis_id": self.pk,
+                    "application_id": self.application_id,
+                    "tenant_id": self.tenant_id,
+                },
+            )
+            # Continuer la sauvegarde sans score
 
         super().save(*args, **kwargs)
 
@@ -1704,6 +1877,106 @@ class FinancialDocument(TenantScopedModel):
         return self.label or f"Document {self.pk}"
 
 
+class FieldVisitRule(TenantScopedModel):
+    """Règle conditionnelle pour obliger une visite terrain selon le profil client et montant."""
+
+    class BlockingStage(models.TextChoices):
+        SUBMIT = "SUBMIT", "À la soumission"
+        OPINION = "OPINION", "À la saisie de l'avis"
+        APPROVAL = "APPROVAL", "À l'approbation"
+
+    name = models.CharField(
+        "nom de la règle",
+        max_length=255,
+        help_text="Ex. 'Particulier indépendant 0-100K : visite par chargé de compte'",
+    )
+    is_active = models.BooleanField("règle active", default=True)
+    priority = models.IntegerField(
+        "priorité",
+        default=0,
+        help_text="Ordre d'application (plus élevé = prioritaire). Utile si plusieurs règles s'appliquent.",
+    )
+
+    client_type = models.CharField(
+        "type de client",
+        max_length=50,
+        blank=True,
+        help_text="INDIVIDUAL, CORPORATE, PROFESSIONAL. Vide = tous types.",
+    )
+    individual_profile = models.CharField(
+        "profil particulier",
+        max_length=50,
+        blank=True,
+        help_text="SALARIE, INDEPENDANT, RETRAITE, etc. Vide = tous profils.",
+    )
+    amount_min = models.DecimalField(
+        "montant minimum",
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Montant minimum du crédit pour cette règle. Vide = pas de minimum.",
+    )
+    amount_max = models.DecimalField(
+        "montant maximum",
+        max_digits=15,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        help_text="Montant maximum du crédit pour cette règle. Vide = pas de maximum.",
+    )
+
+    required_role = models.CharField(
+        "rôle requis pour la visite",
+        max_length=150,
+        help_text="Ex. CHARGE_COMPTE, RESP_EXPLOITATION, DIRECTEUR. Le visiteur doit avoir ce rôle.",
+    )
+    blocking_stage = models.CharField(
+        "étape de blocage",
+        max_length=20,
+        choices=BlockingStage.choices,
+        default=BlockingStage.SUBMIT,
+        help_text="À quelle étape bloquer si la visite n'est pas faite.",
+    )
+
+    class Meta:
+        verbose_name = "règle de visite terrain"
+        verbose_name_plural = "règles de visite terrain"
+        ordering = ["-priority", "id"]
+
+    def __str__(self):
+        return self.name
+
+    def matches(self, application) -> bool:
+        """Vérifie si cette règle s'applique à un dossier donné."""
+        if not self.is_active:
+            return False
+
+        client = application.client
+        if not client:
+            return False
+
+        if self.client_type and client.client_type != self.client_type:
+            return False
+
+        if self.individual_profile:
+            individual_profile = getattr(client, "individual_profile", None)
+            if individual_profile != self.individual_profile:
+                return False
+
+        amount = application.amount_requested
+        if amount is None:
+            return False
+
+        if self.amount_min is not None and amount < self.amount_min:
+            return False
+
+        if self.amount_max is not None and amount > self.amount_max:
+            return False
+
+        return True
+
+
 class FieldVisit(TenantScopedModel):
     """Compte rendu de visite terrain."""
 
@@ -1732,6 +2005,13 @@ class FieldVisit(TenantScopedModel):
         help_text="Ex. 5.359952, -4.008256 (collé depuis Maps).",
     )
     report = models.TextField("compte rendu", blank=True)
+    
+    photos = models.JSONField(
+        "photos de la visite",
+        default=list,
+        blank=True,
+        help_text="Liste des IDs de documents (photos) liés à cette visite.",
+    )
 
     class Meta:
         verbose_name = "visite terrain"
@@ -1843,3 +2123,12 @@ class Installment(TenantScopedModel):
     @property
     def balance(self):
         return self.total_due - self.amount_paid
+
+
+# Import des modèles de workflow de validation pour opérations sensibles (à la fin pour éviter imports circulaires)
+from .loan_operations import (  # noqa: E402
+    LoanOperationRequest,
+    LoanRestructuringRequest,
+    LoanWriteOffRequest,
+)
+from .renewal_policy import CreditRenewalPolicy  # noqa: E402

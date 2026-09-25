@@ -1,96 +1,68 @@
-"""Tâches Celery — Core Banking (rejeux)."""
+"""Tâches Celery pour CBS: retry, réconciliation, monitoring."""
 import logging
 
-from celery import shared_task
+from config.celery import app
 
-logger = logging.getLogger("finflow")
+logger = logging.getLogger("finflow.cbs.tasks")
 
 
-@shared_task(
-    ignore_result=True,
-    soft_time_limit=1800,
-    time_limit=1860,
-)
-def import_cbs_portfolio_task(
-    tenant_id: str, connector_id: str = "", loan_refs=None
-):
-    """Importe les crédits CBS existants et constitue les dossiers recouvrement."""
-    from apps.common.tenancy import tenant_context
-    from apps.corebanking.models import CoreBankingConnector
-    from apps.corebanking.portfolio_import import import_cbs_portfolio
-
-    try:
-        with tenant_context(tenant_id):
-            connector = None
-            if connector_id:
-                connector = CoreBankingConnector.objects.filter(
-                    pk=connector_id
-                ).first()
-            stats = import_cbs_portfolio(
-                tenant_id, connector=connector, loan_refs=loan_refs
-            )
-            if connector is not None:
-                rules = dict(connector.mapping_rules or {})
-                rules.pop("portfolio_import_error", None)
-                connector.mapping_rules = rules
-                connector.save(update_fields=["mapping_rules", "updated_at"])
-    except Exception as exc:  # noqa: BLE001
-        logger.exception(
-            "Import portefeuille CBS filiale %s échoué", tenant_id
+@app.task(name="corebanking.detect_orphan_disbursements")
+def detect_orphan_disbursements():
+    """
+    Détecte les décaissements orphelins (CBS OK sans Loan local).
+    
+    Exécuté périodiquement (toutes les 15 min) pour réconciliation.
+    Alerte ops si orphelins détectés.
+    """
+    from .outbox import find_orphan_disbursements
+    
+    orphans = find_orphan_disbursements()
+    
+    if orphans:
+        logger.critical(
+            f"ALERTE: {len(orphans)} décaissement(s) orphelin(s) détecté(s)",
+            extra={
+                "orphan_count": len(orphans),
+                "orphan_ids": [o.pk for o in orphans],
+            }
         )
-        try:
-            with tenant_context(tenant_id):
-                failed = None
-                if connector_id:
-                    failed = CoreBankingConnector.objects.filter(
-                        pk=connector_id
-                    ).first()
-                if failed is not None:
-                    rules = dict(failed.mapping_rules or {})
-                    rules["portfolio_import_error"] = str(exc)[:240]
-                    failed.mapping_rules = rules
-                    failed.save(update_fields=["mapping_rules", "updated_at"])
-        except Exception:  # noqa: BLE001
-            logger.exception(
-                "Impossible d'enregistrer l'échec d'import CBS filiale %s",
-                tenant_id,
-            )
+        
+        # TODO: Envoyer notification email/Slack aux ops
+        # TODO: Créer ticket support automatique
+        
         return {
-            "errors": [
-                {
-                    "error": (
-                        "Import CBS interrompu : connecteur indisponible "
-                        "ou réponse invalide."
-                    )
-                }
-            ]
+            "status": "orphans_detected",
+            "count": len(orphans),
+            "ids": [o.pk for o in orphans],
         }
-    logger.info("Import portefeuille CBS filiale %s : %s", tenant_id, stats)
-    return stats
+    
+    logger.info("Réconciliation CBS: aucun orphelin détecté")
+    return {"status": "ok", "count": 0}
 
 
-@shared_task(ignore_result=True, soft_time_limit=600, time_limit=660)
-def retry_cbs_integrations(limit: int = 50):
-    """Rejoue les opérations CBS marquées RETRY."""
-    from apps.corebanking.models import IntegrationLog
-    from apps.corebanking.services import send_operation
-
-    logs = list(
-        IntegrationLog.all_tenants.filter(status=IntegrationLog.Status.RETRY)
-        .select_related("connector")
-        .order_by("created_at")[:limit]
-    )
-    done = 0
-    for log in logs:
-        try:
-            send_operation(
-                log.connector,
-                log.operation,
-                log.request_payload or {},
-                log.idempotency_key or "",
-            )
-            done += 1
-        except Exception:  # noqa: BLE001
-            logger.exception("Échec retry CBS log=%s", log.id)
-    logger.info("CBS retry : %s opérations rejouées", done)
-    return done
+@app.task(name="corebanking.cleanup_old_outbox_events")
+def cleanup_old_outbox_events(retention_days=90):
+    """
+    Nettoie les events outbox complétés > retention_days.
+    
+    Args:
+        retention_days: Rétention en jours (défaut: 90)
+    """
+    from datetime import timedelta
+    from django.utils import timezone
+    from .outbox import CbsOutboxEvent
+    
+    threshold = timezone.now() - timedelta(days=retention_days)
+    
+    deleted = CbsOutboxEvent.objects.filter(
+        status__in=[
+            CbsOutboxEvent.Status.COMPLETED,
+            CbsOutboxEvent.Status.FAILED,
+        ],
+        completed_at__lt=threshold,
+    ).delete()
+    
+    count = deleted[0] if deleted else 0
+    logger.info(f"Nettoyage outbox CBS: {count} events supprimés (> {retention_days}j)")
+    
+    return {"deleted": count, "retention_days": retention_days}
