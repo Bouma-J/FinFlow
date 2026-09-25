@@ -5,6 +5,53 @@
 
 ---
 
+## ⚠️ Distinction Fondamentale : Rôle vs Workflow
+
+### Ce que définit un RÔLE (Permissions)
+
+**Les rôles définissent ce qu'on peut FAIRE techniquement** :
+- ✅ Créer/modifier des dossiers (CRUD)
+- ✅ Lire des informations
+- ✅ Générer des contrats
+- ✅ Décaisser dans le CBS (action technique)
+- ✅ Uploader des documents
+
+**Analogie** : Les rôles sont comme des "clés" qui ouvrent des portes.
+
+### Ce que définit le WORKFLOW (Décisions/Avis)
+
+**Le workflow définit QUI intervient QUAND et COMMENT** :
+- 📍 À quelle étape du processus
+- 🎯 Type d'intervention : **Décision** (approuve/rejette) ou **Avis** (recommandation)
+- 📋 Conditions de passage à l'étape suivante
+- 👤 Rôle(s) assigné(s) à chaque étape
+
+**Analogie** : Le workflow est le "plan du bâtiment" qui dit quelles portes ouvrir dans quel ordre.
+
+### Exemple Concret
+
+**Rôle "Analyste crédit"** :
+- Permission : Peut créer/modifier analyses financières ✅
+- Permission : Peut lire dossiers clients ✅
+- Permission : Peut ajouter documents ✅
+
+**Workflow "Validation crédit PME"** :
+- Étape 2 : "Analyse crédit"
+  - Rôle assigné : **Analyste crédit**
+  - Type : **Avis** (recommande favorable/défavorable)
+  - Condition : Doit avoir complété l'analyse
+  
+**Ce que l'analyste PEUT faire** = Rôle/Permissions  
+**Ce que l'analyste DOIT faire à cette étape** = Workflow
+
+### Important pour ce Document
+
+**Ce document analyse les PERMISSIONS** (rôles), **PAS les workflows**.
+
+Les workflows sont configurés séparément dans l'application selon vos processus métier.
+
+---
+
 ## 📊 Rôles Existants - Analyse de Cohérence
 
 ### ✅ Rôles Instruction (COHÉRENTS)
@@ -199,29 +246,87 @@
 
 ## 🆕 Nouveau Rôle : Administrateur de Crédit
 
+### ⚠️ Distinction Rôle vs Workflow
+
+**IMPORTANT** : Ce document définit les **PERMISSIONS** (ce qu'on peut faire techniquement).
+
+**Les rôles NE définissent PAS** :
+- ❌ Qui prend des décisions (approuve/rejette)
+- ❌ Qui donne des avis
+- ❌ À quelle étape du processus
+
+**Cela est défini par le WORKFLOW/CIRCUIT** :
+- Le workflow décide qui intervient à quelle étape
+- Le workflow décide si c'est une décision ou un avis
+- Le workflow décide les conditions de passage
+
 ### Justification
 
 **Problème actuel** :
 - Le "Responsable des opérations" fait tout : contrats, garanties, ET décaissement
-- Pas de contrôle final dédié avant décaissement CBS
+- Pas de rôle dédié avec permissions spécifiques pour décaissement CBS
 - Manque de séparation des tâches pour décaissement
 
-**Solution** : Créer un rôle dédié au **contrôle final + décaissement CBS**
+**Solution** : Créer un rôle dédié avec **permissions spécifiques** pour décaissement CBS
 
 ### Définition du Rôle
 
 **Nom** : Administrateur de crédit
 
-**Responsabilité** :
-1. **Contrôle final pré-décaissement** :
-   - Vérifier que tous les contrats sont signés et chargés
-   - Vérifier que les garanties sont formalisées
-   - Vérifier que les cautions sont actives
-   - Vérifier conformité du dossier
+**Permissions Techniques** (ce qu'il peut FAIRE) :
+1. **Lecture métier complète** :
+   - Consulter tous les dossiers, clients, garanties, contrats
+   - Accès CBS pour vérification
 
-2. **Exécution décaissement CBS** :
-   - Initier et exécuter le décaissement dans le CBS
-   - Responsabilité unique du décaissement
+2. **Gestion contrats** :
+   - Générer contrats
+   - Modifier contrats (ajouter signatures, documents)
+   - Marquer contrats comme signés
+
+3. **Vérification garanties** :
+   - Consulter garanties
+   - Modifier statut (ex: marquer comme formalisée)
+   - Consulter cautions
+
+4. **Décaissement CBS** (Permission principale) :
+   - Initier décaissement dans CBS
+   - Exécuter décaissement dans CBS
+   - Permission technique : `disburse_creditapplication`
+
+5. **Documents** :
+   - Uploader documents de vérification
+   - Modifier documents existants
+
+**Permissions EXCLUES** :
+- ❌ Créer/modifier dossiers de crédit
+- ❌ Créer/modifier analyses financières
+- ❌ Modifier décisions workflow (c'est le workflow qui décide)
+
+### Utilisation dans le Workflow
+
+**Exemple de configuration workflow** :
+
+```
+Étape 5 : "Vérification pré-décaissement"
+  Rôle assigné : Administrateur de crédit
+  Type : Avis (ou Décision selon configuration)
+  Conditions :
+    - Contrats signés : OUI
+    - Garanties formalisées : OUI
+    - Cautions actives : OUI
+  
+Étape 6 : "Décaissement CBS"
+  Rôle assigné : Administrateur de crédit
+  Action : Décaissement (bouton "Décaisser dans CBS")
+  Conditions :
+    - Étape 5 validée
+    - Approbation finale obtenue
+```
+
+**Le workflow décidera** :
+- Quand l'Administrateur de crédit intervient
+- S'il doit donner un avis ou décider
+- Quelles vérifications sont obligatoires
 
 ### Permissions
 
@@ -275,15 +380,47 @@ _ADMINISTRATEUR_CREDIT_PERMS = (
 | **Instruction dossiers** | ❌ | ❌ |
 | **Contrôle final** | ❌ | ✅ (Responsabilité principale) |
 
-### Workflow Recommandé
+### Exemple de Workflow (Configuration Possible)
+
+**Note** : Ceci est un EXEMPLE de configuration workflow, pas une définition du rôle.
 
 ```
-1. Instruction → Chargé d'affaire
-2. Analyse → Analyste crédit
-3. Décision → Comité de crédit / DG
-4. Opérations → Resp. Opérations (contrats, garanties)
-5. Contrôle final + Décaissement → Administrateur de crédit ✨ (NOUVEAU)
+Étape 1 : "Instruction"
+  Rôle : Chargé d'affaire
+  Permissions utilisées : CRUD dossiers, analyses, documents
+  
+Étape 2 : "Analyse crédit"
+  Rôle : Analyste crédit
+  Type : Avis
+  Permissions utilisées : CRUD analyses financières
+  
+Étape 3 : "Décision Comité"
+  Rôle : Comité de crédit
+  Type : Décision (Approuve/Rejette)
+  Permissions utilisées : Modification tâche workflow
+  
+Étape 4 : "Préparation contrats & garanties"
+  Rôle : Resp. Opérations
+  Type : Avis (préparation)
+  Permissions utilisées : Génération contrats, gestion garanties
+  
+Étape 5 : "Vérification pré-décaissement" ✨
+  Rôle : Administrateur de crédit
+  Type : Avis (vérification conformité)
+  Conditions : Contrats signés, garanties formalisées
+  Permissions utilisées : Lecture complète, modification contrats/garanties
+  
+Étape 6 : "Décaissement CBS" ✨
+  Rôle : Administrateur de crédit
+  Action : Décaissement (technique)
+  Permissions utilisées : disburse_creditapplication
 ```
+
+**À configurer dans le workflow selon vos besoins :**
+- Nombre d'étapes
+- Qui décide vs qui donne un avis
+- Conditions de passage
+- Rôles assignés à chaque étape
 
 ---
 
