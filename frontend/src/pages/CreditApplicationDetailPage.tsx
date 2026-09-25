@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangle,
   ArrowLeft,
   Ban,
   Banknote,
@@ -1310,6 +1311,8 @@ function FieldVisitsCard({
   const [visitDate, setVisitDate] = useState("");
   const [report, setReport] = useState("");
   const [geoCoordinates, setGeoCoordinates] = useState("");
+  const [photos, setPhotos] = useState<string[]>([]);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const { data: visits } = useQuery({
@@ -1323,6 +1326,33 @@ function FieldVisitsCard({
     enabled: !!appId,
   });
 
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    setUploadingPhoto(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", files[0]);
+      formData.append("application", appId);
+      formData.append("doc_type", "FIELD_VISIT_PHOTO");
+
+      const response = await api.post("/credit-documents/", formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
+
+      setPhotos([...photos, response.data.id]);
+    } catch (err) {
+      setError("Erreur lors de l'upload de la photo.");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const removePhoto = (photoId: string) => {
+    setPhotos(photos.filter((id) => id !== photoId));
+  };
+
   const addMutation = useMutation({
     mutationFn: async () =>
       (
@@ -1331,6 +1361,7 @@ function FieldVisitsCard({
           visit_date: visitDate,
           report,
           geo_coordinates: geoCoordinates.trim(),
+          photos,
         })
       ).data,
     onSuccess: () => {
@@ -1339,6 +1370,7 @@ function FieldVisitsCard({
       setVisitDate("");
       setReport("");
       setGeoCoordinates("");
+      setPhotos([]);
       setError(null);
     },
     onError: () => setError("Enregistrement de la visite impossible."),
@@ -1353,8 +1385,45 @@ function FieldVisitsCard({
     addMutation.mutate();
   }
 
+  // Récupérer les règles applicables depuis readiness
+  const { data: readiness } = useQuery({
+    queryKey: ["credit-readiness", appId],
+    queryFn: async () =>
+      (
+        await api.get<CreditReadiness>(
+          `/credit-applications/${appId}/readiness/`,
+        )
+      ).data,
+    enabled: !!appId,
+  });
+
+  const visitRules = readiness?.checks.filter(
+    (c) => c.key.startsWith("field_visit_rule_")
+  ) || [];
+
   return (
     <ViewSection id="sec-visits" icon={MapPin} title="Visites terrain">
+      {visitRules.length > 0 && !visitRules.every((r) => r.ok) && (
+        <div
+          style={{
+            padding: "12px",
+            backgroundColor: "#fef3c7",
+            border: "1px solid #f59e0b",
+            borderRadius: "6px",
+            marginBottom: "12px",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
+            <AlertTriangle size={18} color="#f59e0b" />
+            <strong>Visite terrain obligatoire</strong>
+          </div>
+          {visitRules.filter((r) => !r.ok).map((rule) => (
+            <div key={rule.key} style={{ marginLeft: "26px", fontSize: "0.875rem", marginBottom: "4px" }}>
+              • {rule.message}
+            </div>
+          ))}
+        </div>
+      )}
       {visits && visits.results.length > 0 ? (
         <div className="visit-list">
           {visits.results.map((v) => (
@@ -1383,6 +1452,13 @@ function FieldVisitsCard({
                 >
                   <MapPin size={12} /> {v.geo_coordinates.trim()}
                 </a>
+              )}
+              {v.photos && v.photos.length > 0 && (
+                <div style={{ marginTop: 8 }}>
+                  <span className="muted small" style={{ display: "block", marginBottom: 4 }}>
+                    📷 {v.photos.length} photo{v.photos.length > 1 ? "s" : ""} jointe{v.photos.length > 1 ? "s" : ""}
+                  </span>
+                </div>
               )}
             </div>
           ))}
@@ -1428,6 +1504,30 @@ function FieldVisitsCard({
               onChange={(e) => setReport(e.target.value)}
             />
           </label>
+          <div className="field">
+            <span>Photos de la visite</span>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handlePhotoUpload}
+              disabled={uploadingPhoto}
+            />
+            {uploadingPhoto && <span className="muted small">Upload en cours...</span>}
+            {photos.length > 0 && (
+              <div style={{ marginTop: 8 }}>
+                {photos.map((photoId, idx) => (
+                  <span
+                    key={photoId}
+                    className="badge"
+                    style={{ marginRight: 4, cursor: "pointer" }}
+                    onClick={() => removePhoto(photoId)}
+                  >
+                    Photo {idx + 1} ✕
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
           {error && <div className="form-error">{error}</div>}
           <div className="page-actions">
             <button
