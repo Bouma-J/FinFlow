@@ -1867,3 +1867,4 @@ from .loan_operations import (  # noqa: E402
     LoanRestructuringRequest,
     LoanWriteOffRequest,
 )
+from .renewal_policy import CreditRenewalPolicy  # noqa: E402

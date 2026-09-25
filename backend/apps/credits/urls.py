@@ -11,6 +11,10 @@ from .views import (
     LoanViewSet,
     LoanWriteOffRequestViewSet,
 )
+from .renewal_views import (
+    ClientRenewalViewSet,
+    CreditApplicationComparisonViewSet,
+)
 
 router = DefaultRouter()
 router.register("credit-applications", CreditApplicationViewSet, basename="credit-application")
@@ -33,6 +37,16 @@ router.register(
     "loan-restructuring-requests",
     LoanRestructuringRequestViewSet,
     basename="loan-restructuring-request",
+)
+router.register(
+    "clients",
+    ClientRenewalViewSet,
+    basename="client-renewal",
+)
+router.register(
+    "applications-comparison",
+    CreditApplicationComparisonViewSet,
+    basename="application-comparison",
 )
 
 urlpatterns = router.urls

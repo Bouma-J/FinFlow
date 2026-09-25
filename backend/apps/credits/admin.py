@@ -5,6 +5,7 @@ from .models import (
     CreditApplication,
     CreditDocument,
     CreditInstructionPolicy,
+    CreditRenewalPolicy,
     FieldVisit,
     FinancialAnalysis,
     Installment,
@@ -332,3 +333,71 @@ class LoanRestructuringRequestAdmin(admin.ModelAdmin):
         if obj and obj.status == "EXECUTED":
             return False
         return super().has_delete_permission(request, obj)
+
+
+@admin.register(CreditRenewalPolicy)
+class CreditRenewalPolicyAdmin(admin.ModelAdmin):
+    """Admin pour les politiques de renouvellement de crédit."""
+
+    list_display = [
+        "tenant",
+        "min_repayment_rate",
+        "max_days_late_allowed",
+        "block_if_active_litigation",
+        "block_if_active_loan",
+        "block_if_writeoff_history",
+    ]
+    list_filter = ["tenant", "block_if_active_litigation", "block_if_active_loan"]
+    
+    fieldsets = (
+        (
+            "Seuils d'éligibilité",
+            {
+                "fields": (
+                    "tenant",
+                    "min_repayment_rate",
+                    "max_days_late_allowed",
+                    "min_months_since_last_disbursement",
+                    "min_months_since_loan_closure",
+                )
+            },
+        ),
+        (
+            "Règles de blocage (alertes bloquantes)",
+            {
+                "fields": (
+                    "block_if_active_litigation",
+                    "block_if_active_dation",
+                    "block_if_recent_restructuring",
+                    "block_if_writeoff_history",
+                    "block_if_active_loan",
+                    "block_if_below_repayment_threshold",
+                )
+            },
+        ),
+        (
+            "Règles d'avertissement (alertes non bloquantes)",
+            {
+                "fields": (
+                    "warn_if_late_payment",
+                    "warn_if_high_debt_ratio",
+                    "warn_if_increasing_amount",
+                    "warn_if_multiple_active_loans",
+                )
+            },
+        ),
+        (
+            "Seuils de comparaison",
+            {
+                "fields": (
+                    "significant_change_threshold",
+                    "high_debt_ratio_threshold",
+                    "max_amount_increase_pct",
+                )
+            },
+        ),
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        """Interdire la suppression de la politique par défaut."""
+        return request.user.is_superuser
