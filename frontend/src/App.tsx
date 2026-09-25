@@ -73,6 +73,8 @@ const CreditApplicationDetailPage = lazy(() => import("@/pages/CreditApplication
 const CreditApplicationEditPage = lazy(() => import("@/pages/CreditApplicationEditPage").then(m => ({ default: m.CreditApplicationEditPage })));
 const FinancialAnalysisPage = lazy(() => import("@/pages/FinancialAnalysisPage").then(m => ({ default: m.FinancialAnalysisPage })));
 const LoansPage = lazy(() => import("@/pages/LoansPage").then(m => ({ default: m.LoansPage })));
+const LoanWriteOffRequestsPage = lazy(() => import("@/pages/LoanWriteOffRequestsPage").then(m => ({ default: m.LoanWriteOffRequestsPage })));
+const LoanRestructuringRequestsPage = lazy(() => import("@/pages/LoanRestructuringRequestsPage").then(m => ({ default: m.LoanRestructuringRequestsPage })));
 
 const GuaranteesPage = lazy(() => import("@/pages/GuaranteesPage").then(m => ({ default: m.GuaranteesPage })));
 const GuaranteeDetailPage = lazy(() => import("@/pages/GuaranteeDetailPage").then(m => ({ default: m.GuaranteeDetailPage })));
@@ -205,6 +207,22 @@ export default function App() {
           element={
             <PermissionRoute anyOf={PERM_CREDITS}>
               <LoansPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/prets/writeoff-requests"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <LoanWriteOffRequestsPage />
+            </PermissionRoute>
+          }
+        />
+        <Route
+          path="/prets/restructuring-requests"
+          element={
+            <PermissionRoute anyOf={PERM_CREDITS}>
+              <LoanRestructuringRequestsPage />
             </PermissionRoute>
           }
         />
