@@ -127,6 +127,7 @@ const AdminNotificationsPage = lazy(() => import("@/pages/admin/NotificationsPag
 const AdminCollectionEscalationRulesPage = lazy(() => import("@/pages/admin/CollectionEscalationRulesPage").then(m => ({ default: m.AdminCollectionEscalationRulesPage })));
 const AdminCollectionTranchesPage = lazy(() => import("@/pages/admin/CollectionTranchesPage").then(m => ({ default: m.AdminCollectionTranchesPage })));
 const AdminCreditPolicyPage = lazy(() => import("@/pages/admin/CreditPolicyPage").then(m => ({ default: m.AdminCreditPolicyPage })));
+const AdminFieldVisitRulesPage = lazy(() => import("@/pages/admin/FieldVisitRulesPage").then(m => ({ default: m.AdminFieldVisitRulesPage })));
 const AdminDelegationsPage = lazy(() => import("@/pages/admin/DelegationsPage").then(m => ({ default: m.AdminDelegationsPage })));
 const AdminProductsPage = lazy(() => import("@/pages/admin/ProductsAdminPage").then(m => ({ default: m.AdminProductsPage })));
 const AdminCbsReferentialsPage = lazy(() => import("@/pages/admin/CbsReferentialsPage").then(m => ({ default: m.AdminCbsReferentialsPage })));
@@ -650,6 +651,16 @@ export default function App() {
             <AdminRoute>
               <PermissionRoute anyOf={PERM_ADMIN_POLICY}>
                 <AdminCreditPolicyPage />
+              </PermissionRoute>
+            </AdminRoute>
+          }
+        />
+        <Route
+          path="/admin/regles-visites-terrain"
+          element={
+            <AdminRoute>
+              <PermissionRoute anyOf={PERM_ADMIN_POLICY}>
+                <AdminFieldVisitRulesPage />
               </PermissionRoute>
             </AdminRoute>
           }

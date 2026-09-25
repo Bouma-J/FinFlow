@@ -1369,6 +1369,22 @@ export const CREDIT_LABELS = {
   } as Record<string, string>,
 };
 
+export interface FieldVisitRule {
+  id: string;
+  name: string;
+  is_active: boolean;
+  priority: number;
+  client_type: string;
+  individual_profile: string;
+  amount_min: string | null;
+  amount_max: string | null;
+  required_role: string;
+  blocking_stage: 'SUBMIT' | 'OPINION' | 'APPROVAL';
+  blocking_stage_display: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface FieldVisit {
   id: string;
   application: string;
@@ -1379,6 +1395,7 @@ export interface FieldVisit {
   can_edit: boolean;
   geo_coordinates: string;
   report: string;
+  photos: string[];
   created_at?: string;
 }
 
