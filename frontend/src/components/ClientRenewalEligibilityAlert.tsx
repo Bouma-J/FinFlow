@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle, Info, XCircle } from "lucide-react";
+import { AlertCircle, Info, XCircle } from "lucide-react";
 import { api } from "@/api/client";
 import { Spinner } from "@/components/ui";
 

@@ -7,7 +7,6 @@ import {
   FileText,
   HeartPulse,
   History,
-  Home,
   Images,
   NotebookPen,
   Paperclip,
@@ -16,7 +15,6 @@ import {
   Store,
   Trash2,
   UploadCloud,
-  Users,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
@@ -68,21 +66,23 @@ const CURRENCIES_FALLBACK = [
   { value: "GNF", label: "Franc guinéen (GNF)" },
   { value: "MAD", label: "Dirham marocain (MAD)" },
 ];
-const TAX_REGIME = [
-  { value: "SYNTHETIC", label: "Impôt synthétique" },
-  { value: "REAL", label: "Régime réel" },
-  { value: "SPECIFIC_EXEMPTION", label: "Exonérations spécifiques" },
-  { value: "INFORMAL", label: "Secteur informel" },
-];
-const CATCHMENT = [
-  { value: "LOCAL", label: "Local" },
-  { value: "NATIONAL", label: "National" },
-  { value: "EXPORT", label: "Export" },
-];
-const PREMISES = [
-  { value: "OWNER", label: "Propriétaire" },
-  { value: "TENANT", label: "Locataire" },
-];
+// DEPRECATED: Ces constantes sont conservées pour référence mais non utilisées
+// Les champs correspondants sont désormais dans l'analyse financière
+// const TAX_REGIME = [
+//   { value: "SYNTHETIC", label: "Impôt synthétique" },
+//   { value: "REAL", label: "Régime réel" },
+//   { value: "SPECIFIC_EXEMPTION", label: "Exonérations spécifiques" },
+//   { value: "INFORMAL", label: "Secteur informel" },
+// ];
+// const CATCHMENT = [
+//   { value: "LOCAL", label: "Local" },
+//   { value: "NATIONAL", label: "National" },
+//   { value: "EXPORT", label: "Export" },
+// ];
+// const PREMISES = [
+//   { value: "OWNER", label: "Propriétaire" },
+//   { value: "TENANT", label: "Locataire" },
+// ];
 
 const TEXT_KEYS = [
   "product", "agency", "currency",
@@ -122,14 +122,15 @@ const TEXT_ONLY_KEYS = new Set<string>([
   "suspensive_conditions", "beneficial_owner", "funds_origin",
 ]);
 
-const CONTRACT_TYPES = [
-  { value: "CDI", label: "CDI" },
-  { value: "CDD", label: "CDD" },
-  { value: "CIVIL_SERVANT", label: "Fonctionnaire" },
-  { value: "INDEPENDENT", label: "Indépendant" },
-  { value: "RETIRED", label: "Retraité" },
-  { value: "OTHER", label: "Autre" },
-];
+// DEPRECATED: CONTRACT_TYPES désormais dans l'analyse financière
+// const CONTRACT_TYPES = [
+//   { value: "CDI", label: "CDI" },
+//   { value: "CDD", label: "CDD" },
+//   { value: "CIVIL_SERVANT", label: "Fonctionnaire" },
+//   { value: "INDEPENDENT", label: "Indépendant" },
+//   { value: "RETIRED", label: "Retraité" },
+//   { value: "OTHER", label: "Autre" },
+// ];
 const PURPOSE_TYPES = [
   { value: "WORKING_CAPITAL", label: "Fonds de roulement" },
   { value: "EQUIPMENT", label: "Investissement / équipement" },
@@ -491,8 +492,7 @@ export function CreditApplicationForm({
         { id: "sec-conditions", icon: Banknote, label: "Conditions du crédit", show: true },
         { id: "sec-financing", icon: Wallet, label: "Plan de financement", show: showTypedSections },
         { id: "sec-activity", icon: Store, label: isGroupement ? "Activité du groupement" : "Activité de l'entreprise", show: showTypedSections && isLegalEntity },
-        { id: "sec-market", icon: Users, label: "Environnement commercial", show: showTypedSections && isLegalEntity },
-        { id: "sec-applicant", icon: Briefcase, label: "Profil du demandeur", show: showTypedSections && isIndividual },
+        { id: "sec-applicant", icon: Briefcase, label: "Domiciliation salaire", show: showTypedSections && isIndividual },
         { id: "sec-banking", icon: History, label: "Relation bancaire", show: showTypedSections },
         { id: "sec-insurance", icon: HeartPulse, label: "Assurance", show: showTypedSections },
         { id: "sec-compliance", icon: ShieldCheck, label: "Conformité (LBC-FT)", show: showTypedSections },
@@ -1026,60 +1026,32 @@ export function CreditApplicationForm({
             id="sec-activity"
             icon={Store}
             title={isGroupement ? "Activité du groupement" : "Activité de l'entreprise"}
-            description="Contexte opérationnel. Le diagnostic sectoriel et l'effectif se saisissent dans l'analyse financière."
+            description="Informations de base. Diagnostic détaillé (secteur, clientèle, régime fiscal, délais) : analyse financière."
           >
             <div className="form-grid two-col">
               <Text label="Date de création" type="date" value={text.activity_start_date} onChange={set("activity_start_date")} />
               <Text label="Adresse de l'établissement" value={text.exact_address} onChange={set("exact_address")} />
-              <Text label="Clientèle" value={text.clientele} onChange={set("clientele")} />
-              <Select label="Régime fiscal" value={text.tax_regime} onChange={set("tax_regime")} options={TAX_REGIME} />
-              <Select label="Statut d'occupation des locaux" value={text.premises_status} onChange={set("premises_status")} options={PREMISES} />
-              <Text label="Délai moyen paiement clients (jours)" type="number" value={text.avg_client_payment_days} onChange={set("avg_client_payment_days")} />
-              <Text label="Délai moyen paiement fournisseurs (jours)" type="number" value={text.avg_supplier_payment_days} onChange={set("avg_supplier_payment_days")} />
             </div>
             <MultiFileField label="Photos du stock" files={stockPhotos} onChange={setStockPhotos} />
             <p className="muted small" style={{ marginBottom: 0 }}>
-              Secteur, saisonnalité, concurrence, effectif et chiffres
-              (CA, marge, bilan) : saisis dans l&apos;analyse financière.
+              ℹ️ Les informations détaillées (clientèle, régime fiscal, statut locaux, délais de paiement, secteur, effectif, chiffres) sont désormais renseignées dans l'analyse financière.
             </p>
           </FormSection>
         )}
 
-        {showTypedSections && isLegalEntity && (
-          <FormSection
-            id="sec-market"
-            icon={Users}
-            title="Environnement commercial"
-            description="Zone de chalandise. Concurrence et fournisseurs : analyse financière."
-          >
-            <div className="form-grid two-col">
-              <Select label="Zone de chalandise" value={text.catchment_area} onChange={set("catchment_area")} options={CATCHMENT} />
-            </div>
-          </FormSection>
-        )}
+        {/* Section "Environnement commercial" supprimée - déplacée vers l'analyse financière */}
 
         {showTypedSections && isIndividual && (
           <FormSection
             id="sec-applicant"
             icon={Briefcase}
-            title="Profil du demandeur"
-            description="Situation professionnelle et logement. Ancienneté et revenus : analyse financière."
+            title="Domiciliation du salaire"
+            description="Domiciliation obligatoire du salaire. Autres informations (employeur, contrat) : renseignées dans l'analyse financière."
           >
-            <div className="subsection-label">
-              <Briefcase size={14} /> Emploi
-            </div>
-            <div className="form-grid two-col">
-              <Text label="Employeur" value={text.employer_name} onChange={set("employer_name")} />
-              <Select label="Type de contrat" value={text.contract_type} onChange={set("contract_type")} options={CONTRACT_TYPES} />
-              <Text label="Personnes à charge" type="number" value={text.dependents_count} onChange={set("dependents_count")} />
-            </div>
             <Check label="Domiciliation du salaire dans l'institution" checked={bools.salary_domiciliation} onChange={setBool("salary_domiciliation")} />
-            <div className="subsection-label">
-              <Home size={14} /> Logement
-            </div>
-            <div className="form-grid two-col">
-              <Select label="Statut d'occupation du logement" value={text.premises_status} onChange={set("premises_status")} options={PREMISES} />
-            </div>
+            <p className="muted small" style={{ marginBottom: 0, marginTop: "0.5rem" }}>
+              ℹ️ L'employeur, le type de contrat, les personnes à charge et le statut du logement sont désormais renseignés dans l'analyse financière pour plus de précision.
+            </p>
           </FormSection>
         )}
 
@@ -1088,13 +1060,15 @@ export function CreditApplicationForm({
             id="sec-banking"
             icon={History}
             title="Relation bancaire"
-            description="Compte dans l'institution. Centrale des risques et incidents : analyse financière."
+            description="Compte dans l'institution. Mouvements bancaires, centrale des risques et incidents : analyse financière."
           >
             <div className="form-grid two-col">
               <Text label="Numéro de compte dans l'institution" value={text.client_account_number} onChange={set("client_account_number")} />
               <Text label="Début de la relation" type="date" value={text.relationship_start_date} onChange={set("relationship_start_date")} />
-              <Text label="Mouvements créditeurs mensuels moyens" type="number" value={text.avg_monthly_credit_movements} onChange={set("avg_monthly_credit_movements")} />
             </div>
+            <p className="muted small" style={{ marginBottom: 0, marginTop: "0.5rem" }}>
+              ℹ️ Les mouvements bancaires (créditeurs/débiteurs) sont désormais renseignés dans l'analyse financière avec la période d'observation.
+            </p>
           </FormSection>
         )}
 
