@@ -15,6 +15,7 @@ import {
   Store,
   Trash2,
   UploadCloud,
+  Users,
   Wallet,
   type LucideIcon,
 } from "lucide-react";
