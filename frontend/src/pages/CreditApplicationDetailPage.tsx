@@ -92,6 +92,7 @@ import { DecisionPanel } from "@/components/DecisionPanel";
 import { RenewGuaranteesPanel } from "@/components/RenewGuaranteesPanel";
 import { SuretyEngagementActions } from "@/components/SuretyEngagementActions";
 import { Badge, ErrorState, Spinner, formatDate, formatMoney } from "@/components/ui";
+import { FinancialAnalysisDetailsModal } from "@/components/FinancialAnalysisDetailsModal";
 
 /** Réponse normalisée de POST …/cbs-situation/ (Perfect crd/situation). */
 type CbsCreditSituation = {
@@ -700,6 +701,7 @@ function AnalysisDetail({
   currency: string;
   appId: string;
 }) {
+  const [showDetails, setShowDetails] = useState(false);
   const cur = currency;
   const isCorp = analysis.client_type === "CORPORATE";
   const isGroupement = analysis.client_type === "PROFESSIONAL";
@@ -738,41 +740,50 @@ function AnalysisDetail({
     flags?.dscr_ok === undefined ? undefined : flags.dscr_ok ? "ok" : "warn";
 
   return (
-    <div className="analysis-item">
-      <div className="analysis-item-head">
-        <div className="analysis-author">
-          <UserRound size={15} />
-          <div>
-            <strong>{analysis.created_by_display || "Auteur inconnu"}</strong>
-            {analysis.author_role && (
-              <span className="analysis-role">{analysis.author_role}</span>
+    <>
+      <div className="analysis-item">
+        <div className="analysis-item-head">
+          <div className="analysis-author">
+            <UserRound size={15} />
+            <div>
+              <strong>{analysis.created_by_display || "Auteur inconnu"}</strong>
+              {analysis.author_role && (
+                <span className="analysis-role">{analysis.author_role}</span>
+              )}
+              {analysis.is_reference && (
+                <Badge value="REFERENCE" label="Référence" />
+              )}
+            </div>
+          </div>
+          <div className="analysis-head-right">
+            {analysis.recommendation && (
+              <Badge
+                value={analysis.recommendation}
+                label={
+                  FINANCE_LABELS.recommendation[analysis.recommendation] ||
+                  analysis.recommendation
+                }
+              />
             )}
-            {analysis.is_reference && (
-              <Badge value="REFERENCE" label="Référence" />
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => setShowDetails(true)}
+              style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+            >
+              <LineChart size={14} />
+              Afficher les détails
+            </button>
+            {analysis.can_edit && (
+              <Link
+                className="btn btn-ghost btn-sm"
+                to={`/dossiers/${appId}/analyse-financiere/${analysis.id}`}
+              >
+                <FilePenLine size={14} />
+                Modifier
+              </Link>
             )}
           </div>
         </div>
-        <div className="analysis-head-right">
-          {analysis.recommendation && (
-            <Badge
-              value={analysis.recommendation}
-              label={
-                FINANCE_LABELS.recommendation[analysis.recommendation] ||
-                analysis.recommendation
-              }
-            />
-          )}
-          {analysis.can_edit && (
-            <Link
-              className="btn btn-ghost btn-sm"
-              to={`/dossiers/${appId}/analyse-financiere/${analysis.id}`}
-            >
-              <FilePenLine size={14} />
-              Modifier
-            </Link>
-          )}
-        </div>
-      </div>
 
       <p className="muted small" style={{ marginTop: 0 }}>
         {isCorp
@@ -1224,6 +1235,15 @@ function AnalysisDetail({
         </SubSection>
       )}
     </div>
+
+    {showDetails && (
+      <FinancialAnalysisDetailsModal
+        analysis={analysis}
+        currency={cur}
+        onClose={() => setShowDetails(false)}
+      />
+    )}
+  </>
   );
 }
 

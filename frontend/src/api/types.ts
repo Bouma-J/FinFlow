@@ -1061,6 +1061,41 @@ export interface FinancialAnalysis {
   individual_profile?: "" | "SALARIE" | "INDEPENDANT" | "MIXTE";
   reference_period: string;
   analysis_date: string | null;
+  // NEW: Analysis mode and detailed data
+  analysis_mode?: 'SYNTHETIC' | 'DETAILED';
+  detailed_data?: any;
+  banking_observation_period_months?: number | null;
+  // NEW: Context fields moved from CreditApplication
+  employer_name?: string | null;
+  contract_type?: string | null;
+  premises_status?: string | null;
+  tax_regime?: string | null;
+  avg_client_payment_days?: number | null;
+  avg_supplier_payment_days?: number | null;
+  clientele?: string | null;
+  catchment_area?: string | null;
+  avg_monthly_credit_movements?: string | null;
+  avg_monthly_debit_movements?: string | null;
+  // NEW: Group structure
+  group_structure?: string | null;
+  member_count?: number | null;
+  // NEW: Detailed financial fields (more user-friendly names)
+  rent?: string | null;
+  food?: string | null;
+  transport?: string | null;
+  education?: string | null;
+  health?: string | null;
+  utilities?: string | null;
+  other_expenses?: string | null;
+  pension_income?: string | null;
+  investment_income?: string | null;
+  cost_of_goods_sold?: string | null;
+  purchases?: string | null;
+  inventory_start?: string | null;
+  inventory_end?: string | null;
+  operating_expenses?: string | null;
+  staff_costs?: string | null;
+  solidarity_fund?: string | null;
   // Endettement consolidé & centrale des risques
   active_loans_count: number;
   credit_bureau_checked: boolean;
