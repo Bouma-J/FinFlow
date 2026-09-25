@@ -101,7 +101,7 @@ class Migration(migrations.Migration):
                 ('significant_change_threshold', models.DecimalField(
                     decimal_places=2,
                     default=Decimal('15.00'),
-                    help_text='Variation (en %) considérée comme significative pour la comparaison. Ex: 15% signifie qu'une variation >15% sera mise en évidence.',
+                    help_text='Variation (en %) considérée comme significative pour la comparaison. Ex: 15% signifie qu\'une variation >15% sera mise en évidence.',
                     max_digits=6,
                     verbose_name='seuil de changement significatif (%)'
                 )),
