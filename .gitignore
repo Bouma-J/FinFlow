@@ -54,3 +54,20 @@ docker-rebuild.log
 # Ils périment vite et peuvent contenir des identifiants de recette.
 _qa_*
 
+# Backups et dumps
+*.sql
+*.dump
+*.backup
+/var/backups/
+
+# Coverage
+.coverage
+htmlcov/
+coverage.xml
+
+# Secrets et certificats
+*.pem
+*.key
+*.crt
+!**/certs/.gitkeep
+
