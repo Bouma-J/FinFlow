@@ -410,16 +410,13 @@ interface TableProps {
 }
 
 const Table: React.FC<TableProps> = ({ children }) => (
-  <table style={{
-    width: '100%',
-    borderCollapse: 'collapse',
-    backgroundColor: 'white',
-    border: '1px solid #e5e7eb',
-    borderRadius: '0.5rem',
-    overflow: 'hidden',
-  }}>
-    {children}
-  </table>
+  <dl className="def-list two">
+    {React.Children.map(children, (child) =>
+      React.isValidElement<{ children?: React.ReactNode }>(child) && child.type === "tbody"
+        ? child.props.children
+        : child,
+    )}
+  </dl>
 );
 
 interface TableRowProps {
@@ -429,27 +426,10 @@ interface TableRowProps {
 }
 
 const TableRow: React.FC<TableRowProps> = ({ label, value, emphasized = false }) => (
-  <tr style={{
-    borderBottom: '1px solid #f3f4f6',
-    backgroundColor: emphasized ? '#f0f9ff' : 'transparent',
-  }}>
-    <td style={{
-      padding: '0.75rem 1rem',
-      fontWeight: emphasized ? 600 : 500,
-      color: '#374151',
-      width: '50%',
-    }}>
-      {label}
-    </td>
-    <td style={{
-      padding: '0.75rem 1rem',
-      textAlign: 'right',
-      fontWeight: emphasized ? 700 : 400,
-      color: emphasized ? '#1e40af' : '#1f2937',
-    }}>
-      {value}
-    </td>
-  </tr>
+  <div>
+    <dt>{label}</dt>
+    <dd style={emphasized ? { color: "var(--brand-ink, #1e40af)" } : undefined}>{value}</dd>
+  </div>
 );
 
 interface DetailedTableProps {
