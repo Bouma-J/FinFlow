@@ -1,0 +1,3 @@
+# Monitoring et observabilité
+sentry-sdk>=2.0.0
+prometheus-client>=0.20.0
