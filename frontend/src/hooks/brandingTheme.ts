@@ -9,6 +9,7 @@ export const DEFAULT_THEME = {
 };
 
 export const LOGIN_TENANT_CODE_KEY = "finflow.login-tenant-code";
+const BRANDING_CACHE_KEY = "finflow.tenant-branding-cache";
 
 type BrandColors = {
   brand_primary?: string | null;
@@ -118,4 +119,47 @@ export function rememberLoginTenantCode(code: string | null | undefined) {
 
 export function readRememberedLoginTenantCode(): string | null {
   return localStorage.getItem(LOGIN_TENANT_CODE_KEY);
+}
+
+/**
+ * Cache les couleurs du branding dans localStorage pour éviter le flash au refresh.
+ */
+export function cacheTenantBranding(branding: BrandColors | null) {
+  if (!branding) {
+    localStorage.removeItem(BRANDING_CACHE_KEY);
+    return;
+  }
+  try {
+    localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify({
+      brand_primary: branding.brand_primary,
+      brand_secondary: branding.brand_secondary,
+      brand_accent: branding.brand_accent,
+      timestamp: Date.now(),
+    }));
+  } catch {
+    // Ignore errors (storage full, private mode, etc.)
+  }
+}
+
+/**
+ * Lit les couleurs cachées et les applique immédiatement (synchrone).
+ * À appeler au tout début du chargement de l'app.
+ */
+export function applyCachedBrandingSync() {
+  try {
+    const cached = localStorage.getItem(BRANDING_CACHE_KEY);
+    if (!cached) return;
+    
+    const data = JSON.parse(cached);
+    // Invalider le cache après 7 jours
+    if (data.timestamp && (Date.now() - data.timestamp > 7 * 24 * 60 * 60 * 1000)) {
+      localStorage.removeItem(BRANDING_CACHE_KEY);
+      return;
+    }
+    
+    // Appliquer immédiatement (avant le premier render)
+    applyTenantTheme(data);
+  } catch {
+    // Ignore errors (invalid JSON, etc.)
+  }
 }

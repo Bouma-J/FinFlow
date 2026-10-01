@@ -6,11 +6,14 @@ import type { Tenant, TenantBranding } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
   applyTenantTheme,
+  cacheTenantBranding,
   resolveLogoUrl,
 } from "@/hooks/brandingTheme";
 
 export {
   applyTenantTheme,
+  applyCachedBrandingSync,
+  cacheTenantBranding,
   DEFAULT_THEME,
   LOGIN_TENANT_CODE_KEY,
   readRememberedLoginTenantCode,
@@ -36,7 +39,9 @@ export function usePublicTenantBranding(code: string | null | undefined) {
   });
 
   useEffect(() => {
-    applyTenantTheme(query.data ?? null);
+    const brandingData = query.data ?? null;
+    applyTenantTheme(brandingData);
+    cacheTenantBranding(brandingData);
   }, [query.data]);
 
   const logoUrl = resolveLogoUrl(query.data ?? null);
@@ -71,6 +76,7 @@ export function useTenantBranding() {
 
   useEffect(() => {
     applyTenantTheme(branding);
+    cacheTenantBranding(branding);
   }, [branding]);
 
   const logoUrl = resolveLogoUrl(branding);
