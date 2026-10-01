@@ -825,11 +825,11 @@ function AnalysisDetail({
             />
             <Metric
               label="Cotisations"
-              value={formatMoney(analysis.collective_contributions, cur)}
+              value={formatMoney(analysis.collective_contributions ?? null, cur)}
             />
             <Metric
               label="CA collectif"
-              value={formatMoney(analysis.group_activity_turnover, cur)}
+              value={formatMoney(analysis.group_activity_turnover ?? null, cur)}
             />
             <Metric
               label="Capacité collective"
