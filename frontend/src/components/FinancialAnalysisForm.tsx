@@ -3,6 +3,7 @@ import { IndividualSalarySection } from './financial-analysis/IndividualSalarySe
 import { IndividualBusinessSection } from './financial-analysis/IndividualBusinessSection';
 import { CorporateSection } from './financial-analysis/CorporateSection';
 import { GroupSection } from './financial-analysis/GroupSection';
+import { applyAnalysisMode } from './financial-analysis/modeConversion';
 import type { FinancialAnalysis } from '../types/financialAnalysis';
 
 interface FinancialAnalysisFormProps {
@@ -44,10 +45,12 @@ export const FinancialAnalysisForm: React.FC<FinancialAnalysisFormProps> = ({
   }, [existingData, creditApplicationId]);
 
   const handleFormUpdate = (updates: Partial<FinancialAnalysis>) => {
-    setFormData((prev) => ({
-      ...prev,
-      ...updates,
-    }));
+    setFormData((prev) => {
+      if (updates.analysis_mode && updates.analysis_mode !== prev.analysis_mode) {
+        return applyAnalysisMode({ ...prev, ...updates }, updates.analysis_mode);
+      }
+      return { ...prev, ...updates };
+    });
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

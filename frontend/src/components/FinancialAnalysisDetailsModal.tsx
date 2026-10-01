@@ -36,10 +36,9 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
   const detailedData = hasDetailedData ? (typeof analysis.detailed_data === 'string' ? JSON.parse(analysis.detailed_data) : analysis.detailed_data) : null;
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div 
-        className="modal-content" 
-        style={{ maxWidth: '1200px', maxHeight: '90vh', overflow: 'auto' }}
+    <div className="modal-overlay modal-overlay--top" onClick={onClose}>
+      <div
+        className="modal-content modal-content--analysis"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}

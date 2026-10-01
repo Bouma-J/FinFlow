@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 import { ErrorState } from "@/components/ui";
+import { reportClientError } from "@/observability";
 
 type Props = { children: ReactNode };
 type State = { hasError: boolean; message: string };
@@ -21,6 +22,7 @@ export class ErrorBoundary extends Component<Props, State> {
   componentDidCatch(error: Error, info: ErrorInfo) {
     // eslint-disable-next-line no-console
     console.error("ErrorBoundary", error, info.componentStack);
+    reportClientError(error?.message || "erreur inattendue", error?.stack);
   }
 
   render() {

@@ -6,11 +6,14 @@ import { BrowserRouter } from "react-router-dom";
 import App from "@/App";
 import { AuthProvider } from "@/auth/AuthContext";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { applyCachedTenantTheme } from "@/hooks/brandingTheme";
 import { applyCachedBrandingSync } from "@/hooks/useTenantBranding";
+import { installClientErrorReporting } from "@/observability";
 import "@/styles.css";
 
-// Appliquer les couleurs cachées AVANT le premier rendu (évite le flash)
 applyCachedBrandingSync();
+applyCachedTenantTheme();
+installClientErrorReporting();
 
 const queryClient = new QueryClient({
   defaultOptions: {

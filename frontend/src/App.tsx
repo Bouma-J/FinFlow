@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import {
@@ -43,26 +43,12 @@ import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AdminRoute } from "@/components/AdminRoute";
 import { PermissionRoute } from "@/components/PermissionRoute";
 import { Layout } from "@/components/Layout";
-import { Spinner } from "@/components/ui";
 
 // Pages critiques chargées immédiatement (first paint)
 import { DashboardPage } from "@/pages/DashboardPage";
 import { LoginPage } from "@/pages/LoginPage";
 import { ForceChangePasswordPage } from "@/pages/ForceChangePasswordPage";
 
-// Fallback loading pour lazy pages
-function PageLoadingFallback() {
-  return (
-    <div className="loading-screen">
-      <Spinner />
-      <p className="text-muted" style={{ marginTop: "1rem" }}>
-        Chargement...
-      </p>
-    </div>
-  );
-}
-
-// Pages principales - lazy loaded
 const ClientsPage = lazy(() => import("@/pages/ClientsPage").then(m => ({ default: m.ClientsPage })));
 const ClientDetailPage = lazy(() => import("@/pages/ClientDetailPage").then(m => ({ default: m.ClientDetailPage })));
 const ClientEditPage = lazy(() => import("@/pages/ClientEditPage").then(m => ({ default: m.ClientEditPage })));
@@ -144,8 +130,7 @@ function FallbackHome() {
 
 export default function App() {
   return (
-    <Suspense fallback={<PageLoadingFallback />}>
-      <Routes>
+    <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/login/:tenantCode" element={<LoginPage />} />
         <Route
@@ -694,6 +679,5 @@ export default function App() {
       </Route>
       <Route path="*" element={<FallbackHome />} />
     </Routes>
-    </Suspense>
   );
 }

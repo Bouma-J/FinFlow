@@ -11,7 +11,13 @@ import axios from "axios";
 
 import { api, tokenStore } from "@/api/client";
 import type { CurrentUser } from "@/api/types";
-import { rememberLoginTenantCode } from "@/hooks/brandingTheme";
+import {
+  applyTenantTheme,
+  clearRememberedTenantTheme,
+  readCachedTenantTheme,
+  rememberLoginTenantCode,
+  rememberTenantTheme,
+} from "@/hooks/brandingTheme";
 
 export class MfaRequiredError extends Error {
   code = "mfa_required" as const;
@@ -110,6 +116,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (data.tenant_branding?.code) {
         rememberLoginTenantCode(data.tenant_branding.code);
       }
+      if (data.tenant_branding?.brand_primary) {
+        rememberTenantTheme(data.tenant, data.tenant_branding);
+        applyTenantTheme(data.tenant_branding);
+      }
     }
   }, []);
 
@@ -186,6 +196,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // ignore — on nettoie localement dans tous les cas
     }
     tokenStore.clear();
+    clearRememberedTenantTheme();
+    applyTenantTheme(null);
     setUser(null);
     setActiveTenantState(null);
   }, []);
@@ -218,7 +230,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ],
   );
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  // Session ouverte sans charte en cache : ne rien peindre tant que les
+  // couleurs de la filiale ne sont pas appliquées (évite le flash du thème par défaut).
+  const holdUntilTheme =
+    loading && Boolean(tokenStore.getAccess()) && !readCachedTenantTheme();
+
+  return (
+    <AuthContext.Provider value={value}>
+      {holdUntilTheme ? null : children}
+    </AuthContext.Provider>
+  );
 }
 
 // eslint-disable-next-line react-refresh/only-export-components

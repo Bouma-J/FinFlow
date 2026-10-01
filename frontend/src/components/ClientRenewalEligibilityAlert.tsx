@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AlertCircle, Info, XCircle } from "lucide-react";
 import { api } from "@/api/client";
@@ -32,6 +32,13 @@ interface EligibilityData {
     has_restructuring: boolean;
     has_writeoff: boolean;
     last_disbursement_date: string | null;
+    loans?: {
+      id: string;
+      application_reference: string;
+      principal: number;
+      disbursed_at: string;
+      status: string;
+    }[];
   };
 }
 
@@ -44,6 +51,7 @@ export function ClientRenewalEligibilityAlert({
   clientId,
   onEligibilityChecked,
 }: Props) {
+  const [showHistory, setShowHistory] = useState(false);
   const eligibility = useQuery({
     queryKey: ["client-renewal-eligibility", clientId],
     queryFn: async () => {
@@ -164,16 +172,39 @@ export function ClientRenewalEligibilityAlert({
 
         {history.total_disbursed > 0 && (
           <button
+            type="button"
             className="btn btn-sm btn-secondary"
-            onClick={() => {
-              // TODO: Ouvrir modal ou page d'historique complet
-              window.open(`/clients/${clientId}/history`, "_blank");
-            }}
+            onClick={() => setShowHistory((open) => !open)}
           >
-            Voir historique complet
+            {showHistory ? "Masquer l'historique" : "Voir historique complet"}
           </button>
         )}
       </div>
+
+      {showHistory && (history.loans?.length ?? 0) > 0 && (
+        <div className="mb-3 space-y-3">
+          {history.loans!.map((loan) => (
+            <dl key={loan.id} className="def-list two">
+              <div>
+                <dt>Dossier</dt>
+                <dd>{loan.application_reference}</dd>
+              </div>
+              <div>
+                <dt>Capital</dt>
+                <dd>{loan.principal.toLocaleString("fr-FR")}</dd>
+              </div>
+              <div>
+                <dt>Décaissé le</dt>
+                <dd>{loan.disbursed_at?.slice(0, 10)}</dd>
+              </div>
+              <div>
+                <dt>Statut</dt>
+                <dd>{loan.status}</dd>
+              </div>
+            </dl>
+          ))}
+        </div>
+      )}
 
       {/* Alertes bloquantes (ERROR) */}
       {errorAlerts.length > 0 && (

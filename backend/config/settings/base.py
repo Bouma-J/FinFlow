@@ -211,8 +211,14 @@ REST_FRAMEWORK = {
         "user_burst": "120/min",
         "anon": "200/hour",
         "login": "12/min",
+        "client_error": "60/hour",
     },
 }
+
+PROMETHEUS_METRICS_TOKEN = env("PROMETHEUS_METRICS_TOKEN", default="")
+# Webhook Alertmanager. Vide + DEBUG=0 : l'endpoint répond 404.
+ALERT_WEBHOOK_TOKEN = env("ALERT_WEBHOOK_TOKEN", default="")
+ALERT_EMAIL_TO = env("ALERT_EMAIL_TO", default="")
 
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
@@ -345,6 +351,7 @@ GED_ALLOWED_EXTENSIONS = [
 DATA_UPLOAD_MAX_MEMORY_SIZE = GED_MAX_UPLOAD_SIZE_MB * 1024 * 1024
 FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # au-delà → fichier temporaire
 
+_log_formatter = "json" if env("LOG_FORMAT", default="text") == "json" else "verbose"
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -353,12 +360,17 @@ LOGGING = {
             "format": "{asctime} [{levelname}] {name}: {message}",
             "style": "{",
         },
+        "json": {"()": "apps.common.logfmt.JsonFormatter"},
     },
     "handlers": {
-        "console": {"class": "logging.StreamHandler", "formatter": "verbose"},
+        "console": {"class": "logging.StreamHandler", "formatter": _log_formatter},
     },
     "root": {"handlers": ["console"], "level": "INFO"},
     "loggers": {
         "finflow": {"handlers": ["console"], "level": "INFO", "propagate": False},
     },
 }
+
+from apps.common.sentry_setup import configure_sentry  # noqa: E402
+
+configure_sentry()

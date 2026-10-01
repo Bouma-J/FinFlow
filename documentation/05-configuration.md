@@ -190,9 +190,15 @@ Windows, donc l’antivirus hôte s’applique aussi aux envois FIN_FLOW.
 
 | Variable | Notes |
 |----------|-------|
-| `SENTRY_DSN` | Active Sentry si non vide |
+| `SENTRY_DSN` | Active Sentry (Django, Celery, Redis) si non vide, y compris en local |
 | `SENTRY_ENVIRONMENT` | ex. `production` |
 | `SENTRY_TRACES_SAMPLE_RATE` | ex. `0.1` |
+| `LOG_FORMAT` | `text` (défaut dev) ou `json` (défaut Compose / prod) |
+| `PROMETHEUS_METRICS_TOKEN` | Si renseigné, `GET /metrics` exige `Authorization: Bearer` |
+| `PROMETHEUS_MULTIPROC_DIR` | Répertoire partagé des compteurs Gunicorn (Compose : `/tmp/prometheus`) |
+| `GRAFANA_ADMIN_PASSWORD` | Mot de passe admin Grafana quand la stack monitoring est lancée |
+| `ALERT_WEBHOOK_TOKEN` | Jeton Bearer du webhook Alertmanager. Vide et `DEBUG=0` : endpoint fermé |
+| `ALERT_EMAIL_TO` | Destinataires des alertes, séparés par des virgules. Vide : journal seulement |
 
 ## 9. Frontend
 

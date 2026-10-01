@@ -1,0 +1,97 @@
+# Stack de supervision. À combiner avec l'orchestration principale :
+#   docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up -d
+#
+# Prometheus : http://127.0.0.1:9090
+# Alertmanager : http://127.0.0.1:9093
+# Grafana : http://127.0.0.1:3000  (admin / valeur de GRAFANA_ADMIN_PASSWORD, défaut finflow)
+# Loki : http://127.0.0.1:3100
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -n "$$PROMETHEUS_METRICS_TOKEN" ]; then
+          printf '%s' "$$PROMETHEUS_METRICS_TOKEN" > /tmp/metrics_token
+        else
+          printf '%s' "open" > /tmp/metrics_token
+        fi
+        exec /bin/prometheus \
+          --config.file=/etc/prometheus/prometheus.yml \
+          --storage.tsdb.retention.time=15d
+    environment:
+      PROMETHEUS_METRICS_TOKEN: ${PROMETHEUS_METRICS_TOKEN:-}
+    volumes:
+      - ./deploy/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/monitoring/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        sed "s|__ALERT_WEBHOOK_TOKEN__|$${ALERT_WEBHOOK_TOKEN}|g" \
+          /etc/alertmanager/alertmanager.yml.template > /tmp/alertmanager.yml
+        exec /bin/alertmanager --config.file=/tmp/alertmanager.yml
+    environment:
+      ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN:-finflow-local-alert}
+    volumes:
+      - ./deploy/monitoring/alertmanager.yml.template:/etc/alertmanager/alertmanager.yml.template:ro
+    ports:
+      - "127.0.0.1:9093:9093"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    volumes:
+      - ./deploy/monitoring/loki.yml:/etc/loki/local-config.yaml:ro
+      - lokidata:/loki
+    ports:
+      - "127.0.0.1:3100:3100"
+    restart: unless-stopped
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./deploy/monitoring/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-finflow}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./deploy/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - prometheus
+      - loki
+    restart: unless-stopped
+
+  backend:
+    environment:
+      ALERT_WEBHOOK_TOKEN: ${ALERT_WEBHOOK_TOKEN:-finflow-local-alert}
+
+volumes:
+  promdata:
+  grafanadata:
+  lokidata:

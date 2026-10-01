@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { FileText, Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { api } from "@/api/client";
@@ -43,6 +43,10 @@ export function CreditApplicationsPage() {
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState(() => searchParams.get("status") ?? "");
+  useEffect(() => {
+    setStatus(searchParams.get("status") ?? "");
+    setPage(1);
+  }, [searchParams]);
   const [product, setProduct] = useState("");
   const [agency, setAgency] = useState("");
   const [riskLevel, setRiskLevel] = useState("");

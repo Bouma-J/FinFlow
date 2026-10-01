@@ -68,8 +68,10 @@ else:
         "staticfiles": _staticfiles,
     }
 
-# Supervision des erreurs (optionnel)
+# Supervision des erreurs : Sentry est activé dans base.py si SENTRY_DSN est défini.
 SENTRY_DSN = env("SENTRY_DSN", default="")
+if env("LOG_FORMAT", default="json") == "json":
+    LOGGING["handlers"]["console"]["formatter"] = "json"  # noqa: F405
 
 # A1 — jamais démarrer en prod avec une clé faible / connue
 _INSECURE_SECRETS = frozenset(
@@ -161,20 +163,3 @@ if not _redis_has_auth(_broker) or not _redis_has_auth(_result) or (_cache and n
         "Vérifiez: CELERY_BROKER_URL, CELERY_RESULT_BACKEND, REDIS_CACHE_URL"
     )
 
-if SENTRY_DSN:
-    import sentry_sdk
-    from sentry_sdk.integrations.celery import CeleryIntegration
-    from sentry_sdk.integrations.django import DjangoIntegration
-    from sentry_sdk.integrations.redis import RedisIntegration
-
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        integrations=[
-            DjangoIntegration(),
-            CeleryIntegration(),
-            RedisIntegration(),
-        ],
-        traces_sample_rate=float(env("SENTRY_TRACES_SAMPLE_RATE", default="0.1")),
-        send_default_pii=False,
-        environment=env("SENTRY_ENVIRONMENT", default="production"),
-    )

@@ -10,6 +10,111 @@ from apps.common.models import AuthoredModel, TenantScopedModel
 logger = logging.getLogger("finflow.credits")
 
 
+def _close_collection_case(loan, user, reason: str) -> None:
+    """Clôture le dossier de recouvrement lié, s'il est encore ouvert."""
+    from apps.collections.models import CollectionCase
+    from apps.collections.services import change_case_stage
+
+    case = (
+        CollectionCase.objects.filter(loan_id=loan.pk)
+        .exclude(stage=CollectionCase.Stage.CLOSED)
+        .first()
+    )
+    if case is None:
+        return
+    change_case_stage(
+        case,
+        CollectionCase.Stage.CLOSED,
+        user=user,
+        reason=reason,
+        automatic=False,
+    )
+
+
+def _rebuild_schedule_after_restructure(request, loan) -> None:
+    """Remplace les échéances non payées par le nouvel échéancier."""
+    from dateutil.relativedelta import relativedelta
+
+    from apps.credits.models import Installment
+    from apps.credits.services import compute_amortization_schedule
+
+    rate = request.new_interest_rate or loan.interest_rate
+    principal = Decimal(request.current_outstanding_balance or 0)
+    if request.capitalize_arrears:
+        principal += Decimal(request.arrears_amount or 0)
+    if principal <= 0:
+        raise ValueError("Aucun capital restant dû à restructurer.")
+
+    grace = int(request.grace_period_months or 0)
+    duration = int(request.new_duration_months)
+    amort_months = max(duration - grace, 1)
+    app = loan.application
+    periodicity = getattr(app, "periodicity", None) or "MONTHLY"
+    mechanism = getattr(app, "repayment_mechanism", None) or "DEGRESSIVE"
+    start = timezone.localdate()
+    first_due = start + relativedelta(months=grace + 1)
+
+    Installment.all_tenants.filter(loan=loan, amount_paid=0).delete()
+    last_number = (
+        Installment.all_tenants.filter(loan=loan)
+        .order_by("-number")
+        .values_list("number", flat=True)
+        .first()
+        or 0
+    )
+
+    number = last_number
+    monthly_interest = (principal * Decimal(rate) / Decimal("100") / Decimal("12")).quantize(
+        Decimal("0.01")
+    )
+    for offset in range(1, grace + 1):
+        number += 1
+        Installment.all_tenants.create(
+            tenant_id=loan.tenant_id,
+            loan=loan,
+            number=number,
+            due_date=start + relativedelta(months=offset),
+            principal_due=Decimal("0"),
+            interest_due=monthly_interest,
+            savings_due=Decimal("0"),
+            total_due=monthly_interest,
+            status=Installment.Status.PENDING,
+        )
+
+    schedule = compute_amortization_schedule(
+        principal=principal,
+        annual_rate=rate,
+        duration_months=amort_months,
+        periodicity=periodicity,
+        start_date=start + relativedelta(months=grace),
+        first_due_date=first_due,
+        savings_rate=loan.mandatory_savings_rate or 0,
+        mechanism=mechanism,
+        tenant_id=loan.tenant_id,
+    )
+    if not schedule:
+        raise ValueError("Impossible de générer le nouvel échéancier.")
+
+    for row in schedule:
+        number += 1
+        Installment.all_tenants.create(
+            tenant_id=loan.tenant_id,
+            loan=loan,
+            number=number,
+            due_date=row["due_date"],
+            principal_due=row["principal"],
+            interest_due=row["interest"],
+            savings_due=row.get("savings") or 0,
+            total_due=row["total"],
+            status=Installment.Status.PENDING,
+        )
+
+    kept = Installment.all_tenants.filter(loan=loan, amount_paid__gt=0).count()
+    loan.interest_rate = rate
+    loan.duration_months = kept + duration
+    loan.save(update_fields=["interest_rate", "duration_months", "updated_at"])
+
+
 class LoanOperationRequest(TenantScopedModel, AuthoredModel):
     """Classe abstraite pour les demandes d'opérations sensibles sur prêts."""
 
@@ -246,10 +351,10 @@ class LoanWriteOffRequest(LoanOperationRequest):
             )
 
         with transaction.atomic():
-            # Mettre à jour le statut du prêt
             loan = self.loan
             loan.status = "DEFAULTED"
-            loan.save(update_fields=["status"])
+            loan.save(update_fields=["status", "updated_at"])
+            _close_collection_case(loan, user, self.reason or "Passage en perte")
 
             # Marquer la demande comme exécutée
             self.status = self.Status.EXECUTED
@@ -512,22 +617,7 @@ class LoanRestructuringRequest(LoanOperationRequest):
 
         with transaction.atomic():
             loan = self.loan
-
-            # Mettre à jour les termes du prêt
-            if self.new_interest_rate:
-                loan.interest_rate = self.new_interest_rate
-
-            # Marquer le prêt comme restructuré (on ajoute un champ métadonnées)
-            # Dans une version complète, il faudrait recalculer l'échéancier
-            # et créer un nouveau contrat
-
-            # TODO: Implémenter la logique complète de restructuration
-            # - Recalculer l'échéancier
-            # - Mettre à jour les échéances futures
-            # - Créer un avenant au contrat
-            # - Notifier le client
-
-            loan.save()
+            _rebuild_schedule_after_restructure(self, loan)
 
             # Marquer la demande comme exécutée
             self.status = self.Status.EXECUTED

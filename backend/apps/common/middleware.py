@@ -68,6 +68,9 @@ class RequestTimingMiddleware:
         response = self.get_response(request)
         elapsed_ms = (time.perf_counter() - start) * 1000
         response["X-Response-Time-Ms"] = f"{elapsed_ms:.1f}"
+        from apps.common.metrics import observe_http
+
+        observe_http(request, response, elapsed_ms / 1000.0)
         if elapsed_ms >= self.slow_ms:
             logger.warning(
                 "slow_request path=%s method=%s status=%s ms=%.1f",

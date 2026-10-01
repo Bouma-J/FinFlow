@@ -12,6 +12,7 @@ import {
   MfaRequiredError,
   useAuth,
 } from "@/auth/AuthContext";
+import { tokenStore } from "@/api/client";
 import { homePath } from "@/auth/routePerms";
 import {
   applyTenantTheme,
@@ -56,7 +57,7 @@ export function LoginPage() {
   } = usePublicTenantBranding(tenantCode);
 
   useEffect(() => {
-    if (!tenantCode.trim()) {
+    if (!tenantCode.trim() && !tokenStore.getAccess()) {
       applyTenantTheme(null);
     }
   }, [tenantCode]);
