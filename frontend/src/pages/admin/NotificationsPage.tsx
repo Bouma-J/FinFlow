@@ -28,10 +28,13 @@ import {
   EmptyState,
   ErrorState,
   PageHeader,
+  PaginationBar,
   Spinner,
   TenantScopeNotice,
   formatDate,
 } from "@/components/ui";
+
+const LOG_PAGE_SIZE = 15;
 
 const EMPTY: NotificationSettings = {
   id: "",
@@ -170,6 +173,7 @@ export function AdminNotificationsPage() {
   const [logFilter, setLogFilter] = useState<"ALL" | "SENT" | "FAILED" | "SKIPPED">(
     "ALL",
   );
+  const [logPage, setLogPage] = useState(1);
 
   const tenants = useQuery({
     queryKey: ["tenants"],
@@ -217,6 +221,15 @@ export function AdminNotificationsPage() {
     if (logFilter === "ALL") return rows;
     return rows.filter((l) => l.status === logFilter);
   }, [logs.data, logFilter]);
+
+  const pagedLogs = useMemo(() => {
+    const start = (logPage - 1) * LOG_PAGE_SIZE;
+    return filteredLogs.slice(start, start + LOG_PAGE_SIZE);
+  }, [filteredLogs, logPage]);
+
+  useEffect(() => {
+    setLogPage(1);
+  }, [logFilter, activeTenant]);
 
   const logStats = useMemo(() => {
     const rows = logs.data?.results ?? [];
@@ -390,7 +403,7 @@ export function AdminNotificationsPage() {
   }
 
   return (
-    <div className="page-shell">
+    <div className="page-shell alerts-page">
       <PageHeader
         icon={Bell}
         title="Alertes e-mail"
@@ -715,7 +728,10 @@ export function AdminNotificationsPage() {
               <button
                 type="button"
                 className={`mini-kpi ${logFilter === "ALL" ? "is-active" : ""}`}
-                onClick={() => setLogFilter("ALL")}
+                onClick={() => {
+                  setLogFilter("ALL");
+                  setLogPage(1);
+                }}
               >
                 <span className="mk-value">{logStats.total}</span>
                 <span className="mk-label">Tous</span>
@@ -723,7 +739,10 @@ export function AdminNotificationsPage() {
               <button
                 type="button"
                 className={`mini-kpi ${logFilter === "SENT" ? "is-active" : ""}`}
-                onClick={() => setLogFilter("SENT")}
+                onClick={() => {
+                  setLogFilter("SENT");
+                  setLogPage(1);
+                }}
               >
                 <span className="mk-value">{logStats.sent}</span>
                 <span className="mk-label">Envoyés</span>
@@ -731,7 +750,10 @@ export function AdminNotificationsPage() {
               <button
                 type="button"
                 className={`mini-kpi ${logFilter === "FAILED" ? "is-active" : ""}`}
-                onClick={() => setLogFilter("FAILED")}
+                onClick={() => {
+                  setLogFilter("FAILED");
+                  setLogPage(1);
+                }}
               >
                 <span className="mk-value">{logStats.failed}</span>
                 <span className="mk-label">Échecs</span>
@@ -739,7 +761,10 @@ export function AdminNotificationsPage() {
               <button
                 type="button"
                 className={`mini-kpi ${logFilter === "SKIPPED" ? "is-active" : ""}`}
-                onClick={() => setLogFilter("SKIPPED")}
+                onClick={() => {
+                  setLogFilter("SKIPPED");
+                  setLogPage(1);
+                }}
               >
                 <span className="mk-value">{logStats.skipped}</span>
                 <span className="mk-label">Ignorés</span>
@@ -757,35 +782,45 @@ export function AdminNotificationsPage() {
           ) : filteredLogs.length === 0 ? (
             <EmptyState message="Aucun e-mail journalisé pour ce filtre." />
           ) : (
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Date</th>
-                  <th>Type</th>
-                  <th>Sujet</th>
-                  <th>Destinataires</th>
-                  <th>Statut</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredLogs.map((l) => (
-                  <tr key={l.id}>
-                    <td className="muted small">{formatDate(l.created_at)}</td>
-                    <td>{l.kind_display || l.kind}</td>
-                    <td>{l.subject}</td>
-                    <td className="muted small">
-                      {(l.recipients || []).join(", ") || "—"}
-                    </td>
-                    <td>
-                      <Badge
-                        value={l.status}
-                        label={l.status_display || l.status}
-                      />
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <>
+              <div className="table-scroll alerts-log-scroll">
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Date</th>
+                      <th>Type</th>
+                      <th>Sujet</th>
+                      <th>Destinataires</th>
+                      <th>Statut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedLogs.map((l) => (
+                      <tr key={l.id}>
+                        <td className="muted small">{formatDate(l.created_at)}</td>
+                        <td>{l.kind_display || l.kind}</td>
+                        <td>{l.subject}</td>
+                        <td className="muted small">
+                          {(l.recipients || []).join(", ") || "—"}
+                        </td>
+                        <td>
+                          <Badge
+                            value={l.status}
+                            label={l.status_display || l.status}
+                          />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <PaginationBar
+                page={logPage}
+                count={filteredLogs.length}
+                pageSize={LOG_PAGE_SIZE}
+                onPageChange={setLogPage}
+              />
+            </>
           )}
         </div>
       </section>

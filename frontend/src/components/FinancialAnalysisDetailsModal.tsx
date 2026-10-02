@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { X, User, Building2, Users, TrendingUp, TrendingDown, Wallet, ShoppingCart, type LucideIcon } from 'lucide-react';
 import type { FinancialAnalysis } from '../api/types';
 
@@ -31,30 +32,63 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
     return value.toString();
   };
 
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
+  useEffect(() => {
+    const scrollY = window.scrollY;
+    const { body } = document;
+    const html = document.documentElement;
+    const prev = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+      htmlOverflow: html.style.overflow,
+    };
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    html.style.overflow = "hidden";
+
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") onCloseRef.current();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => {
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.left = prev.left;
+      body.style.right = prev.right;
+      body.style.width = prev.width;
+      body.style.overflow = prev.overflow;
+      html.style.overflow = prev.htmlOverflow;
+      window.scrollTo(0, scrollY);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, []);
+
   // Check if we have detailed period data
   const hasDetailedData = !!analysis.detailed_data;
   const detailedData = hasDetailedData ? (typeof analysis.detailed_data === 'string' ? JSON.parse(analysis.detailed_data) : analysis.detailed_data) : null;
 
-  return (
-    <div className="modal-overlay modal-overlay--top" onClick={onClose}>
+  return createPortal(
+    <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-content modal-content--analysis"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="financial-analysis-details-title"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          padding: '1.5rem',
-          borderBottom: '1px solid #e5e7eb',
-          position: 'sticky',
-          top: 0,
-          backgroundColor: 'white',
-          zIndex: 10,
-        }}>
+        <div className="analysis-modal__header">
           <div>
-            <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600 }}>
+            <h2 id="financial-analysis-details-title" style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600 }}>
               Détails de l'analyse financière
             </h2>
             <p style={{ margin: '0.25rem 0 0 0', color: '#6b7280', fontSize: '0.875rem' }}>
@@ -78,8 +112,7 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
           </button>
         </div>
 
-        {/* Content */}
-        <div style={{ padding: '1.5rem' }}>
+        <div className="analysis-modal__body">
           {/* Context Section */}
           <Section 
             title="Contexte" 
@@ -349,16 +382,7 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
           </Section>
         </div>
 
-        {/* Footer */}
-        <div style={{
-          padding: '1rem 1.5rem',
-          borderTop: '1px solid #e5e7eb',
-          display: 'flex',
-          justifyContent: 'flex-end',
-          position: 'sticky',
-          bottom: 0,
-          backgroundColor: 'white',
-        }}>
+        <div className="analysis-modal__footer">
           <button
             onClick={onClose}
             style={{
@@ -375,7 +399,8 @@ export const FinancialAnalysisDetailsModal: React.FC<FinancialAnalysisDetailsMod
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 };
 
