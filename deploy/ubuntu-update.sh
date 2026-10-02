@@ -344,20 +344,34 @@ chmod_deploy_scripts() {
   chmod +x "$dir/deploy/backup/"*.sh 2>/dev/null || true
 }
 
+_volume_at() {
+  local cid="$1"
+  local dest="$2"
+  docker inspect -f '{{ range .Mounts }}{{ if eq .Destination "'"$dest"'" }}{{ .Name }}{{ end }}{{ end }}' "$cid" 2>/dev/null || true
+}
+
 fix_app_volume_owners() {
   # Le conteneur applicatif n'a plus CAP_CHOWN (cap_drop: ALL).
-  # Les volumes créés en root doivent être rendus à uid 1000 avant collectstatic.
+  # On reprend le volume réellement monté, pas un nom supposé.
+  local cid static media
   if ! docker image inspect finflow-backend >/dev/null 2>&1; then
     warn "Image finflow-backend absente — droits des volumes non ajustés."
     return 0
   fi
-  log "Droits staticfiles/media → utilisateur finflow…"
+  cid="$(docker ps -aq --filter name=finflow-backend-1 | head -1 || true)"
+  if [[ -n "$cid" ]]; then
+    static="$(_volume_at "$cid" /app/staticfiles)"
+    media="$(_volume_at "$cid" /app/media)"
+  fi
+  static="${static:-finflow_staticfiles}"
+  media="${media:-finflow_media}"
+  log "Droits ${static} et ${media} → uid 1000…"
   if docker run --rm --user 0 --entrypoint chown \
-    -v finflow_staticfiles:/app/staticfiles \
-    -v finflow_media:/app/media \
+    -v "${static}:/app/staticfiles" \
+    -v "${media}:/app/media" \
     finflow-backend \
-    -R finflow:finflow /app/staticfiles /app/media; then
-    ok "Volumes staticfiles/media appartiennent à finflow."
+    -R 1000:1000 /app/staticfiles /app/media; then
+    ok "Volumes staticfiles/media appartiennent à l'utilisateur de l'application."
   else
     warn "Impossible d'ajuster les droits des volumes staticfiles/media."
   fi

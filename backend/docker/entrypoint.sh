@@ -108,7 +108,11 @@ fi
 # Migrations et fichiers statiques (idempotents) — uniquement côté web
 if [ "${RUN_MIGRATIONS:-1}" = "1" ]; then
   python manage.py migrate --noinput
-  python manage.py collectstatic --noinput
+  # Un volume staticfiles créé en root bloque la copie, mais l'API peut démarrer
+  # avec les fichiers déjà présents.
+  if ! python manage.py collectstatic --noinput; then
+    echo "collectstatic ignoré : droits insuffisants sur /app/staticfiles. Les fichiers déjà là sont conservés."
+  fi
 
   # Seed des données de démonstration (désactivable via SEED_DEMO=0)
   if [ "${SEED_DEMO:-1}" = "1" ]; then
