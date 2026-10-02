@@ -2397,7 +2397,6 @@ export function CreditApplicationDetailPage() {
   const hasConditions = (conditions?.results.length ?? 0) > 0;
 
   const navSections = [
-    { id: "sec-decision", icon: Gavel, label: "Décision à rendre", show: !!myTask, group: "Priorité" },
     { id: "sec-conditions", icon: ClipboardCheck, label: "Réserves", show: hasConditions, group: "Priorité" },
     {
       id: "sec-readiness",
@@ -2409,7 +2408,6 @@ export function CreditApplicationDetailPage() {
       group: "Priorité",
     },
     { id: "sec-terms", icon: Banknote, label: "Conditions du crédit", show: true, group: "Instruction" },
-    { id: "sec-financial", icon: LineChart, label: "Analyse financière", show: true, group: "Instruction" },
     { id: "sec-patrimoine", icon: Landmark, label: "Garanties & cautions", show: true, group: "Instruction" },
     {
       id: "sec-aftersales",
@@ -2434,8 +2432,10 @@ export function CreditApplicationDetailPage() {
     { id: "sec-schedule", icon: CalendarClock, label: "Échéancier", show: !!schedule, group: "Suivi" },
     { id: "sec-visits", icon: MapPin, label: "Visites terrain", show: true, group: "Suivi" },
     { id: "sec-checklist", icon: ClipboardList, label: "Pièces du dossier", show: hasChecklist, group: "Pièces" },
-    { id: "sec-documents", icon: Paperclip, label: "Documents", show: true, group: "Pièces" },
     { id: "sec-contracts", icon: FileSignature, label: "Contrats", show: showContracts, group: "Pièces" },
+    { id: "sec-documents", icon: Paperclip, label: "Documents", show: true, group: "Pièces" },
+    { id: "sec-financial", icon: LineChart, label: "Analyse financière", show: true, group: "Validation" },
+    { id: "sec-decision", icon: Gavel, label: "Décision à rendre", show: !!myTask, group: "Validation" },
     { id: "sec-workflow", icon: GitBranch, label: "Circuit d'approbation", show: true, group: "Circuit" },
     { id: "sec-timeline", icon: History, label: "Historique & audit", show: true, group: "Circuit" },
   ].filter((s) => s.show);
@@ -2901,22 +2901,6 @@ export function CreditApplicationDetailPage() {
           {/* Widget de comparaison avec l'historique */}
           <ComparisonSummaryWidget applicationId={app.id} />
 
-          {myTask && (
-            <ViewSection
-              id="sec-decision"
-              icon={Gavel}
-              title={`Décision — ${myTask.step_name}`}
-              description="Vous êtes habilité à statuer sur cette étape."
-            >
-              <p className="muted small" style={{ marginTop: 0 }}>
-                Consultez ci-dessous l'ensemble du dossier, des garanties, des
-                cautions et des documents, puis validez, retournez ou rejetez le
-                dossier.
-              </p>
-              <DecisionPanel task={myTask} />
-            </ViewSection>
-          )}
-
           {hasConditions && (
             <ViewSection
               id="sec-conditions"
@@ -3184,13 +3168,6 @@ export function CreditApplicationDetailPage() {
             </div>
           )}
           </ViewSection>
-
-          <FinancialAnalysesSection
-            analyses={analyses}
-            currency={cur}
-            appId={app.id}
-            canContribute={canContributeAnalysis}
-          />
 
           {showActivity && (
           <ViewSection
@@ -3714,6 +3691,13 @@ export function CreditApplicationDetailPage() {
           </ViewSection>
           )}
 
+          {showContracts && (
+            <ContractsSection
+              appId={app.id}
+              canGenerate={canGenerateContracts}
+            />
+          )}
+
           <ViewSection
             id="sec-documents"
             icon={Paperclip}
@@ -3818,11 +3802,26 @@ export function CreditApplicationDetailPage() {
           })}
           </ViewSection>
 
-          {showContracts && (
-            <ContractsSection
-              appId={app.id}
-              canGenerate={canGenerateContracts}
-            />
+          <FinancialAnalysesSection
+            analyses={analyses}
+            currency={cur}
+            appId={app.id}
+            canContribute={canContributeAnalysis}
+          />
+
+          {myTask && (
+            <ViewSection
+              id="sec-decision"
+              icon={Gavel}
+              title={`Décision — ${myTask.step_name}`}
+              description="Vous êtes habilité à statuer sur cette étape."
+            >
+              <p className="muted small" style={{ marginTop: 0 }}>
+                Les documents puis l'analyse financière sont au-dessus. Validez,
+                retournez ou rejetez le dossier ici.
+              </p>
+              <DecisionPanel task={myTask} />
+            </ViewSection>
           )}
 
           <ViewSection
