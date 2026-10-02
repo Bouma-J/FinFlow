@@ -22,8 +22,20 @@ finflow_compose_files() {
     return 1
   }
 
+  _ff_finish() {
+    local chosen="$1"
+    local flag=""
+    if [[ -f "$dir/.finflow-monitoring" ]]; then
+      flag="$(tr -d '[:space:]' < "$dir/.finflow-monitoring" || true)"
+    fi
+    if [[ "$flag" == "1" && -f "$dir/docker-compose.monitoring.yml" ]]; then
+      chosen="${chosen} -f docker-compose.monitoring.yml"
+    fi
+    printf '%s\n' "$chosen"
+  }
+
   if [[ "$mode" == "domain" || "$mode" == "prod" ]] && [[ -z "$tls" ]]; then
-    echo "-f docker-compose.yml -f docker-compose.prod.yml"
+    _ff_finish "-f docker-compose.yml -f docker-compose.prod.yml"
     return
   fi
 
@@ -34,11 +46,11 @@ finflow_compose_files() {
         files="${files} -f docker-compose.ip-tls.yml"
       fi
     fi
-    echo "$files"
+    _ff_finish "$files"
     return
   fi
 
-  echo "-f docker-compose.yml -f docker-compose.prod.yml"
+  _ff_finish "-f docker-compose.yml -f docker-compose.prod.yml"
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

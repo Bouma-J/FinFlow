@@ -93,6 +93,25 @@ assert_eq "$(bash "$d/deploy/compose-files.sh" "$d")" \
   "-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.ip.yml" \
   "heuristique IP HTTPS (pas encore .finflow-tls-mode)"
 
+d="$tmp/ip-monitoring"
+make_tree "$d"
+echo ip > "$d/.finflow-deploy-mode"
+printf '1\n' > "$d/.finflow-monitoring"
+: > "$d/docker-compose.monitoring.yml"
+printf 'DJANGO_SECURE_SSL_REDIRECT="False"\nFRONTEND_BASE_URL="http://192.168.10.20"\n' > "$d/.env"
+assert_eq "$(bash "$d/deploy/compose-files.sh" "$d")" \
+  "-f docker-compose.yml -f docker-compose.prod.yml -f docker-compose.ip.yml -f docker-compose.monitoring.yml" \
+  "mode IP + supervision"
+
+d="$tmp/monitoring-absent"
+make_tree "$d"
+echo domain > "$d/.finflow-deploy-mode"
+printf '1\n' > "$d/.finflow-monitoring"
+printf 'DJANGO_SECURE_SSL_REDIRECT="True"\nFRONTEND_BASE_URL="https://finflow.example.tld"\n' > "$d/.env"
+assert_eq "$(bash "$d/deploy/compose-files.sh" "$d")" \
+  "-f docker-compose.yml -f docker-compose.prod.yml" \
+  "marqueur supervision sans fichier compose"
+
 echo
 echo "== ubuntu-update.sh --check (IP + TLS)"
 bash "$ROOT/deploy/ubuntu-update.sh" --check "$tmp/ip-tls"
