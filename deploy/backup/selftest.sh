@@ -45,7 +45,7 @@ services:
       timeout: 3s
       retries: 30
   minio:
-    image: quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: coollabsio/minio:RELEASE.2025-10-15T17-29-55Z
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: minioadmin
