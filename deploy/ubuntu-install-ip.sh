@@ -247,6 +247,7 @@ write_env_file() {
     env_line FIELD_ENCRYPTION_KEY "$FIELD_ENCRYPTION_KEY"
     echo
     env_line POSTGRES_PASSWORD "$POSTGRES_PASSWORD"
+    env_line REDIS_PASSWORD "$(openssl rand -hex 24)"
     echo
     env_line MINIO_ROOT_USER "$MINIO_ROOT_USER"
     env_line MINIO_ROOT_PASSWORD "$MINIO_ROOT_PASSWORD"

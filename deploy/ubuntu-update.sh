@@ -187,6 +187,23 @@ ensure_mail_env() {
   fi
 }
 
+ensure_redis_password() {
+  local dir="$1"
+  local env_file="$dir/.env"
+  local pass
+  [[ -f "$env_file" ]] || return 0
+  if grep -Eq '^REDIS_PASSWORD=.+' "$env_file" 2>/dev/null; then
+    return 0
+  fi
+  pass="$(openssl rand -hex 24)"
+  if grep -Eq '^REDIS_PASSWORD=' "$env_file" 2>/dev/null; then
+    sed -i "s/^REDIS_PASSWORD=.*/REDIS_PASSWORD=\"${pass}\"/" "$env_file"
+  else
+    printf '\nREDIS_PASSWORD="%s"\n' "$pass" >> "$env_file"
+  fi
+  ok "REDIS_PASSWORD généré dans le .env (Redis exige un mot de passe en production)."
+}
+
 ensure_observability_env() {
   local dir="$1"
   local env_file="$dir/.env"
@@ -590,6 +607,7 @@ main() {
   ensure_backup_cron "$dir"
 
   ensure_mail_env "$dir"
+  ensure_redis_password "$dir"
   ensure_observability_env "$dir"
   rebuild_stack "$dir" "$with_build"
   wait_health || true
