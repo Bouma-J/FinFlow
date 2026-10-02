@@ -1,0 +1,96 @@
+groups:
+  - name: finflow
+    rules:
+      - alert: FinflowDatabaseDown
+        expr: finflow_health_database == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: La base FIN_FLOW ne répond plus
+
+      - alert: FinflowCacheDown
+        expr: finflow_health_cache == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Le cache Redis FIN_FLOW ne répond plus
+
+      - alert: FinflowStorageDown
+        expr: finflow_health_storage == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Le stockage documentaire FIN_FLOW est indisponible
+
+      - alert: FinflowCeleryBrokerDown
+        expr: finflow_celery_broker_up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: Le broker Celery ne répond plus
+
+      - alert: FinflowCeleryQueueHigh
+        expr: finflow_celery_queue_length > 50
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: La file Celery dépasse 50 messages
+
+      - alert: FinflowCbsFailures
+        expr: finflow_cbs_failed_recent > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Des échanges CBS sont en échec sur les 15 dernières minutes
+
+      - alert: FinflowCbsRetryBacklog
+        expr: finflow_cbs_retry > 5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: Plus de 5 échanges CBS sont à rejouer
+
+      - alert: FinflowCbsOrphan
+        expr: finflow_cbs_outbox_orphan > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Un décaissement CBS est confirmé sans écriture locale
+
+      - alert: FinflowHttpSlow
+        expr: |
+          histogram_quantile(0.95, sum by (le) (rate(finflow_http_request_duration_seconds_bucket[5m])))
+          > 1.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: La latence p95 dépasse 1,5 s
+
+      - alert: FinflowGedQuotaHigh
+        expr: finflow_ged_quota_ratio > 0.9
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Le quota documentaire dépasse 90 %
+
+      - alert: FinflowHttpErrors
+        expr: |
+          sum(rate(finflow_http_requests_total{status=~"5.."}[5m]))
+          /
+          clamp_min(sum(rate(finflow_http_requests_total[5m])), 0.001)
+          > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Plus de 5 % des requêtes HTTP répondent en erreur serveur

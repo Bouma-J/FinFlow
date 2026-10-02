@@ -1,4 +1,4 @@
-import type { TenantBranding } from "@/api/types";
+import { tokenStore } from "@/api/client";
 
 import defaultLogo from "@/assets/logo.jpg";
 
@@ -9,6 +9,19 @@ export const DEFAULT_THEME = {
 };
 
 export const LOGIN_TENANT_CODE_KEY = "finflow.login-tenant-code";
+const BRANDING_CACHE_KEY = "finflow.tenant-branding-cache";
+const TENANT_THEME_KEY = "finflow.tenant-theme";
+
+type CachedTenantTheme = {
+  tenantId: string | null;
+  brand_primary: string;
+  brand_secondary: string;
+  brand_accent: string;
+  name?: string;
+  code?: string;
+  id?: string;
+  logo_url?: string | null;
+};
 
 type BrandColors = {
   brand_primary?: string | null;
@@ -100,7 +113,7 @@ export function applyTenantTheme(branding?: BrandColors | null) {
 }
 
 export function resolveLogoUrl(
-  branding?: Pick<TenantBranding, "id" | "logo_url"> | null,
+  branding?: { id?: string; logo_url?: string | null } | null,
 ) {
   if (!branding?.logo_url) return defaultLogo;
   const sep = branding.logo_url.includes("?") ? "&" : "?";
@@ -118,4 +131,97 @@ export function rememberLoginTenantCode(code: string | null | undefined) {
 
 export function readRememberedLoginTenantCode(): string | null {
   return localStorage.getItem(LOGIN_TENANT_CODE_KEY);
+}
+
+/**
+ * Cache les couleurs du branding dans localStorage pour éviter le flash au refresh.
+ */
+export function cacheTenantBranding(branding: BrandColors | null) {
+  if (!branding) {
+    localStorage.removeItem(BRANDING_CACHE_KEY);
+    return;
+  }
+  try {
+    localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify({
+      brand_primary: branding.brand_primary,
+      brand_secondary: branding.brand_secondary,
+      brand_accent: branding.brand_accent,
+      timestamp: Date.now(),
+    }));
+  } catch {
+    // Ignore errors (storage full, private mode, etc.)
+  }
+}
+
+/**
+ * Lit les couleurs cachées et les applique immédiatement (synchrone).
+ * À appeler au tout début du chargement de l'app.
+ */
+export function applyCachedBrandingSync() {
+  try {
+    const cached = localStorage.getItem(BRANDING_CACHE_KEY);
+    if (!cached) return;
+    
+    const data = JSON.parse(cached);
+    // Invalider le cache après 7 jours
+    if (data.timestamp && (Date.now() - data.timestamp > 7 * 24 * 60 * 60 * 1000)) {
+      localStorage.removeItem(BRANDING_CACHE_KEY);
+      return;
+    }
+    
+    // Appliquer immédiatement (avant le premier render)
+    applyTenantTheme(data);
+  } catch {
+    // Ignore errors (invalid JSON, etc.)
+  }
+}
+
+export function rememberTenantTheme(
+  tenantId: string | null | undefined,
+  branding?: (BrandColors & {
+    name?: string;
+    code?: string;
+    id?: string;
+    logo_url?: string | null;
+  }) | null,
+) {
+  if (!branding?.brand_primary) return;
+  const payload: CachedTenantTheme = {
+    tenantId: tenantId || null,
+    brand_primary: branding.brand_primary,
+    brand_secondary: branding.brand_secondary || DEFAULT_THEME.brand_secondary,
+    brand_accent: branding.brand_accent || DEFAULT_THEME.brand_accent,
+    name: branding.name,
+    code: branding.code,
+    id: branding.id,
+    logo_url: branding.logo_url,
+  };
+  localStorage.setItem(TENANT_THEME_KEY, JSON.stringify(payload));
+}
+
+export function clearRememberedTenantTheme() {
+  localStorage.removeItem(TENANT_THEME_KEY);
+}
+
+/** Charte déjà connue pour la session en cours (rechargement). */
+export function readCachedTenantTheme(): CachedTenantTheme | null {
+  if (!tokenStore.getAccess()) return null;
+  const raw = localStorage.getItem(TENANT_THEME_KEY);
+  if (!raw) return null;
+  try {
+    const cached = JSON.parse(raw) as CachedTenantTheme;
+    const active = tokenStore.getTenant();
+    if (active && cached.tenantId && cached.tenantId !== active) return null;
+    if (!cached.brand_primary) return null;
+    return cached;
+  } catch {
+    localStorage.removeItem(TENANT_THEME_KEY);
+    return null;
+  }
+}
+
+/** Avant le premier rendu React, si une session filiale existe déjà. */
+export function applyCachedTenantTheme() {
+  const cached = readCachedTenantTheme();
+  if (cached) applyTenantTheme(cached);
 }

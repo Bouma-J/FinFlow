@@ -33,6 +33,7 @@ RESP_RECOUVREMENT_ROLE_NAME = "Responsable recouvrement"
 RESP_ADMIN_FINANCIER_ROLE_NAME = "Responsable administratif et financier"
 CHEF_COMPTABLE_ROLE_NAME = "Chef comptable"
 COMPTABLE_ROLE_NAME = "Comptable"
+ADMINISTRATEUR_CREDIT_ROLE_NAME = "Administrateur de crédit"
 LECTEUR_ROLE_NAME = "Lecteur"
 
 # Anciens rôles bootstrap — retirés, supprimés s'ils n'ont plus d'utilisateur.
@@ -553,6 +554,29 @@ _LECTEUR_PERMS = (
     ("reporting", "view_dashboard"),
 )
 
+# Administrateur de crédit : contrôle final avant décaissement + décaissement CBS
+# Rôle de vérification (contrats signés, garanties formalisées) + exécution décaissement
+_ADMINISTRATEUR_CREDIT_PERMS = (
+    # Lecture complète métier
+    *_READ_METIER,
+    # Décaissement CBS (responsabilité principale)
+    ("credits", "disburse_creditapplication"),
+    ("credits", "initiate_disburse_creditapplication"),
+    # Génération et vérification contrats
+    ("contracts", "add_generatedcontract"),
+    ("contracts", "change_generatedcontract"),
+    ("contracts", "view_generatedcontract"),
+    # Upload documents de vérification
+    ("documents", "add_document"),
+    ("documents", "change_document"),
+    # Consultation et mise à jour garanties (vérification formalisation)
+    ("guarantees", "change_guarantee"),
+    ("guarantees", "view_guaranteemovement"),
+    # Consultation cautions
+    ("sureties", "view_suretyengagement"),
+    # PAS de création/modification dossiers (rôle de contrôle final uniquement)
+)
+
 # Finance / comptabilité : encaissements, lecture prêts & clients.
 _WRITE_COMPTA = (
     ("collections", "add_repayment"),
@@ -623,6 +647,7 @@ DEFAULT_ROLE_PACKS = {
     RESP_ADMIN_FINANCIER_ROLE_NAME: _RESP_ADMIN_FINANCIER_PERMS,
     CHEF_COMPTABLE_ROLE_NAME: _CHEF_COMPTABLE_PERMS,
     COMPTABLE_ROLE_NAME: _COMPTABLE_PERMS,
+    ADMINISTRATEUR_CREDIT_ROLE_NAME: _ADMINISTRATEUR_CREDIT_PERMS,
     LECTEUR_ROLE_NAME: _LECTEUR_PERMS,
 }
 
@@ -681,6 +706,11 @@ SOD_INCOMPATIBLE_ROLE_PAIRS = (
     frozenset({ASSISTANT_OPERATIONS_ROLE_NAME, RESP_CONTROLE_INTERNE_ROLE_NAME}),
     frozenset({ASSISTANT_RECOUVREMENT_ROLE_NAME, RESP_AUDIT_ROLE_NAME}),
     frozenset({RESP_RECOUVREMENT_ROLE_NAME, RESP_AUDIT_ROLE_NAME}),
+    # Administrateur de crédit : séparation avec instruction et décision
+    frozenset({ADMINISTRATEUR_CREDIT_ROLE_NAME, CHARGE_AFFAIRE_ROLE_NAME}),
+    frozenset({ADMINISTRATEUR_CREDIT_ROLE_NAME, ANALYSTE_CREDIT_RISQUE_ROLE_NAME}),
+    frozenset({ADMINISTRATEUR_CREDIT_ROLE_NAME, CREDIT_COMMITTEE_FILIALE_ROLE_NAME}),
+    frozenset({ADMINISTRATEUR_CREDIT_ROLE_NAME, CREDIT_COMMITTEE_GROUP_ROLE_NAME}),
 )
 
 

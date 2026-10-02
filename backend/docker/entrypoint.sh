@@ -116,4 +116,9 @@ if [ "${RUN_MIGRATIONS:-1}" = "1" ]; then
   fi
 fi
 
+# Répertoire partagé des compteurs Prometheus (plusieurs workers Gunicorn)
+if [ -n "${PROMETHEUS_MULTIPROC_DIR:-}" ]; then
+  mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
+fi
+
 exec "$@"

@@ -1,16 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect } from "react";
+import { useLayoutEffect, useMemo } from "react";
 
-import { api } from "@/api/client";
+import { api, tokenStore } from "@/api/client";
 import type { Tenant, TenantBranding } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
 import {
   applyTenantTheme,
+  cacheTenantBranding,
+  readCachedTenantTheme,
+  rememberTenantTheme,
   resolveLogoUrl,
 } from "@/hooks/brandingTheme";
 
 export {
   applyTenantTheme,
+  applyCachedBrandingSync,
+  cacheTenantBranding,
   DEFAULT_THEME,
   LOGIN_TENANT_CODE_KEY,
   readRememberedLoginTenantCode,
@@ -35,8 +40,11 @@ export function usePublicTenantBranding(code: string | null | undefined) {
     retry: false,
   });
 
-  useEffect(() => {
-    applyTenantTheme(query.data ?? null);
+  useLayoutEffect(() => {
+    if (tokenStore.getAccess() && !query.data) return;
+    const brandingData = query.data ?? null;
+    applyTenantTheme(brandingData);
+    cacheTenantBranding(brandingData);
   }, [query.data]);
 
   const logoUrl = resolveLogoUrl(query.data ?? null);
@@ -67,11 +75,24 @@ export function useTenantBranding() {
     staleTime: 60_000,
   });
 
-  const branding = tenant ?? user?.tenant_branding ?? null;
+  const cachedTheme = useMemo(
+    () => readCachedTenantTheme(),
+    [tenantId, user?.tenant_branding, tenant?.id],
+  );
+  const branding = tenant ?? user?.tenant_branding ?? cachedTheme;
 
-  useEffect(() => {
+  const primary = branding?.brand_primary || "";
+  const secondary = branding?.brand_secondary || "";
+  const accent = branding?.brand_accent || "";
+
+  useLayoutEffect(() => {
+    if (!primary) return;
+    if (tenant || user?.tenant_branding) {
+      rememberTenantTheme(tenantId, branding);
+      cacheTenantBranding(branding);
+    }
     applyTenantTheme(branding);
-  }, [branding]);
+  }, [primary, secondary, accent, tenant, user?.tenant_branding, tenantId, branding]);
 
   const logoUrl = resolveLogoUrl(branding);
 

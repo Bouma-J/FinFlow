@@ -1,0 +1,2 @@
+# Fichier conservé pour lecture. Le conteneur utilise alertmanager.yml.template,
+# qui envoie les alertes à POST /api/v1/alert-webhook/ avec le jeton ALERT_WEBHOOK_TOKEN.

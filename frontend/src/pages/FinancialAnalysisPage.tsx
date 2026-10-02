@@ -180,6 +180,20 @@ export function FinancialAnalysisPage() {
     );
   }
 
+  const handleSave = async (data: any) => {
+    if (isEdit && analysisId) {
+      await api.patch(`/financial-analyses/${analysisId}/`, data);
+    } else {
+      await api.post('/financial-analyses/', data);
+    }
+    refetchApp();
+    navigate(backTo);
+  };
+
+  const handleCancel = () => {
+    navigate(backTo);
+  };
+
   return (
     <div>
       <PageHeader
@@ -199,12 +213,12 @@ export function FinancialAnalysisPage() {
       />
 
       <FinancialAnalysisForm
-        mode={isEdit ? "edit" : "create"}
-        analysisId={analysisId}
-        initial={isEdit ? existing : undefined}
-        application={app}
-        backTo={backTo}
-        onSaved={() => navigate(backTo)}
+        creditApplicationId={app.id}
+        clientType={app.client_type}
+        existingData={isEdit ? (existing as any) : undefined}
+        onSave={handleSave}
+        onCancel={handleCancel}
+        disabled={false}
       />
     </div>
   );

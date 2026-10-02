@@ -18,6 +18,11 @@ from apps.accounts.auth_views import (
 )
 from apps.common.async_tasks import AsyncTaskStatusView
 from apps.common.health import HealthView, MetricsView, OpsStatusView
+from apps.common.metrics_views import (
+    AlertWebhookView,
+    ClientErrorView,
+    PrometheusMetricsView,
+)
 
 api_v1 = [
     path("auth/token/", ThrottledTokenObtainPairView.as_view(), name="token_obtain_pair"),
@@ -27,6 +32,8 @@ api_v1 = [
     path("auth/mfa/confirm/", MfaConfirmView.as_view(), name="mfa_confirm"),
     path("auth/mfa/disable/", MfaDisableView.as_view(), name="mfa_disable"),
     path("health/", HealthView.as_view(), name="health"),
+    path("client-errors/", ClientErrorView.as_view(), name="client-errors"),
+    path("alert-webhook/", AlertWebhookView.as_view(), name="alert-webhook"),
     path("metrics/", MetricsView.as_view(), name="metrics"),
     path("ops/status/", OpsStatusView.as_view(), name="ops-status"),
     path(
@@ -54,6 +61,7 @@ api_v1 = [
 urlpatterns = [
     # Hors du préfixe /admin/ réservé à la SPA React (sinon F5 → admin Django).
     path("django-admin/", admin.site.urls),
+    path("metrics", PrometheusMetricsView.as_view(), name="prometheus-metrics"),
     path("api/v1/", include((api_v1, "api"), namespace="v1")),
 ]
 

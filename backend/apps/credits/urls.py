@@ -5,9 +5,16 @@ from .views import (
     CreditApplicationViewSet,
     CreditDocumentViewSet,
     CreditInstructionPolicyViewSet,
+    FieldVisitRuleViewSet,
     FieldVisitViewSet,
     FinancialAnalysisViewSet,
+    LoanRestructuringRequestViewSet,
     LoanViewSet,
+    LoanWriteOffRequestViewSet,
+)
+from .renewal_views import (
+    ClientRenewalViewSet,
+    CreditApplicationComparisonViewSet,
 )
 
 router = DefaultRouter()
@@ -20,7 +27,28 @@ router.register(
     CreditInstructionPolicyViewSet,
     basename="credit-instruction-policy",
 )
+router.register("field-visit-rules", FieldVisitRuleViewSet, basename="field-visit-rule")
 router.register("field-visits", FieldVisitViewSet, basename="field-visit")
 router.register("loans", LoanViewSet, basename="loan")
+router.register(
+    "loan-writeoff-requests",
+    LoanWriteOffRequestViewSet,
+    basename="loan-writeoff-request",
+)
+router.register(
+    "loan-restructuring-requests",
+    LoanRestructuringRequestViewSet,
+    basename="loan-restructuring-request",
+)
+router.register(
+    "clients",
+    ClientRenewalViewSet,
+    basename="client-renewal",
+)
+router.register(
+    "applications-comparison",
+    CreditApplicationComparisonViewSet,
+    basename="application-comparison",
+)
 
 urlpatterns = router.urls

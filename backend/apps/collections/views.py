@@ -149,6 +149,7 @@ class RepaymentViewSet(TenantScopedViewSet):
 
 
 class CollectionCaseViewSet(TenantScopedViewSet):
+    # Queryset minimal pour list() - seulement les relations essentielles
     queryset = CollectionCase.objects.select_related(
         "loan",
         "loan__application",
@@ -157,41 +158,61 @@ class CollectionCaseViewSet(TenantScopedViewSet):
         "loan__application__product",
         "assigned_to",
         "tranche",
-    ).prefetch_related(
-        "actions",
-        "actions__created_by",
-        "actions__updated_by",
-        "actions__dialogue_messages",
-        "actions__dialogue_messages__created_by",
-        "promises",
-        "promises__created_by",
-        "dialogue_messages",
-        "dialogue_messages__created_by",
-        "stage_history",
-        "stage_history__changed_by",
-        "write_offs",
-        "write_offs__approved_by",
-        "write_offs__requested_by",
-        "loan__restructures",
-        "loan__restructures__applied_by",
-        "loan__restructures__requested_by",
-        "litigations__events",
-        "litigations__events__performed_by",
-        "litigations__costs",
-        "litigations__costs__party",
-        "litigations__seizures",
-        "litigations__seizures__bailiff",
-        "litigations__law_firm",
-        "litigations__lawyer_party",
-        "litigations__bailiff_party",
-        "litigations__related_guarantees",
-        "loan__installments",
-        "loan__repayments",
-        "loan__application__guarantees",
-        "loan__application__dation_requests",
-        "loan__application__surety_engagements",
-        "loan__application__surety_engagements__surety",
     ).all()
+
+    def get_queryset(self):
+        """
+        Optimisation: prefetch lourd seulement pour retrieve().
+        Liste: relations essentielles uniquement (8 select_related).
+        Détail: tous les prefetch nécessaires (~40 relations).
+        """
+        qs = super().get_queryset()
+
+        # Prefetch lourd UNIQUEMENT pour retrieve (détail d'un cas)
+        if self.action == "retrieve":
+            qs = qs.prefetch_related(
+                "actions",
+                "actions__created_by",
+                "actions__updated_by",
+                "actions__dialogue_messages",
+                "actions__dialogue_messages__created_by",
+                "promises",
+                "promises__created_by",
+                "dialogue_messages",
+                "dialogue_messages__created_by",
+                "stage_history",
+                "stage_history__changed_by",
+                "write_offs",
+                "write_offs__approved_by",
+                "write_offs__requested_by",
+                "loan__restructures",
+                "loan__restructures__applied_by",
+                "loan__restructures__requested_by",
+                "litigations__events",
+                "litigations__events__performed_by",
+                "litigations__costs",
+                "litigations__costs__party",
+                "litigations__seizures",
+                "litigations__seizures__bailiff",
+                "litigations__law_firm",
+                "litigations__lawyer_party",
+                "litigations__bailiff_party",
+                "litigations__related_guarantees",
+                "loan__installments",
+                "loan__repayments",
+                "loan__application__guarantees",
+                "loan__application__dation_requests",
+                "loan__application__surety_engagements",
+                "loan__application__surety_engagements__surety",
+            )
+        elif self.action == "list":
+            # Pour liste: juste quelques prefetch légers pour éviter N+1
+            qs = qs.prefetch_related(
+                "actions",  # Compte actions pour affichage
+                "litigations",  # Indicateur contentieux
+            )
+
+        return qs
     # Actions sensibles : pas le fallback HTTP→add_collectioncase.
     # Pilotage opérationnel (stade / prochaine action / relance) → change_collectioncase.
     action_perms = {

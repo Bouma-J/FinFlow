@@ -40,12 +40,13 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "@/api/client";
 import type { CurrentUser, Paginated, Tenant } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
+import { Spinner } from "@/components/ui";
 import { hasAnyPerm } from "@/auth/permissions";
 import {
   PERM_ADMIN_AGENCIES,
@@ -112,6 +113,12 @@ const NAV_ITEMS: NavItem[] = [
     label: "Dossiers de crédit",
     icon: FileText,
     anyOf: PERM_CREDITS,
+  },
+  {
+    to: "/dossiers?status=DISBURSEMENT_PENDING",
+    label: "Contrôle décaissement",
+    icon: Stamp,
+    anyOf: ["credits.disburse_creditapplication"],
   },
   {
     to: "/prets",
@@ -268,6 +275,12 @@ const ADMIN_GROUPS: AdminGroup[] = [
         icon: SlidersHorizontal,
         anyOf: PERM_ADMIN_POLICY,
       },
+      {
+        to: "/admin/regles-visites-terrain",
+        label: "Visites terrain",
+        icon: MapPin,
+        anyOf: PERM_ADMIN_POLICY,
+      },
     ],
   },
   {
@@ -361,6 +374,8 @@ function NavItems({
   items: NavItem[];
   onNavigate?: () => void;
 }) {
+  const location = useLocation();
+  const pendingDisbursement = location.search.includes("status=DISBURSEMENT_PENDING");
   return (
     <>
       {items.map((item) => (
@@ -369,7 +384,13 @@ function NavItems({
           to={item.to}
           end={item.to === "/"}
           title={item.label}
-          className={({ isActive }) => `nav-link${isActive ? " active" : ""}`}
+          className={({ isActive }) => {
+            const wantsPending = item.to.includes("DISBURSEMENT_PENDING");
+            const active = wantsPending
+              ? pendingDisbursement
+              : isActive && !(item.to === "/dossiers" && pendingDisbursement);
+            return `nav-link${active ? " active" : ""}`;
+          }}
           onClick={onNavigate}
         >
           <span className="nav-icon">
@@ -783,7 +804,15 @@ export function Layout() {
           </div>
         </header>
         <main className="content">
-          <Outlet />
+          <Suspense
+            fallback={
+              <div className="content-loader">
+                <Spinner />
+              </div>
+            }
+          >
+            <Outlet />
+          </Suspense>
         </main>
       </div>
     </div>

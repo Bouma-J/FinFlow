@@ -1061,6 +1061,34 @@ export interface FinancialAnalysis {
   individual_profile?: "" | "SALARIE" | "INDEPENDANT" | "MIXTE";
   reference_period: string;
   analysis_date: string | null;
+  // NEW: Analysis mode and detailed data
+  analysis_mode?: 'SYNTHETIC' | 'DETAILED';
+  detailed_data?: any;
+  banking_observation_period_months?: number | null;
+  // NEW: Context fields moved from CreditApplication
+  employer_name?: string | null;
+  contract_type?: string | null;
+  premises_status?: string | null;
+  tax_regime?: string | null;
+  avg_client_payment_days?: number | null;
+  avg_supplier_payment_days?: number | null;
+  clientele?: string | null;
+  catchment_area?: string | null;
+  avg_monthly_credit_movements?: string | null;
+  avg_monthly_debit_movements?: string | null;
+  // NEW: Group structure
+  group_structure?: string | null;
+  member_count?: number | null;
+  // NEW: Detailed financial fields (more user-friendly names)
+  pension_income?: string | null;
+  investment_income?: string | null;
+  cost_of_goods_sold?: string | null;
+  purchases?: string | null;
+  inventory_start?: string | null;
+  inventory_end?: string | null;
+  operating_expenses?: string | null;
+  staff_costs?: string | null;
+  solidarity_fund?: string | null;
   // Endettement consolidé & centrale des risques
   active_loans_count: number;
   credit_bureau_checked: boolean;
@@ -1145,26 +1173,26 @@ export interface FinancialAnalysis {
   other_activity_income: string;
   other_income: string;
   // Particulier — charges
-  rent_expense: string;
-  food_expense: string;
-  utilities_expense: string;
-  transport_expense: string;
-  education_expense: string;
-  health_expense: string;
-  other_household_expenses: string;
+  rent_expense?: string | null;
+  food_expense?: string | null;
+  utilities_expense?: string | null;
+  transport_expense?: string | null;
+  education_expense?: string | null;
+  health_expense?: string | null;
+  other_household_expenses?: string | null;
   // Entreprise — exploitation
-  turnover: string;
-  cogs: string;
-  op_rent: string;
-  op_salaries: string;
-  op_utilities: string;
-  op_transport: string;
-  op_telecom: string;
-  op_taxes: string;
-  op_maintenance: string;
-  op_other: string;
-  depreciation: string;
-  financial_charges: string;
+  turnover?: string | null;
+  cogs?: string | null;
+  op_rent?: string | null;
+  op_salaries?: string | null;
+  op_utilities?: string | null;
+  op_transport?: string | null;
+  op_telecom?: string | null;
+  op_taxes?: string | null;
+  op_maintenance?: string | null;
+  op_other?: string | null;
+  depreciation?: string | null;
+  financial_charges?: string | null;
   // Entreprise — bilan
   stock_value: string;
   receivables: string;
@@ -1341,6 +1369,22 @@ export const CREDIT_LABELS = {
   } as Record<string, string>,
 };
 
+export interface FieldVisitRule {
+  id: string;
+  name: string;
+  is_active: boolean;
+  priority: number;
+  client_type: string;
+  individual_profile: string;
+  amount_min: string | null;
+  amount_max: string | null;
+  required_role: string;
+  blocking_stage: 'SUBMIT' | 'OPINION' | 'APPROVAL';
+  blocking_stage_display: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
 export interface FieldVisit {
   id: string;
   application: string;
@@ -1351,6 +1395,7 @@ export interface FieldVisit {
   can_edit: boolean;
   geo_coordinates: string;
   report: string;
+  photos: string[];
   created_at?: string;
 }
 

@@ -31,6 +31,14 @@ app.conf.beat_schedule = {
         "task": "apps.corebanking.tasks.retry_cbs_integrations",
         "schedule": crontab(minute="*/10"),
     },
+    "detect-orphan-disbursements": {
+        "task": "corebanking.detect_orphan_disbursements",
+        "schedule": crontab(minute="*/15"),  # Réconciliation toutes les 15min
+    },
+    "cleanup-old-outbox-events": {
+        "task": "corebanking.cleanup_old_outbox_events",
+        "schedule": crontab(hour=5, minute=0),  # Nettoyage quotidien 5h
+    },
     "purge-old-audit-logs": {
         "task": "apps.audit.tasks.purge_old_audit_logs",
         "schedule": crontab(hour=3, minute=30),

@@ -4,7 +4,31 @@ Plateforme **SaaS multi-tenants** de gestion du cycle de vie complet des dossier
 
 **Dépôt :** [https://github.com/Bouma-J/FinFlow](https://github.com/Bouma-J/FinFlow)
 
+---
+
+## 🚀 Déploiement Rapide
+
+**Déployez FinFlow en production en une commande !**
+
+```bash
+# Avec nom de domaine + HTTPS automatique
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install.sh | bash'
+
+# Ou avec adresse IP uniquement (test/démo)
+sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-install-ip.sh | bash'
+```
+
+📖 **[Guide de Déploiement Complet](DEPLOY.md)** | 📚 **[Documentation Technique](documentation/README.md)**
+
+---
+
 ## Sommaire
+
+### 🚀 Guides de Démarrage
+- **[⚡ Quick Start (5 min)](QUICK-START.md)** — Tester localement en quelques minutes
+- **[🌐 Guide de Déploiement](DEPLOY.md)** — Déployer en production sur serveur
+
+### 📖 Documentation Technique
 - [Architecture](#architecture)
 - [Choix techniques structurants](#choix-techniques-structurants)
 - [Modules métier](#modules-métier)

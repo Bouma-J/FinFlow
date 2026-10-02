@@ -587,13 +587,21 @@ def cancel_disbursement_request(application):
 def disburse_application(application, disburse_date=None, *, skip_cbs=False):
     """Crée le prêt et l'échéancier après approbation, avec push CBS Perfect.
 
-    Saga courte :
+    Pattern Outbox amélioré (résolution saga orphelin):
     1. Verrou + prérequis (transaction courte)
-    2. Soumission CBS hors transaction (HTTP)
-    3. Création Loan + échéancier sous verrou (idempotent si déjà décaissé)
+    2. Créer outbox event PENDING (traçabilité)
+    3. Soumission CBS hors transaction (HTTP)
+    4. Création Loan + échéancier + mark outbox COMPLETED (atomique)
+    
+    Si étape 4 échoue après CBS OK:
+    - Outbox reste PENDING avec cbs_reference
+    - Task réconciliation détecte orphelin après 5min
+    - Alerte ops pour intervention manuelle
     """
     app_id = application.pk
 
+    # Étape 1: Vérifications + création outbox
+    outbox_event = None
     with transaction.atomic():
         application = (
             CreditApplication.objects.select_for_update()
@@ -614,7 +622,16 @@ def disburse_application(application, disburse_date=None, *, skip_cbs=False):
                 "du décaissement."
             )
         _assert_disbursement_prerequisites(application)
+        
+        # Créer outbox pour traçabilité
+        if not skip_cbs:
+            from apps.corebanking.outbox import create_disbursement_outbox
+            outbox_event = create_disbursement_outbox(
+                application,
+                cbs_request_payload={"app_id": app_id, "reference": application.reference}
+            )
 
+    # Étape 2: Appel CBS (hors transaction)
     cbs_result = None
     if not skip_cbs:
         try:
@@ -622,7 +639,17 @@ def disburse_application(application, disburse_date=None, *, skip_cbs=False):
             from apps.corebanking.services import CoreBankingError
 
             cbs_result = submit_credit_to_cbs(application)
+            
+            # Stocker référence CBS dans outbox pour réconciliation
+            if outbox_event and cbs_result:
+                outbox_event.cbs_reference = cbs_result.get("contract_number", "")
+                outbox_event.cbs_response = cbs_result
+                outbox_event.save(update_fields=["cbs_reference", "cbs_response", "updated_at"])
+                
         except CoreBankingError as exc:
+            # Marquer outbox comme failed
+            if outbox_event:
+                outbox_event.mark_failed(str(exc))
             raise WorkflowError(str(exc)) from exc
 
     disburse_date = disburse_date or date.today()
@@ -730,4 +757,9 @@ def disburse_application(application, disburse_date=None, *, skip_cbs=False):
             apply_cbs_disbursement_refs_to_application(application, cbs_result)
         )
         application.save(update_fields=list(dict.fromkeys(app_update_fields)))
+        
+        # Marquer outbox comme COMPLETED (saga terminée avec succès)
+        if outbox_event:
+            outbox_event.mark_completed(cbs_response=cbs_result)
+        
         return loan

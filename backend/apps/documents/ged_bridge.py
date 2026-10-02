@@ -91,8 +91,11 @@ def mirror_credit_document_to_ged(credit_doc, *, user=None) -> None:
     finally:
         try:
             credit_doc.file.close()
-        except Exception:
-            pass
+        except Exception as e:
+            # Cleanup - échec non bloquant mais tracé pour diagnostic
+            logger.debug(
+                f"Impossible de fermer fichier CreditDocument {credit_doc.pk}: {e}"
+            )
 
     if not raw:
         return

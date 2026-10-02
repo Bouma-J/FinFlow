@@ -1,0 +1,71 @@
+# Fichiers à exclure des builds Docker
+
+# Git
+.git
+.gitignore
+.gitattributes
+
+# Documentation de développement
+documentation/analyses/
+*.md
+!README.md
+!DEPLOY.md
+
+# Environnements virtuels
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node
+node_modules/
+npm-debug.log*
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs et données de test
+*.log
+*.db
+*.sqlite3
+
+# Scripts de développement local
+demarrer.sh
+demarrer.bat
+deploy-check.sh
+
+# CI/CD
+.github/
+
+# Tests
+tests/
+**/tests/
+**/*_test.py
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+
+# Fichiers temporaires
+*.tmp
+*.bak
+*.swp
+*~

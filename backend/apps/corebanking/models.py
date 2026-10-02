@@ -100,3 +100,7 @@ class IntegrationLog(TenantScopedModel):
 
     def __str__(self):
         return f"{self.operation} — {self.get_status_display()}"
+
+
+# Import outbox model
+from .outbox import CbsOutboxEvent  # noqa: E402, F401

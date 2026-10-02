@@ -68,8 +68,10 @@ else:
         "staticfiles": _staticfiles,
     }
 
-# Supervision des erreurs (optionnel)
+# Supervision des erreurs : Sentry est activé dans base.py si SENTRY_DSN est défini.
 SENTRY_DSN = env("SENTRY_DSN", default="")
+if env("LOG_FORMAT", default="json") == "json":
+    LOGGING["handlers"]["console"]["formatter"] = "json"  # noqa: F405
 
 # A1 — jamais démarrer en prod avec une clé faible / connue
 _INSECURE_SECRETS = frozenset(
@@ -79,6 +81,11 @@ _INSECURE_SECRETS = frozenset(
         "changeme",
         "secret",
         "django-insecure",
+        # Clés démo Compose (versionnées dans le repo)
+        "finflow-local-compose-demo-key-not-for-production-use-x9K2mP7qR4",
+        "finflow-local",
+        # Clé Fernet test (présente dans test.py et Compose)
+        "jyYZdpd3kTY2RiW3UUFhbGMQuJCrQIFjO1ed6zowfqk=",
     }
 )
 _sk = SECRET_KEY or ""  # noqa: F405
@@ -107,20 +114,52 @@ if not _field_key:
         "(Fernet url-safe, indépendant de DJANGO_SECRET_KEY)."
     )
 
-if SENTRY_DSN:
-    import sentry_sdk
-    from sentry_sdk.integrations.celery import CeleryIntegration
-    from sentry_sdk.integrations.django import DjangoIntegration
-    from sentry_sdk.integrations.redis import RedisIntegration
+# Refuser clés Fernet de test/démo connues
+_INSECURE_FERNET_KEYS = frozenset(
+    {
+        "jyYZdpd3kTY2RiW3UUFhbGMQuJCrQIFjO1ed6zowfqk=",  # test.py + Compose
+        "test-key",
+        "demo-key",
+    }
+)
+if _field_key in _INSECURE_FERNET_KEYS:
+    from django.core.exceptions import ImproperlyConfigured
 
-    sentry_sdk.init(
-        dsn=SENTRY_DSN,
-        integrations=[
-            DjangoIntegration(),
-            CeleryIntegration(),
-            RedisIntegration(),
-        ],
-        traces_sample_rate=float(env("SENTRY_TRACES_SAMPLE_RATE", default="0.1")),
-        send_default_pii=False,
-        environment=env("SENTRY_ENVIRONMENT", default="production"),
+    raise ImproperlyConfigured(
+        f"FIELD_ENCRYPTION_KEY ne peut pas être une clé de test connue. "
+        f"Générez une nouvelle clé Fernet avec: "
+        f"python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())'"
     )
+
+# Redis auth obligatoire en production
+# Format attendu: redis://:password@host:port/db ou rediss://...
+_broker = CELERY_BROKER_URL  # noqa: F405
+_result = CELERY_RESULT_BACKEND  # noqa: F405
+_cache = env("REDIS_CACHE_URL", default="")
+
+def _redis_has_auth(url: str) -> bool:
+    """Vérifie qu'une URL Redis contient un mot de passe."""
+    if not url or "redis" not in url:
+        return True  # Pas Redis
+    # Format: redis://:password@host ou redis://user:password@host
+    if "://:@" in url or "://localhost" in url or url.count(":") < 3:
+        return False  # Pas de password
+    # Vérifier présence password après ://
+    if "://" in url:
+        after_scheme = url.split("://", 1)[1]
+        if "@" not in after_scheme:
+            return False  # Pas de credentials
+        creds = after_scheme.split("@", 1)[0]
+        if not creds or creds == ":":
+            return False  # Credentials vides
+    return True
+
+if not _redis_has_auth(_broker) or not _redis_has_auth(_result) or (_cache and not _redis_has_auth(_cache)):
+    from django.core.exceptions import ImproperlyConfigured
+    
+    raise ImproperlyConfigured(
+        "Redis DOIT avoir un mot de passe en production. "
+        "Format attendu: redis://:PASSWORD@host:port/db\n"
+        "Vérifiez: CELERY_BROKER_URL, CELERY_RESULT_BACKEND, REDIS_CACHE_URL"
+    )
+
