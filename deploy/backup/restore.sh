@@ -203,7 +203,7 @@ restore_drill() {
     postgres:16-alpine >/dev/null
   docker run -d --name "$minio" --network "$net" \
     -e MINIO_ROOT_USER=drill -e MINIO_ROOT_PASSWORD=drilldrill \
-    minio/minio:latest server /data --console-address ":9001" >/dev/null
+    quay.io/minio/minio:RELEASE.2025-09-07T16-13-09Z server /data --console-address ":9001" >/dev/null
 
   local i
   for i in $(seq 1 30); do
