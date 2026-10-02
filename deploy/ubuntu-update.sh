@@ -303,6 +303,8 @@ pull_code() {
     return
   fi
   log "git fetch / checkout ${branch} / pull --ff-only…"
+  # chmod +x des scripts ne doit pas bloquer le pull (dépôt en 100644).
+  git config core.filemode false
   git remote set-url origin "$repo" 2>/dev/null || true
   git fetch --prune origin "$branch"
   if git show-ref --verify --quiet "refs/heads/${branch}"; then
