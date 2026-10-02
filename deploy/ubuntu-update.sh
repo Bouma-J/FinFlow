@@ -8,22 +8,35 @@
 #   sudo bash deploy/ubuntu-update.sh
 #   sudo bash deploy/ubuntu-update.sh /opt/finflow
 #   sudo bash deploy/ubuntu-update.sh --check /opt/finflow
-#   sudo bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/main/deploy/ubuntu-update.sh | bash'
 #
-# Options (variables d'environnement) :
-#   INSTALL_DIR=/opt/finflow   Répertoire d'installation
-#   GIT_BRANCH=main            Branche à tirer
-#   SKIP_BACKUP=1              Ne pas sauvegarder la DB avant update
-#   SKIP_GIT=1                 Ne pas faire git pull (images/code déjà présents)
-#   SKIP_BUILD=0               1 = up -d sans --build (déconseillé)
+# Serveur de test (branche des dernières évolutions + supervision) :
+#   sudo env GIT_BRANCH=cursor/ameliorations-techniques-acda ENABLE_MONITORING=1 \
+#     bash -c 'curl -fsSL https://raw.githubusercontent.com/Bouma-J/FinFlow/cursor/ameliorations-techniques-acda/deploy/ubuntu-update.sh | bash'
+#
+# Branche utilisée, dans l'ordre :
+#   1. --branch ou GIT_BRANCH
+#   2. fichier .finflow-git-branch (écrit après chaque update)
+#   3. branche déjà extraite dans le dépôt
+#   4. main
+#
+# Options :
+#   --branch NOM              Branche git à tirer
+#   --monitoring              Active Prometheus, Alertmanager, Loki, Grafana
+#   --no-monitoring           Retire cet overlay au prochain démarrage
+#   INSTALL_DIR=/opt/finflow
+#   SKIP_BACKUP=1             Ne pas sauvegarder la DB avant update
+#   SKIP_GIT=1                Ne pas faire git pull
+#   SKIP_BUILD=1              up -d sans --build (déconseillé)
+#   ENABLE_MONITORING=1       Même effet que --monitoring
 #
 # Le script :
-#   1. (optionnel) snapshot Postgres + MinIO + secrets
-#   2. git fetch + pull --ff-only
-#   3. docker compose pull + up -d --build
-#      (mode IP / IP+TLS via deploy/compose-files.sh)
-#   4. migrate + sync_role_packs + bootstrap_all_tenants
-#   5. contrôle health API (frontend local :8080)
+#   1. snapshot Postgres + MinIO + secrets
+#   2. git fetch + checkout + pull --ff-only
+#   3. complète le .env (SMTP, observabilité) sans écraser l'existant
+#   4. docker compose pull + up -d --build
+#      (mode IP / IP+TLS / supervision via deploy/compose-files.sh)
+#   5. migrate + sync_role_packs + bootstrap_all_tenants
+#   6. health API sur http://127.0.0.1:8080/api/v1/health/
 # =========================================================================
 set -euo pipefail
 
@@ -92,13 +105,28 @@ detect_compose_files_fallback() {
   echo "-f docker-compose.yml -f docker-compose.prod.yml"
 }
 
+append_monitoring_compose() {
+  local dir="$1"
+  local files="$2"
+  local flag=""
+  if [[ -f "$dir/.finflow-monitoring" ]]; then
+    flag="$(tr -d '[:space:]' < "$dir/.finflow-monitoring" || true)"
+  fi
+  if [[ "$flag" == "1" && -f "$dir/docker-compose.monitoring.yml" ]]; then
+    files="${files} -f docker-compose.monitoring.yml"
+  fi
+  printf '%s\n' "$files"
+}
+
 detect_compose_files() {
   local dir="$1"
+  local files=""
   if [[ -f "$dir/deploy/compose-files.sh" ]]; then
     bash "$dir/deploy/compose-files.sh" "$dir"
     return
   fi
-  detect_compose_files_fallback "$dir"
+  files="$(detect_compose_files_fallback "$dir")"
+  append_monitoring_compose "$dir" "$files"
 }
 
 compose() {
@@ -159,6 +187,111 @@ ensure_mail_env() {
   fi
 }
 
+ensure_observability_env() {
+  local dir="$1"
+  local env_file="$dir/.env"
+  local key missing=0 flag=""
+  [[ -f "$env_file" ]] || return 0
+
+  for key in LOG_FORMAT SENTRY_DSN SENTRY_ENVIRONMENT SENTRY_TRACES_SAMPLE_RATE \
+    PROMETHEUS_METRICS_TOKEN ALERT_WEBHOOK_TOKEN ALERT_EMAIL_TO; do
+    if ! grep -Eq "^${key}=" "$env_file" 2>/dev/null; then
+      missing=1
+      break
+    fi
+  done
+  if [[ -f "$dir/.finflow-monitoring" ]]; then
+    flag="$(tr -d '[:space:]' < "$dir/.finflow-monitoring" || true)"
+    if [[ "$flag" == "1" ]] && ! grep -Eq '^GRAFANA_ADMIN_PASSWORD=' "$env_file" 2>/dev/null; then
+      missing=1
+    fi
+  fi
+  [[ "$missing" -eq 1 ]] || return 0
+
+  {
+    echo
+    echo "# Observabilité — ubuntu-update.sh (clés absentes uniquement, secrets existants conservés)"
+  } >> "$env_file"
+
+  if ! grep -Eq '^LOG_FORMAT=' "$env_file" 2>/dev/null; then
+    echo 'LOG_FORMAT="json"' >> "$env_file"
+    ok "LOG_FORMAT=json ajouté au .env"
+  fi
+  if ! grep -Eq '^SENTRY_DSN=' "$env_file" 2>/dev/null; then
+    echo 'SENTRY_DSN=' >> "$env_file"
+    ok "SENTRY_DSN vide ajouté (Sentry désactivé tant qu'une DSN n'est pas renseignée)"
+  fi
+  if ! grep -Eq '^SENTRY_ENVIRONMENT=' "$env_file" 2>/dev/null; then
+    echo 'SENTRY_ENVIRONMENT="production"' >> "$env_file"
+  fi
+  if ! grep -Eq '^SENTRY_TRACES_SAMPLE_RATE=' "$env_file" 2>/dev/null; then
+    echo 'SENTRY_TRACES_SAMPLE_RATE="0.1"' >> "$env_file"
+  fi
+  if ! grep -Eq '^PROMETHEUS_METRICS_TOKEN=' "$env_file" 2>/dev/null; then
+    printf 'PROMETHEUS_METRICS_TOKEN="%s"\n' "$(openssl rand -hex 24)" >> "$env_file"
+    ok "PROMETHEUS_METRICS_TOKEN généré dans le .env"
+  fi
+  if ! grep -Eq '^ALERT_WEBHOOK_TOKEN=' "$env_file" 2>/dev/null; then
+    printf 'ALERT_WEBHOOK_TOKEN="%s"\n' "$(openssl rand -hex 24)" >> "$env_file"
+    ok "ALERT_WEBHOOK_TOKEN généré dans le .env"
+  fi
+  if ! grep -Eq '^ALERT_EMAIL_TO=' "$env_file" 2>/dev/null; then
+    echo 'ALERT_EMAIL_TO=' >> "$env_file"
+  fi
+  if [[ "$flag" == "1" ]] && ! grep -Eq '^GRAFANA_ADMIN_PASSWORD=' "$env_file" 2>/dev/null; then
+    printf 'GRAFANA_ADMIN_PASSWORD="%s"\n' "$(openssl rand -hex 16)" >> "$env_file"
+    ok "GRAFANA_ADMIN_PASSWORD généré dans le .env (compte Grafana admin)"
+  fi
+}
+
+resolve_git_branch() {
+  local dir="$1"
+  local saved="" current=""
+  if [[ -n "${GIT_BRANCH:-}" ]]; then
+    printf '%s\n' "$GIT_BRANCH"
+    return
+  fi
+  if [[ -f "$dir/.finflow-git-branch" ]]; then
+    saved="$(tr -d '[:space:]' < "$dir/.finflow-git-branch" || true)"
+    if [[ -n "$saved" ]]; then
+      printf '%s\n' "$saved"
+      return
+    fi
+  fi
+  if [[ -d "$dir/.git" ]]; then
+    current="$(git -C "$dir" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
+    if [[ -n "$current" && "$current" != "HEAD" ]]; then
+      printf '%s\n' "$current"
+      return
+    fi
+  fi
+  printf '%s\n' "main"
+}
+
+remember_git_branch() {
+  local dir="$1"
+  local branch="$2"
+  printf '%s\n' "$branch" > "$dir/.finflow-git-branch"
+  chmod 644 "$dir/.finflow-git-branch"
+}
+
+apply_monitoring_flag() {
+  local dir="$1"
+  local flag="${ENABLE_MONITORING:-}"
+  if [[ "$flag" == "1" ]]; then
+    printf '1\n' > "$dir/.finflow-monitoring"
+    chmod 644 "$dir/.finflow-monitoring"
+    if [[ -f "$dir/docker-compose.monitoring.yml" ]]; then
+      ok "Supervision activée (Prometheus, Alertmanager, Loki, Grafana)."
+    else
+      warn "Marqueur supervision posé, mais docker-compose.monitoring.yml est absent."
+    fi
+  elif [[ "$flag" == "0" ]]; then
+    rm -f "$dir/.finflow-monitoring"
+    ok "Supervision retirée de cette instance."
+  fi
+}
+
 pull_code() {
   local dir="$1"
   local branch="$2"
@@ -171,8 +304,12 @@ pull_code() {
   fi
   log "git fetch / checkout ${branch} / pull --ff-only…"
   git remote set-url origin "$repo" 2>/dev/null || true
-  git fetch --all --prune
-  git checkout "$branch"
+  git fetch --prune origin "$branch"
+  if git show-ref --verify --quiet "refs/heads/${branch}"; then
+    git checkout "$branch"
+  else
+    git checkout -b "$branch" --track "origin/${branch}"
+  fi
   git pull --ff-only origin "$branch"
   ok "Code à jour : $(git rev-parse --short HEAD) ($(git log -1 --pretty=%s))"
 }
@@ -225,7 +362,7 @@ post_deploy() {
   compose exec -T backend python manage.py migrate --noinput
   ok "Migrations appliquées."
 
-  log "Synchronisation packs de rôles…"
+  log "Synchronisation packs de rôles (dont Administrateur de crédit)…"
   compose exec -T backend python manage.py sync_role_packs \
     && ok "Packs RBAC synchronisés." \
     || warn "sync_role_packs à relancer."
@@ -271,31 +408,41 @@ ensure_backup_cron() {
 
 print_summary() {
   local dir="$1"
-  local mode="" tls=""
+  local branch="${2:-}"
+  local mode="" tls="" mon="non"
   [[ -f "$dir/.finflow-deploy-mode" ]] && mode="$(tr -d '[:space:]' < "$dir/.finflow-deploy-mode")"
   [[ -f "$dir/.finflow-tls-mode" ]] && tls="$(tr -d '[:space:]' < "$dir/.finflow-tls-mode")"
+  if [[ -f "$dir/.finflow-monitoring" ]] && [[ "$(tr -d '[:space:]' < "$dir/.finflow-monitoring")" == "1" ]]; then
+    mon="oui — Grafana http://127.0.0.1:3000 (admin / GRAFANA_ADMIN_PASSWORD dans .env)"
+  fi
   cat <<EOF
 
 ${C_OK}═══════════════════════════════════════════════════════════${C_RST}
 ${C_OK} FIN_FLOW — mise à jour terminée${C_RST}
 ${C_OK}═══════════════════════════════════════════════════════════${C_RST}
 
-  Répertoire : ${dir}
-  Mode       : ${mode:-inconnu}${tls:+ + TLS ${tls}}
-  Compose    : docker compose ${COMPOSE_FILES}
-  Commandes  : finflow ps | finflow logs -f backend
-  Prochaine  : sudo finflow-update   (ou sudo bash ${dir}/deploy/ubuntu-update.sh)
+  Répertoire  : ${dir}
+  Branche     : ${branch:-?}
+  Mode        : ${mode:-inconnu}${tls:+ + TLS ${tls}}
+  Supervision : ${mon}
+  Compose     : docker compose ${COMPOSE_FILES}
+  Commandes   : finflow ps | finflow logs -f backend
+  Prochaine   : sudo finflow-update
+                (reste sur ${branch:-la branche enregistrée})
 
   Sauvegardes : cron 02:30 → /var/backups/finflow/snapshots (hors projet)
     sudo FINFLOW_DIR=${dir} ${dir}/deploy/backup/backup.sh
 
+  Activer la supervision au prochain passage :
+    sudo env ENABLE_MONITORING=1 finflow-update
+
   HTTPS IP interne (auto-signé, sans HSTS) :
     sudo bash ${dir}/deploy/tls-ip/enable-ip-tls.sh ${dir} --self-signed
 
-  Nouveautés typiques après update :
+  Appliqué par cette mise à jour :
     • migrations DB
-    • packs de rôles (dont formalisation)
-    • circuits MAIN_LEVEE / DATION / FORMALISATION
+    • packs de rôles, dont Administrateur de crédit
+    • logs JSON, /metrics et webhook d'alertes (clés ajoutées au .env si absentes)
 
 EOF
 }
@@ -329,6 +476,9 @@ run_check() {
   fi
   if echo "$COMPOSE_FILES" | grep -q 'docker-compose.ip-tls.yml'; then
     [[ -f "$dir/docker-compose.ip-tls.yml" ]] || die "Mode IP+TLS mais docker-compose.ip-tls.yml absent"
+  fi
+  if echo "$COMPOSE_FILES" | grep -q 'docker-compose.monitoring.yml'; then
+    [[ -f "$dir/docker-compose.monitoring.yml" ]] || die "Supervision demandée mais docker-compose.monitoring.yml absent"
   fi
 
   if [[ -f "$dir/deploy/compose-files.sh" ]] && [[ "$COMPOSE_FILES" != "$fallback" ]]; then
@@ -364,8 +514,15 @@ main() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --check) check=1; shift ;;
+      --branch)
+        [[ $# -ge 2 ]] || die "--branch attend un nom de branche."
+        GIT_BRANCH="$2"
+        shift 2
+        ;;
+      --monitoring) ENABLE_MONITORING=1; shift ;;
+      --no-monitoring) ENABLE_MONITORING=0; shift ;;
       -h|--help)
-        sed -n '2,28p' "$0"
+        sed -n '2,/^set -euo pipefail/p' "$0"
         exit 0
         ;;
       *)
@@ -383,8 +540,9 @@ main() {
 
   need_root
 
-  local branch="${GIT_BRANCH:-main}"
-  local repo="${REPO_URL:-$REPO_URL_DEFAULT}"
+  local branch repo
+  branch="$(resolve_git_branch "$dir")"
+  repo="${REPO_URL:-$REPO_URL_DEFAULT}"
   local skip_backup="${SKIP_BACKUP:-0}"
   local skip_git="${SKIP_GIT:-0}"
   local skip_build="${SKIP_BUILD:-0}"
@@ -405,6 +563,10 @@ main() {
   log "Install dir : $dir"
   log "Compose     : docker compose $COMPOSE_FILES"
   log "Branche     : $branch"
+  if [[ "$branch" == "main" && -z "${GIT_BRANCH:-}" && ! -f "$dir/.finflow-git-branch" ]]; then
+    warn "Aucune branche enregistrée : la mise à jour reste sur main."
+    warn "Serveur de test : sudo env GIT_BRANCH=cursor/ameliorations-techniques-acda ENABLE_MONITORING=1 finflow-update"
+  fi
 
   if [[ "$skip_backup" != "1" ]]; then
     backup_db "$dir"
@@ -417,19 +579,22 @@ main() {
   else
     warn "SKIP_GIT=1 — pas de git pull."
   fi
+  remember_git_branch "$dir" "$branch"
 
   chmod_deploy_scripts "$dir"
+  apply_monitoring_flag "$dir"
   COMPOSE_FILES="$(detect_compose_files "$dir")"
   log "Compose (après pull) : docker compose $COMPOSE_FILES"
   ensure_backup_cron "$dir"
 
   ensure_mail_env "$dir"
+  ensure_observability_env "$dir"
   rebuild_stack "$dir" "$with_build"
   wait_health || true
   post_deploy "$dir"
   refresh_helpers "$dir"
   wait_health || true
-  print_summary "$dir"
+  print_summary "$dir" "$branch"
 }
 
 main "$@"

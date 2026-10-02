@@ -249,6 +249,15 @@ write_env_file() {
     env_line EMAIL_HOST_USER "$EMAIL_HOST_USER"
     env_line EMAIL_HOST_PASSWORD "$EMAIL_HOST_PASSWORD"
     env_line DEFAULT_FROM_EMAIL "$DEFAULT_FROM_EMAIL"
+    echo
+    echo 'LOG_FORMAT="json"'
+    echo 'SENTRY_DSN='
+    echo 'SENTRY_ENVIRONMENT="production"'
+    echo 'SENTRY_TRACES_SAMPLE_RATE="0.1"'
+    env_line PROMETHEUS_METRICS_TOKEN "$(openssl rand -hex 24)"
+    env_line ALERT_WEBHOOK_TOKEN "$(openssl rand -hex 24)"
+    echo 'ALERT_EMAIL_TO='
+    env_line GRAFANA_ADMIN_PASSWORD "$(openssl rand -hex 16)"
   } > "$env_file"
 
   chmod 600 "$env_file"
@@ -394,6 +403,8 @@ EOF
 
   echo "$DEPLOY_MODE" > "$dir/.finflow-deploy-mode"
   chmod 644 "$dir/.finflow-deploy-mode"
+  printf '%s\n' "$GIT_BRANCH" > "$dir/.finflow-git-branch"
+  chmod 644 "$dir/.finflow-git-branch"
 
   if [[ -f "$dir/deploy/ubuntu-update.sh" ]]; then
     chmod +x "$dir/deploy/ubuntu-update.sh"
@@ -576,6 +587,12 @@ collect_inputs() {
   fi
 
   echo
+  ENABLE_MONITORING=0
+  if ask_yes_no "Activer la supervision locale (Prometheus, Grafana, Loki) ?" "n"; then
+    ENABLE_MONITORING=1
+  fi
+
+  echo
   SETUP_UFW=0
   ask_yes_no "Configurer UFW (SSH/80/443) ?" "y" && SETUP_UFW=1
 
@@ -625,6 +642,12 @@ main() {
   prepare_install_dir "$INSTALL_DIR" "$REPO_URL" "$GIT_BRANCH"
   write_env_file "$INSTALL_DIR"
   write_helpers "$INSTALL_DIR"
+  if [[ "${ENABLE_MONITORING:-0}" == "1" ]]; then
+    printf '1\n' > "$INSTALL_DIR/.finflow-monitoring"
+    chmod 644 "$INSTALL_DIR/.finflow-monitoring"
+    COMPOSE_FILES="$(bash "$INSTALL_DIR/deploy/compose-files.sh" "$INSTALL_DIR")"
+    log "Supervision incluse : docker compose $COMPOSE_FILES"
+  fi
   write_nginx_http_only "$APP_DOMAIN" "$MINIO_DOMAIN"
   start_stack "$INSTALL_DIR"
 

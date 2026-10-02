@@ -572,7 +572,14 @@ SKIP_BACKUP=1 sudo finflow-update
 
 # Branche / répertoire personnalisés
 GIT_BRANCH=main INSTALL_DIR=/opt/finflow sudo -E bash /opt/finflow/deploy/ubuntu-update.sh
+
+# Serveur de test : dernières évolutions + supervision locale
+sudo env GIT_BRANCH=cursor/ameliorations-techniques-acda ENABLE_MONITORING=1 finflow-update
 ```
+
+Sans `GIT_BRANCH`, le script reprend `.finflow-git-branch`, sinon la branche déjà extraite, sinon `main`. Il n’écrase pas le `.env` : les clés d’observabilité absentes (`LOG_FORMAT`, jetons `/metrics` et webhook) sont seulement ajoutées.
+
+`ENABLE_MONITORING=1` (ou `--monitoring`) ajoute Prometheus, Alertmanager, Loki et Grafana (`127.0.0.1:9090`, `:9093`, `:3100`, `:3000`). Le mot de passe Grafana est `GRAFANA_ADMIN_PASSWORD` dans `.env`.
 
 Le script détecte automatiquement le mode **domaine** ou **IP** (`.finflow-deploy-mode`, `.finflow-tls-mode`, ou heuristique `.env`) via [`deploy/compose-files.sh`](../deploy/compose-files.sh).
 
