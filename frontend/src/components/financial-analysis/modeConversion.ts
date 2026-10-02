@@ -75,7 +75,9 @@ export function applyAnalysisMode(
 ): Partial<FinancialAnalysis> {
   const periods = data.banking_observation_period_months || 3;
   if (mode === "DETAILED") {
-    const detailed: Record<string, Row[]> = { ...(data.detailed_data || {}) };
+    const detailed = {
+      ...(data.detailed_data || {}),
+    } as Record<string, Row[]>;
     for (const block of SPREAD) {
       detailed[block.detail] = Array.from({ length: periods }, (_, index) => {
         const row: Row = { period_label: `Mois ${index + 1}` };

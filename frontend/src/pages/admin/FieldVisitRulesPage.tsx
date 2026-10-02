@@ -99,7 +99,7 @@ export function AdminFieldVisitRulesPage() {
       <PageHeader
         title="Règles de Visite Terrain"
         subtitle="Configurez les règles conditionnelles pour obliger les visites terrain selon le profil client, montant, et rôle."
-        icon={<MapPin size={32} />}
+        icon={MapPin}
       />
 
       <div className="mt-6 bg-white rounded-lg shadow-sm border border-gray-200 p-6">

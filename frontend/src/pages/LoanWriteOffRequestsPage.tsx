@@ -1,12 +1,10 @@
-import { useMutation, useQuery, useQueryClient } from "@tantml:react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Ban, Check, FileText, X } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { api } from "@/api/client";
 import type { Paginated } from "@/api/types";
 import { useAuth } from "@/auth/AuthContext";
-import { PermLink } from "@/components/PermLink";
 import {
   FilterField,
   FilterSelect,
@@ -16,12 +14,7 @@ import {
 } from "@/components/ListFilters";
 import {
   Badge,
-  Button,
   DEFAULT_PAGE_SIZE,
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
   PageHeader,
   PaginationBar,
   QueryStatus,
@@ -66,12 +59,15 @@ const STATUS_LABELS: Record<string, string> = {
   EXECUTED: "Exécutée",
 };
 
-const STATUS_COLORS: Record<string, string> = {
+const STATUS_TONES: Record<
+  string,
+  "success" | "warning" | "danger" | "info" | "muted"
+> = {
   PENDING: "warning",
   APPROVED: "success",
-  REJECTED: "error",
-  CANCELLED: "gray",
-  EXECUTED: "blue",
+  REJECTED: "danger",
+  CANCELLED: "muted",
+  EXECUTED: "info",
 };
 
 const REASON_LABELS: Record<string, string> = {
@@ -97,6 +93,7 @@ export function LoanWriteOffRequestsPage() {
     "approve" | "reject" | "execute" | "cancel" | null
   >(null);
   const [actionComment, setActionComment] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
 
@@ -139,7 +136,7 @@ export function LoanWriteOffRequestsPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["loan-writeoff-requests"] });
-      toast.success("Action effectuée avec succès");
+      setNotice("Action effectuée avec succès");
       setActionDialog(null);
       setSelectedRequest(null);
       setActionComment("");
@@ -149,7 +146,7 @@ export function LoanWriteOffRequestsPage() {
         error.response?.data?.detail ||
         error.response?.data?.comment?.[0] ||
         "Une erreur est survenue";
-      toast.error(message);
+      setNotice(message);
     },
   });
 
@@ -214,7 +211,18 @@ export function LoanWriteOffRequestsPage() {
           </FilterField>
         </ListFilters>
 
-        <QueryStatus query={list} />
+        {notice && (
+          <p className="form-error" role="status">
+            {notice}
+          </p>
+        )}
+        <QueryStatus
+          isLoading={list.isLoading}
+          isError={list.isError}
+          onRetry={() => void list.refetch()}
+        >
+          <></>
+        </QueryStatus>
 
         {list.data && (
           <>
@@ -247,9 +255,10 @@ export function LoanWriteOffRequestsPage() {
                         <div className="font-medium">{request.loan_display}</div>
                       </td>
                       <td>
-                        <Badge color={STATUS_COLORS[request.status] as any}>
-                          {STATUS_LABELS[request.status]}
-                        </Badge>
+                        <Badge
+                          value={STATUS_LABELS[request.status] || request.status}
+                          tone={STATUS_TONES[request.status]}
+                        />
                       </td>
                       <td>
                         <span className="text-sm">
@@ -262,7 +271,7 @@ export function LoanWriteOffRequestsPage() {
                         </span>
                       </td>
                       <td>
-                        <Badge color="error">{request.days_past_due} jours</Badge>
+                        <Badge value={`${request.days_past_due} jours`} tone="danger" />
                       </td>
                       <td>
                         <div className="text-sm">{request.created_by_display}</div>
@@ -291,48 +300,48 @@ export function LoanWriteOffRequestsPage() {
                       </td>
                       <td>
                         <div className="flex gap-2">
-                          <Button
-                            size="sm"
-                            variant="secondary"
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
                             onClick={() => setSelectedRequest(request)}
                           >
                             <FileText className="w-4 h-4" />
-                          </Button>
+                          </button>
                           {request.can_approve && (
-                            <Button
-                              size="sm"
-                              color="success"
+                            <button
+                              type="button"
+                              className="btn btn-success btn-sm"
                               onClick={() => openActionDialog(request, "approve")}
                             >
                               <Check className="w-4 h-4" />
-                            </Button>
+                            </button>
                           )}
                           {request.can_reject && (
-                            <Button
-                              size="sm"
-                              color="error"
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
                               onClick={() => openActionDialog(request, "reject")}
                             >
                               <X className="w-4 h-4" />
-                            </Button>
+                            </button>
                           )}
                           {request.can_execute && (
-                            <Button
-                              size="sm"
-                              color="primary"
+                            <button
+                              type="button"
+                              className="btn btn-primary btn-sm"
                               onClick={() => openActionDialog(request, "execute")}
                             >
                               Exécuter
-                            </Button>
+                            </button>
                           )}
                           {request.can_cancel && (
-                            <Button
-                              size="sm"
-                              color="gray"
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
                               onClick={() => openActionDialog(request, "cancel")}
                             >
                               <Ban className="w-4 h-4" />
-                            </Button>
+                            </button>
                           )}
                         </div>
                       </td>
@@ -344,9 +353,9 @@ export function LoanWriteOffRequestsPage() {
 
             <PaginationBar
               page={page}
-              setPage={setPage}
+              count={list.data.count}
               pageSize={LIST_PAGE_SIZE}
-              totalCount={list.data.count}
+              onPageChange={setPage}
             />
           </>
         )}
@@ -354,11 +363,15 @@ export function LoanWriteOffRequestsPage() {
 
       {/* Dialog de détails */}
       {selectedRequest && !actionDialog && (
-        <Dialog open onOpenChange={() => setSelectedRequest(null)}>
-          <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>Détails de la demande de write-off</DialogTitle>
-            </DialogHeader>
+        <div
+          className="modal-backdrop modal-backdrop--top"
+          onClick={() => setSelectedRequest(null)}
+        >
+          <div
+            className="modal-card modal-card--xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>Détails de la demande de write-off</h3>
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -372,9 +385,12 @@ export function LoanWriteOffRequestsPage() {
                     Statut
                   </label>
                   <div className="mt-1">
-                    <Badge color={STATUS_COLORS[selectedRequest.status] as any}>
-                      {STATUS_LABELS[selectedRequest.status]}
-                    </Badge>
+                    <Badge
+                      value={
+                        STATUS_LABELS[selectedRequest.status] || selectedRequest.status
+                      }
+                      tone={STATUS_TONES[selectedRequest.status]}
+                    />
                   </div>
                 </div>
                 <div>
@@ -398,9 +414,10 @@ export function LoanWriteOffRequestsPage() {
                     Jours de retard
                   </label>
                   <div className="mt-1">
-                    <Badge color="error">
-                      {selectedRequest.days_past_due} jours
-                    </Badge>
+                    <Badge
+                      value={`${selectedRequest.days_past_due} jours`}
+                      tone="danger"
+                    />
                   </div>
                 </div>
                 <div>
@@ -490,22 +507,20 @@ export function LoanWriteOffRequestsPage() {
                 </div>
               )}
             </div>
-          </DialogContent>
-        </Dialog>
+          </div>
+        </div>
       )}
 
       {/* Dialog d'action */}
       {actionDialog && selectedRequest && (
-        <Dialog open onOpenChange={closeActionDialog}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>
+        <div className="modal-backdrop modal-backdrop--top" onClick={closeActionDialog}>
+          <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+            <h3>
                 {actionDialog === "approve" && "Approuver la demande"}
                 {actionDialog === "reject" && "Rejeter la demande"}
                 {actionDialog === "execute" && "Exécuter le write-off"}
                 {actionDialog === "cancel" && "Annuler la demande"}
-              </DialogTitle>
-            </DialogHeader>
+              </h3>
             <div className="space-y-4">
               <div className="p-4 bg-amber-50 border border-amber-200 rounded">
                 <p className="text-sm text-amber-800">
@@ -540,16 +555,13 @@ export function LoanWriteOffRequestsPage() {
               </div>
 
               <div className="flex gap-2 justify-end">
-                <Button variant="secondary" onClick={closeActionDialog}>
+                <button type="button" className="btn btn-ghost" onClick={closeActionDialog}>
                   Annuler
-                </Button>
-                <Button
-                  color={
-                    actionDialog === "execute"
-                      ? "error"
-                      : actionDialog === "approve"
-                        ? "success"
-                        : "primary"
+                </button>
+                <button
+                  type="button"
+                  className={
+                    actionDialog === "approve" ? "btn btn-success" : "btn btn-primary"
                   }
                   onClick={() => handleAction(actionDialog)}
                   disabled={
@@ -558,11 +570,11 @@ export function LoanWriteOffRequestsPage() {
                   }
                 >
                   {performAction.isPending ? "En cours..." : "Confirmer"}
-                </Button>
+                </button>
               </div>
             </div>
-          </DialogContent>
-        </Dialog>
+          </div>
+        </div>
       )}
     </div>
   );

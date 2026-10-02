@@ -236,7 +236,10 @@ export function PaginationBar({
   );
 }
 
-export function formatMoney(value: string | number | null, currency = "XOF") {
+export function formatMoney(
+  value: string | number | null | undefined,
+  currency = "XOF",
+) {
   if (value === null || value === undefined) return "—";
   const num = typeof value === "string" ? Number(value) : value;
   return `${num.toLocaleString("fr-FR")} ${currency}`;
