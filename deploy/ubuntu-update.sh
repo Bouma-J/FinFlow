@@ -344,6 +344,25 @@ chmod_deploy_scripts() {
   chmod +x "$dir/deploy/backup/"*.sh 2>/dev/null || true
 }
 
+fix_app_volume_owners() {
+  # Le conteneur applicatif n'a plus CAP_CHOWN (cap_drop: ALL).
+  # Les volumes créés en root doivent être rendus à uid 1000 avant collectstatic.
+  if ! docker image inspect finflow-backend >/dev/null 2>&1; then
+    warn "Image finflow-backend absente — droits des volumes non ajustés."
+    return 0
+  fi
+  log "Droits staticfiles/media → utilisateur finflow…"
+  if docker run --rm --user 0 --entrypoint chown \
+    -v finflow_staticfiles:/app/staticfiles \
+    -v finflow_media:/app/media \
+    finflow-backend \
+    -R finflow:finflow /app/staticfiles /app/media; then
+    ok "Volumes staticfiles/media appartiennent à finflow."
+  else
+    warn "Impossible d'ajuster les droits des volumes staticfiles/media."
+  fi
+}
+
 rebuild_stack() {
   local dir="$1"
   local with_build="${2:-1}"
@@ -351,12 +370,12 @@ rebuild_stack() {
   log "Docker Compose pull…"
   compose pull || true
   if [[ "$with_build" == "1" ]]; then
-    log "Build & redémarrage (up -d --build)…"
-    compose up -d --build
-  else
-    log "Redémarrage sans rebuild (up -d)…"
-    compose up -d
+    log "Build des images…"
+    compose build
   fi
+  fix_app_volume_owners
+  log "Redémarrage (up -d)…"
+  compose up -d
   ok "Stack redémarrée."
 }
 
