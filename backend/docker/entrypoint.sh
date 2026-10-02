@@ -1,6 +1,18 @@
 #!/usr/bin/env bash
 set -e
 
+# Les volumes Docker (staticfiles, media) ont souvent été créés en root.
+# On les rend à finflow puis on quitte root avant Django.
+if [ "$(id -u)" = "0" ]; then
+  mkdir -p /app/staticfiles /app/media
+  chown -R finflow:finflow /app/staticfiles /app/media
+  if [ -n "${PROMETHEUS_MULTIPROC_DIR:-}" ]; then
+    mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
+    chown -R finflow:finflow "$PROMETHEUS_MULTIPROC_DIR"
+  fi
+  exec gosu finflow /app/docker/entrypoint.sh "$@"
+fi
+
 # Attente de la base de données (si DATABASE_URL de type postgres)
 if [ -n "$POSTGRES_HOST" ]; then
   echo "En attente de PostgreSQL sur ${POSTGRES_HOST}:${POSTGRES_PORT:-5432}…"

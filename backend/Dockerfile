@@ -49,6 +49,7 @@ RUN apt-get update \
         libpq5 \
         libjpeg62-turbo \
         netcat-openbsd \
+        gosu \
     && rm -rf /var/lib/apt/lists/*
 
 # Certificats CA (même logique que builder)
@@ -81,9 +82,7 @@ COPY --chown=finflow:finflow . .
 # Normaliser fins de ligne et rendre exécutable
 RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
 
-# Basculer vers utilisateur non-root
-USER finflow
-
+# root seulement le temps du chown des volumes ; entrypoint.sh passe à finflow
 EXPOSE 8000
 
 ENTRYPOINT ["docker/entrypoint.sh"]
