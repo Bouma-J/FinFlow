@@ -79,6 +79,10 @@ services:
       --appendonly yes
       --maxmemory 256mb
       --maxmemory-policy allkeys-lru
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD:?REDIS_PASSWORD requis}
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
     deploy:
       resources:
         limits:

@@ -31,7 +31,7 @@ ENV PIP_CERT=/etc/ssl/certs/ca-certificates.crt
 # Compiler les wheels (réutilisables, pas de gcc au runtime)
 COPY requirements/ /build/requirements/
 RUN pip install --upgrade pip \
-    && pip wheel --no-deps --wheel-dir /wheels \
+    && pip wheel --wheel-dir /wheels \
         -r requirements/prod.txt
 
 # ========================================================================
